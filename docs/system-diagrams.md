@@ -14,6 +14,8 @@ This flow is implemented by `vodctl analyze run`. It runs locally and writes art
 flowchart LR
   user[Developer]
   cli[vodctl analyze run]
+  ui[React Vite UI]
+  api[vod-web Go API]
   runner[app.AnalysisRunner]
   resolver[dataset.LocalVODResolver]
   media[media.LocalProcessor]
@@ -25,7 +27,11 @@ flowchart LR
   processed[(data/processed)]
 
   user --> cli
+  user --> ui
+  ui --> api
   cli --> runner
+  api --> runner
+  api --> processed
   runner --> resolver
   resolver --> raw
   runner --> media

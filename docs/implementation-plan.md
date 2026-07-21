@@ -364,6 +364,8 @@ Current status:
 - `internal/domain` contains the first analysis/report schema.
 - `internal/app` contains the first orchestration use case and ports.
 - `internal/adapters/report` writes local report artifacts.
+- `cmd/vod-web` exposes the local HTTP API used by the React MVP UI.
+- `web/app` contains the React/TypeScript/Vite UI for browsing VODs and running baseline analysis.
 - Postgres-backed status is not implemented yet.
 
 ### Milestone 1.5: Media Benchmarks
@@ -403,6 +405,20 @@ Current status:
 - Generate contact sheets.
 - Save `frames.json`.
 - Add integration tests with a tiny local fixture video.
+
+### Milestone 2.5: Local Web UI
+
+- Add a React/TypeScript/Vite frontend.
+- Add a Go HTTP API server for local MVP interaction.
+- Show VOD library, ranks, local download status, report readiness, and latest report.
+- Run baseline analysis from the UI.
+- Show findings, timeline events, media stats, and sampled frame evidence.
+
+Current status:
+
+- Implemented through `cmd/vod-web` and `web/app`.
+- The dev setup uses Vite proxying `/api` and `/artifacts` to the Go server.
+- The production-style local setup serves `web/app/dist` from `vod-web`.
 
 ### Milestone 3: First Detection Layer
 
@@ -463,8 +479,9 @@ Current status:
 
 1. Manually check the Platinum item marked `search_metadata`.
 2. Add contact sheet generation for sampled frames so reports are easier to review manually.
-3. Add local Docker Compose infrastructure.
-4. Add Postgres migrations, typed DB access, and `outbox_events`.
-5. Persist VOD/assets/report metadata in PostgreSQL from the analysis pipeline.
-6. Publish the first `vod.probed`, `frames.extracted`, and `report.ready` events through the outbox-to-Kafka path.
-7. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run`.
+3. Add report history and report selection to the web UI.
+4. Add local Docker Compose infrastructure.
+5. Add Postgres migrations, typed DB access, and `outbox_events`.
+6. Persist VOD/assets/report metadata in PostgreSQL from the analysis pipeline.
+7. Publish the first `vod.probed`, `frames.extracted`, and `report.ready` events through the outbox-to-Kafka path.
+8. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run` and `vod-web`.

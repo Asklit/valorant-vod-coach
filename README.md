@@ -186,3 +186,44 @@ The command writes:
 The current analyzer is a deterministic baseline. It validates ingestion, media quality, sample coverage, and report generation. Vision-model gameplay analysis will be added behind the same app-layer port.
 
 After building, the same commands can be run through `bin/vodctl`.
+
+## Web UI
+
+The local MVP UI is a React/TypeScript/Vite app backed by a Go API server.
+
+Start the Go API:
+
+```sh
+go run ./cmd/vod-web
+```
+
+Start the React dev server in another terminal:
+
+```sh
+cd web/app
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+The UI can:
+
+- browse the curated VOD library;
+- filter by rank and search text;
+- show downloaded/report-ready status;
+- run the local baseline analysis pipeline;
+- render findings, timeline events, media stats, and sampled frame evidence.
+
+Production-style local serving:
+
+```sh
+cd web/app
+npm run build
+cd ../..
+go run ./cmd/vod-web --static-dir web/app/dist
+```

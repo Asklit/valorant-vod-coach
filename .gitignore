@@ -12,6 +12,9 @@ data/cache/
 # Local build outputs and tool caches.
 .cache/
 bin/
+node_modules/
+web/app/node_modules/
+web/app/dist/
 
 # Large media files should never be committed.
 *.mp4
@@ -20,7 +23,6 @@ bin/
 *.mov
 *.avi
 *.flv
-*.ts
 
 # Temporary download files.
 *.part
@@ -33,5 +35,6 @@ bin/
 *.log
 *.out
 coverage.*
+*.tsbuildinfo
 
 .DS_Store
