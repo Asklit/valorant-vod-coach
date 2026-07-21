@@ -53,11 +53,12 @@ cmd/
   vodctl/                         # CLI entrypoint for local operations
 
 internal/
-  domain/                         # pure product concepts; currently package docs only
-  app/                            # use cases; will appear when flows span multiple adapters
+  domain/                         # pure product concepts: VOD, media summary, findings, reports
+  app/                            # use cases and ports; currently local analysis orchestration
   adapters/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling
+    report/                       # local JSON/Markdown report persistence
   platform/                       # config/logging/observability/runtime helpers
 
 scripts/
@@ -140,6 +141,7 @@ Add `internal/app` use cases when one operation coordinates multiple adapters. E
 - register VOD in PostgreSQL and write an outbox event;
 - probe video, write asset metadata, and publish lifecycle event;
 - sample frames, persist artifact records, and emit processing telemetry.
+- run the local MVP analysis pipeline across dataset, media, analyzer, and report adapters.
 
 Add a domain package when behavior or invariants appear. Examples:
 
@@ -154,4 +156,3 @@ Keep simple technical wrappers in adapters. Examples:
 - reading a TSV file;
 - uploading an object to S3;
 - publishing to Kafka.
-

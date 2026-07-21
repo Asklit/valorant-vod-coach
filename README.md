@@ -1,6 +1,6 @@
 # Valorant VOD Coach
 
-Personal dataset bootstrap for a future Go-first Valorant VOD analysis project.
+Go-first Valorant VOD analysis project.
 
 Current scope:
 
@@ -8,6 +8,7 @@ Current scope:
 - download only full game VODs, not stream archives;
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
 - store raw videos outside git under `data/raw/youtube/<rank>/`.
+- run a local MVP analysis pipeline that writes reproducible JSON and Markdown reports.
 
 Planned product stack:
 
@@ -162,5 +163,26 @@ Extract a short frame sample:
 ```sh
 go run ./cmd/vodctl video sample --vod diamond_crazies_01 --duration 30s --fps 1
 ```
+
+Run the local MVP analysis pipeline:
+
+```sh
+go run ./cmd/vodctl analyze run --vod diamond_crazies_01
+```
+
+Fast smoke run:
+
+```sh
+go run ./cmd/vodctl analyze run --vod diamond_crazies_01 --run-id smoke_mvp --duration 10s --fps 1 --force
+```
+
+The command writes:
+
+- `data/processed/<vod_label>/probe.ffprobe.json`
+- `data/processed/<vod_label>/frames/<sample_name>/frames.json`
+- `data/processed/<vod_label>/reports/<run_id>/report.json`
+- `data/processed/<vod_label>/reports/<run_id>/report.md`
+
+The current analyzer is a deterministic baseline. It validates ingestion, media quality, sample coverage, and report generation. Vision-model gameplay analysis will be added behind the same app-layer port.
 
 After building, the same commands can be run through `bin/vodctl`.

@@ -6,6 +6,37 @@ These diagrams describe the agreed target architecture. They are written in Merm
 
 Current decision: Kafka is the MVP event streaming layer.
 
+## Implemented Local MVP
+
+This flow is implemented by `vodctl analyze run`. It runs locally and writes artifacts under ignored `data/processed/`.
+
+```mermaid
+flowchart LR
+  user[Developer]
+  cli[vodctl analyze run]
+  runner[app.AnalysisRunner]
+  resolver[dataset.LocalVODResolver]
+  media[media.LocalProcessor]
+  ffprobe[ffprobe]
+  ffmpeg[ffmpeg]
+  baseline[BaselineObservationAnalyzer]
+  report[report.LocalStore]
+  raw[(data/raw/youtube)]
+  processed[(data/processed)]
+
+  user --> cli
+  cli --> runner
+  runner --> resolver
+  resolver --> raw
+  runner --> media
+  media --> ffprobe
+  media --> ffmpeg
+  media --> processed
+  runner --> baseline
+  runner --> report
+  report --> processed
+```
+
 ## Agreed Architecture
 
 The system is a Go-first video analysis platform with a narrow Python ML boundary.
