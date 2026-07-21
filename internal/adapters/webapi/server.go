@@ -17,6 +17,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
@@ -92,17 +93,19 @@ type ReportListResponse struct {
 }
 
 type ReportSummary struct {
-	RunID          string    `json:"run_id"`
-	Status         string    `json:"status"`
-	GeneratedAt    time.Time `json:"generated_at"`
-	FindingCount   int       `json:"finding_count"`
-	FrameCount     int       `json:"frame_count"`
-	SampleName     string    `json:"sample_name"`
-	SampleFPS      string    `json:"sample_fps"`
-	SampleDuration float64   `json:"sample_duration_seconds,omitempty"`
-	ContactSheet   string    `json:"contact_sheet,omitempty"`
-	JSONPath       string    `json:"json_path"`
-	MarkdownPath   string    `json:"markdown_path"`
+	RunID             string    `json:"run_id"`
+	Status            string    `json:"status"`
+	GeneratedAt       time.Time `json:"generated_at"`
+	FindingCount      int       `json:"finding_count"`
+	FrameCount        int       `json:"frame_count"`
+	ReviewWindowCount int       `json:"review_window_count"`
+	Analyzer          string    `json:"analyzer,omitempty"`
+	SampleName        string    `json:"sample_name"`
+	SampleFPS         string    `json:"sample_fps"`
+	SampleDuration    float64   `json:"sample_duration_seconds,omitempty"`
+	ContactSheet      string    `json:"contact_sheet,omitempty"`
+	JSONPath          string    `json:"json_path"`
+	MarkdownPath      string    `json:"markdown_path"`
 }
 
 type ErrorResponse struct {
@@ -318,6 +321,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 			ProbeTimeout:  30 * time.Second,
 			SampleTimeout: 10 * time.Minute,
 		},
+		Analyzer: vision.LocalGameplayAnalyzer{},
 		Reports: reportstore.LocalStore{
 			ProcessedRoot: s.config.ProcessedRoot,
 		},
@@ -447,17 +451,19 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 			Path:        path,
 			GeneratedAt: report.GeneratedAt,
 			Summary: ReportSummary{
-				RunID:          report.RunID,
-				Status:         report.Status,
-				GeneratedAt:    report.GeneratedAt,
-				FindingCount:   len(report.Findings),
-				FrameCount:     report.Sample.FrameCount,
-				SampleName:     report.Sample.Name,
-				SampleFPS:      report.Sample.FPS,
-				SampleDuration: report.Sample.DurationSeconds,
-				ContactSheet:   report.Sample.ContactSheetPath,
-				JSONPath:       path,
-				MarkdownPath:   filepath.Join(root, entry.Name(), reportstore.MarkdownReportName),
+				RunID:             report.RunID,
+				Status:            report.Status,
+				GeneratedAt:       report.GeneratedAt,
+				FindingCount:      len(report.Findings),
+				FrameCount:        report.Sample.FrameCount,
+				ReviewWindowCount: reviewWindowCount(report.Gameplay),
+				Analyzer:          report.Metadata.Analyzer,
+				SampleName:        report.Sample.Name,
+				SampleFPS:         report.Sample.FPS,
+				SampleDuration:    report.Sample.DurationSeconds,
+				ContactSheet:      report.Sample.ContactSheetPath,
+				JSONPath:          path,
+				MarkdownPath:      filepath.Join(root, entry.Name(), reportstore.MarkdownReportName),
 			},
 		})
 	}
@@ -466,6 +472,13 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 		return reports[i].GeneratedAt.After(reports[j].GeneratedAt)
 	})
 	return reports, nil
+}
+
+func reviewWindowCount(gameplay *domain.GameplaySummary) int {
+	if gameplay == nil {
+		return 0
+	}
+	return gameplay.ReviewWindowCount
 }
 
 func readReport(path string) (domain.AnalysisReport, error) {

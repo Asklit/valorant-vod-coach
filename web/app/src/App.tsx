@@ -23,7 +23,7 @@ import {
   Video
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type VODItem = {
   label: string;
@@ -80,6 +80,50 @@ type Frame = {
   path: string;
 };
 
+type FrameObservation = {
+  index: number;
+  timestamp_seconds: number;
+  path: string;
+  brightness: number;
+  contrast: number;
+  motion_score: number;
+  center_activity: number;
+  minimap_signal: number;
+  hud_signal: number;
+  combat_signal: number;
+  phase: string;
+};
+
+type ReviewWindow = {
+  id: string;
+  kind: string;
+  severity: string;
+  title: string;
+  summary: string;
+  recommendation: string;
+  start_seconds: number;
+  end_seconds: number;
+  peak_seconds: number;
+  score: number;
+  evidence?: Finding["evidence"];
+  tags?: string[];
+};
+
+type GameplaySummary = {
+  analyzer?: string;
+  sampled_frames: number;
+  analyzed_frames: number;
+  skipped_frames?: number;
+  review_window_count: number;
+  average_motion_score?: number;
+  average_minimap_signal?: number;
+  average_hud_signal?: number;
+  peak_combat_score?: number;
+  frame_observations?: FrameObservation[];
+  review_windows?: ReviewWindow[];
+  notes?: string[];
+};
+
 type Report = {
   run_id: string;
   status: string;
@@ -113,6 +157,7 @@ type Report = {
     frames?: Frame[];
     contact_sheet_path?: string;
   };
+  gameplay?: GameplaySummary;
   findings: Finding[];
   timeline: Array<{
     timestamp_seconds: number;
@@ -143,6 +188,8 @@ type ReportSummary = {
   generated_at: string;
   finding_count: number;
   frame_count: number;
+  review_window_count: number;
+  analyzer?: string;
   sample_name: string;
   sample_fps: string;
   sample_duration_seconds?: number;
@@ -173,6 +220,7 @@ export function App() {
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
   const filteredVods = useMemo(() => {
@@ -294,6 +342,16 @@ export function App() {
   const sampleFrames = report?.sample.frames?.slice(0, 12) ?? [];
   const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
+  const reviewWindows = report?.gameplay?.review_windows ?? [];
+
+  function seekVideo(seconds: number) {
+    const player = videoRef.current;
+    if (!player) {
+      return;
+    }
+    player.currentTime = Math.max(0, seconds);
+    void player.play().catch(() => undefined);
+  }
 
   return (
     <main className="app-shell">
@@ -415,7 +473,7 @@ export function App() {
               {loading ? (
                 <div className="video-placeholder loading" />
               ) : selectedVod?.video_url ? (
-                <video controls preload="metadata" src={apiURL(selectedVod.video_url)} />
+                <video controls preload="metadata" ref={videoRef} src={apiURL(selectedVod.video_url)} />
               ) : (
                 <div className="video-placeholder">
                   <Video size={30} />
@@ -496,7 +554,7 @@ export function App() {
                     >
                       <span>{item.run_id}</span>
                       <small>
-                        {item.frame_count} frames / {item.finding_count} findings
+                        {item.frame_count} frames / {item.review_window_count} windows / {item.finding_count} findings
                       </small>
                     </button>
                   ))}
@@ -508,7 +566,7 @@ export function App() {
               <>
                 <div className="report-stats">
                   <Metric icon={<Shield size={18} />} label="Media" value={formatResolution(report)} detail={report.media.frame_rate ?? "unknown"} compact />
-                  <Metric icon={<Swords size={18} />} label="Findings" value={String(report.findings.length)} detail={report.metadata.analyzer} compact />
+                  <Metric icon={<Swords size={18} />} label="Windows" value={String(report.gameplay?.review_window_count ?? 0)} detail={report.metadata.analyzer} compact />
                   <Metric icon={<Clock3 size={18} />} label="Coverage" value={coverageLabel(report)} detail={`${report.sample.fps} fps`} compact />
                 </div>
 
@@ -522,6 +580,52 @@ export function App() {
                     Markdown
                   </a>
                 </div>
+
+                {report.gameplay && (
+                  <section className="gameplay-review">
+                    <div className="signal-grid">
+                      <SignalMeter label="Motion" value={report.gameplay.average_motion_score ?? 0} />
+                      <SignalMeter label="Minimap" value={report.gameplay.average_minimap_signal ?? 0} />
+                      <SignalMeter label="HUD" value={report.gameplay.average_hud_signal ?? 0} />
+                      <SignalMeter label="Combat peak" value={report.gameplay.peak_combat_score ?? 0} />
+                    </div>
+
+                    <div className="review-window-list">
+                      {reviewWindows.map((window) => (
+                        <article className={`review-window severity-${window.severity}`} key={window.id}>
+                          <div className="review-window-head">
+                            <div>
+                              <span>
+                                {window.kind.replaceAll("_", " ")} / {windowRange(window)}
+                              </span>
+                              <h3>{window.title}</h3>
+                            </div>
+                            <button className="seek-button" onClick={() => seekVideo(window.peak_seconds)} type="button" title="Jump to peak">
+                              <Play size={14} fill="currentColor" />
+                              {formatSeconds(window.peak_seconds)}
+                            </button>
+                          </div>
+                          <p>{window.summary}</p>
+                          <div className="finding-recommendation">
+                            <Lightbulb size={15} />
+                            <p>{window.recommendation}</p>
+                          </div>
+                          {window.evidence?.length ? (
+                            <div className="evidence-links">
+                              {window.evidence.map((evidence) => (
+                                <a href={artifactURL(evidence.path)} key={`${window.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
+                                  <Link2 size={13} />
+                                  {evidenceLabel(evidence)}
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </article>
+                      ))}
+                      {!reviewWindows.length && <div className="muted-line">No gameplay windows selected.</div>}
+                    </div>
+                  </section>
+                )}
 
                 <div className="finding-list">
                   {report.findings.map((finding) => (
@@ -632,6 +736,20 @@ function Metric(props: { icon: ReactNode; label: string; value: string; detail: 
   );
 }
 
+function SignalMeter(props: { label: string; value: number }) {
+  return (
+    <div className="signal-meter">
+      <div>
+        <span>{props.label}</span>
+        <strong>{Math.round(clamp01(props.value) * 100)}%</strong>
+      </div>
+      <div className="signal-track">
+        <span style={{ width: `${Math.round(clamp01(props.value) * 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function SkeletonList() {
   return (
     <>
@@ -689,6 +807,17 @@ function displayLocalStatus(vod: VODItem | null) {
 
 function formatSeconds(seconds: number) {
   return `${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)}s`;
+}
+
+function windowRange(window: ReviewWindow) {
+  return `${formatSeconds(window.start_seconds)}-${formatSeconds(window.end_seconds)}`;
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
 }
 
 function evidenceLabel(evidence: NonNullable<Finding["evidence"]>[number]) {

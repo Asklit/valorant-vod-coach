@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 1
+const AnalysisReportSchemaVersion = 2
 
 type Rank string
 
@@ -90,6 +90,50 @@ type TimelineEvent struct {
 	Detail           string  `json:"detail,omitempty"`
 }
 
+type GameplaySummary struct {
+	Analyzer             string             `json:"analyzer,omitempty"`
+	SampledFrames        int                `json:"sampled_frames"`
+	AnalyzedFrames       int                `json:"analyzed_frames"`
+	SkippedFrames        int                `json:"skipped_frames,omitempty"`
+	ReviewWindowCount    int                `json:"review_window_count"`
+	AverageMotionScore   float64            `json:"average_motion_score,omitempty"`
+	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
+	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
+	PeakCombatScore      float64            `json:"peak_combat_score,omitempty"`
+	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
+	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
+	Notes                []string           `json:"notes,omitempty"`
+}
+
+type FrameObservation struct {
+	Index            int     `json:"index"`
+	TimestampSeconds float64 `json:"timestamp_seconds"`
+	Path             string  `json:"path"`
+	Brightness       float64 `json:"brightness"`
+	Contrast         float64 `json:"contrast"`
+	MotionScore      float64 `json:"motion_score"`
+	CenterActivity   float64 `json:"center_activity"`
+	MinimapSignal    float64 `json:"minimap_signal"`
+	HUDSignal        float64 `json:"hud_signal"`
+	CombatSignal     float64 `json:"combat_signal"`
+	Phase            string  `json:"phase"`
+}
+
+type ReviewWindow struct {
+	ID             string          `json:"id"`
+	Kind           string          `json:"kind"`
+	Severity       FindingSeverity `json:"severity"`
+	Title          string          `json:"title"`
+	Summary        string          `json:"summary"`
+	Recommendation string          `json:"recommendation"`
+	StartSeconds   float64         `json:"start_seconds"`
+	EndSeconds     float64         `json:"end_seconds"`
+	PeakSeconds    float64         `json:"peak_seconds"`
+	Score          float64         `json:"score"`
+	Evidence       []EvidenceRef   `json:"evidence,omitempty"`
+	Tags           []string        `json:"tags,omitempty"`
+}
+
 type AnalysisReport struct {
 	SchemaVersion int                 `json:"schema_version"`
 	RunID         string              `json:"run_id"`
@@ -98,6 +142,7 @@ type AnalysisReport struct {
 	VOD           VOD                 `json:"vod"`
 	Media         MediaSummary        `json:"media"`
 	Sample        FrameSampleSummary  `json:"sample"`
+	Gameplay      *GameplaySummary    `json:"gameplay,omitempty"`
 	Findings      []Finding           `json:"findings"`
 	Timeline      []TimelineEvent     `json:"timeline"`
 	Artifacts     []Artifact          `json:"artifacts"`

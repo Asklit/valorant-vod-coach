@@ -53,7 +53,7 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 
 ### Analysis
 
-- Produce a first report from heuristics before using a large vision model.
+- Produce a first report from heuristics before using a large vision model. The local MVP now does this with visual frame signals and selected gameplay review windows.
 - Add VLM analysis only for selected review windows.
 - Output findings in a consistent schema:
   - timestamp;
@@ -73,6 +73,14 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 - Show coach findings grouped by category and severity.
 - Allow manual correction of rank, agent, map, round boundaries, and false detections.
 - Export a report as JSON/Markdown.
+
+Implemented local UI slice:
+
+- browse local VODs and report history;
+- play downloaded VOD files through the Go API;
+- run sample or full-VOD analysis from the browser;
+- show visual signal metrics, gameplay review windows, coach findings, timeline events, contact sheet, and sampled frame evidence;
+- jump from a review window to the matching timestamp in the local video player.
 
 ## Mistake Taxonomy
 
@@ -389,15 +397,16 @@ Current status:
 - Add app-layer orchestration for a single VOD analysis run.
 - Probe media metadata through the media adapter.
 - Extract a configurable low-frequency frame sample.
-- Generate a deterministic baseline report before using a VLM.
+- Generate a deterministic visual heuristic gameplay report before using a VLM.
+- Decode sampled frames, compute visual signals, and select gameplay review windows.
 - Save `report.json` and `report.md` under `data/processed/<vod_label>/reports/<run_id>/`.
 - Keep the analyzer behind a port so the Python Qwen/VLM service can replace or augment it.
 
 Current status:
 
 - Implemented in `vodctl analyze run`.
-- Smoke-tested on `diamond_crazies_01` with `--duration 10s --fps 1`.
-- Current report is intentionally baseline-only and marks AI gameplay analysis as not enabled.
+- Smoke-tested on `iron_spudbud_01` with `--duration 60s --fps 1`; the run decoded 60/60 frames and selected 2 review windows.
+- Current report includes `gameplay`, `review_windows`, `gameplay_review.json`, timeline events, findings, recommendations, confidence, and frame evidence. Qwen/VLM reasoning is still the next adapter stage.
 
 ### Milestone 2: Frame Extraction
 
@@ -411,15 +420,16 @@ Current status:
 - Add a React/TypeScript/Vite frontend.
 - Add a Go HTTP API server for local MVP interaction.
 - Show VOD library, ranks, local download status, report readiness, and latest report.
-- Run baseline analysis from the UI.
+- Run visual gameplay analysis from the UI.
 - List generated report runs for the selected VOD.
 - Switch between existing reports without rerunning analysis.
-- Show findings, timeline events, media stats, and sampled frame evidence.
+- Show gameplay review windows, signal metrics, findings, timeline events, media stats, contact sheet, and sampled frame evidence.
+- Jump from a review window to the matching VOD timestamp.
 
 Current status:
 
 - Implemented through `cmd/vod-web` and `web/app`.
-- The dev setup runs Vite on `127.0.0.1:5173` and calls the Go API on `127.0.0.1:8080` with local CORS.
+- The default dev setup runs Vite on `127.0.0.1:5173` and calls the Go API on `127.0.0.1:8080` with local CORS. If those ports are occupied, run `vod-web` with `PORT=<free_port>` and start Vite with `VITE_API_BASE=http://localhost:<free_port>`.
 - The production-style local setup serves `web/app/dist` from `vod-web`.
 - Report history selection is implemented through `GET /api/reports?vod_label=<label>`.
 

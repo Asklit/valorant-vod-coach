@@ -8,7 +8,7 @@ Current scope:
 - download only full game VODs, not stream archives;
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
 - store raw videos outside git under `data/raw/youtube/<rank>/`.
-- run a local MVP analysis pipeline that writes reproducible JSON and Markdown reports.
+- run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
 
 Planned product stack:
 
@@ -181,10 +181,13 @@ The command writes:
 - `data/processed/<vod_label>/probe.ffprobe.json`
 - `data/processed/<vod_label>/frames/<sample_name>/frames.json`
 - `data/processed/<vod_label>/frames/<sample_name>/contact_sheet.jpg`
+- `data/processed/<vod_label>/frames/<sample_name>/gameplay_review.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a deterministic heuristic baseline. It validates ingestion, media quality, sample coverage, generates sampled frame evidence plus a contact sheet, and writes reproducible reports with recommendations, confidence, timeline events, and evidence links. Vision-model gameplay analysis will be added behind the same app-layer port.
+The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, selects gameplay review windows, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
+
+This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The next ML stage will replace or enrich the same `ObservationAnalyzer` port with OCR, round detection, kill/death windows, and model reasoning over selected clips.
 
 After building, the same commands can be run through `bin/vodctl`.
 
@@ -220,7 +223,8 @@ The UI can:
 - play downloaded local VOD files through the Go API;
 - run the local heuristic analysis pipeline against a sample window or the full VOD;
 - switch between generated report runs for a selected VOD;
-- render findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence.
+- render gameplay review windows, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
+- jump from a selected review window to the matching VOD timestamp in the local video player.
 
 Production-style local serving:
 

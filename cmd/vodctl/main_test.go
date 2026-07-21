@@ -269,7 +269,9 @@ esac
 		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 
-	if got := stdout.String(); !strings.Contains(got, "diamond_example") || !strings.Contains(got, "test_run") {
+	if got := stdout.String(); !strings.Contains(got, "diamond_example") ||
+		!strings.Contains(got, "test_run") ||
+		!strings.Contains(got, "WINDOWS") {
 		t.Fatalf("unexpected stdout:\n%s", got)
 	}
 
@@ -280,7 +282,9 @@ esac
 	}
 
 	if got := string(rawReport); !strings.Contains(got, `"run_id": "test_run"`) ||
-		!strings.Contains(got, `"baseline_ai_not_enabled"`) ||
+		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
+		!strings.Contains(got, `"gameplay"`) ||
+		!strings.Contains(got, `"gameplay_review"`) ||
 		!strings.Contains(got, `"contact_sheet_path"`) {
 		t.Fatalf("unexpected report:\n%s", got)
 	}

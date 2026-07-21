@@ -765,6 +765,138 @@ button {
   text-transform: uppercase;
 }
 
+.gameplay-review {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.signal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.signal-meter {
+  display: grid;
+  gap: 10px;
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.signal-meter > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.signal-meter span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.signal-meter strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.signal-track {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.signal-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--green));
+}
+
+.review-window-list {
+  display: grid;
+  gap: 10px;
+}
+
+.review-window {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cyan);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.review-window.severity-medium,
+.review-window.severity-high,
+.review-window.severity-critical {
+  border-left-color: var(--red);
+}
+
+.review-window-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-window-head > div {
+  min-width: 0;
+}
+
+.review-window-head span {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.review-window h3 {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  font-weight: 920;
+  line-height: 1.18;
+}
+
+.review-window p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.seek-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 76px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 70, 85, 0.5);
+  border-radius: var(--radius);
+  background: rgba(255, 70, 85, 0.1);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .finding-list {
   display: grid;
   gap: 10px;
@@ -1080,6 +1212,7 @@ button {
   .secondary-grid,
   .vod-intel,
   .report-stats,
+  .signal-grid,
   .pipeline-track,
   .frame-grid {
     grid-template-columns: 1fr;

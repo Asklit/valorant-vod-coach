@@ -102,6 +102,40 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 	}
 	fmt.Fprintf(&buf, "\n")
 
+	if report.Gameplay != nil {
+		fmt.Fprintf(&buf, "## Gameplay Review\n\n")
+		fmt.Fprintf(&buf, "- Analyzer: `%s`\n", fallback(report.Gameplay.Analyzer, report.Metadata.Analyzer))
+		fmt.Fprintf(&buf, "- Frames analyzed: %d/%d\n", report.Gameplay.AnalyzedFrames, report.Gameplay.SampledFrames)
+		if report.Gameplay.SkippedFrames > 0 {
+			fmt.Fprintf(&buf, "- Frames skipped: %d\n", report.Gameplay.SkippedFrames)
+		}
+		fmt.Fprintf(&buf, "- Review windows: %d\n", report.Gameplay.ReviewWindowCount)
+		fmt.Fprintf(&buf, "- Average motion: %.2f\n", report.Gameplay.AverageMotionScore)
+		fmt.Fprintf(&buf, "- Average minimap signal: %.2f\n", report.Gameplay.AverageMinimapSignal)
+		fmt.Fprintf(&buf, "- Average HUD signal: %.2f\n", report.Gameplay.AverageHUDSignal)
+		fmt.Fprintf(&buf, "- Peak combat signal: %.2f\n\n", report.Gameplay.PeakCombatScore)
+
+		if len(report.Gameplay.ReviewWindows) > 0 {
+			for _, window := range report.Gameplay.ReviewWindows {
+				fmt.Fprintf(&buf, "### %s: %s\n\n", strings.ToUpper(string(window.Severity)), window.Title)
+				fmt.Fprintf(&buf, "- ID: `%s`\n", window.ID)
+				fmt.Fprintf(&buf, "- Kind: `%s`\n", window.Kind)
+				fmt.Fprintf(&buf, "- Window: %.3fs - %.3fs (peak %.3fs)\n", window.StartSeconds, window.EndSeconds, window.PeakSeconds)
+				fmt.Fprintf(&buf, "- Score: %.2f\n", window.Score)
+				fmt.Fprintf(&buf, "- Summary: %s\n", window.Summary)
+				fmt.Fprintf(&buf, "- Recommendation: %s\n", window.Recommendation)
+				if len(window.Evidence) > 0 {
+					fmt.Fprintf(&buf, "- Evidence:")
+					for _, evidence := range window.Evidence {
+						fmt.Fprintf(&buf, " `%s`", evidence.Path)
+					}
+					fmt.Fprintf(&buf, "\n")
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+		}
+	}
+
 	fmt.Fprintf(&buf, "## Findings\n\n")
 	if len(report.Findings) == 0 {
 		fmt.Fprintf(&buf, "No findings.\n\n")
