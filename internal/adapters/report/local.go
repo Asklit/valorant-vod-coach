@@ -185,6 +185,21 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "\n")
 		}
 
+		if len(report.Gameplay.ModelReviewRuns) > 0 {
+			fmt.Fprintf(&buf, "### Model Review Results\n\n")
+			for _, run := range report.Gameplay.ModelReviewRuns {
+				fmt.Fprintf(&buf, "- `%s`: %s window `%s`", run.ID, run.Status, run.WindowID)
+				if run.Model != "" {
+					fmt.Fprintf(&buf, ", model `%s`", run.Model)
+				}
+				if run.Verdict != "" {
+					fmt.Fprintf(&buf, " - %s", run.Verdict)
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
 		if len(report.Gameplay.ReviewWindows) > 0 {
 			for _, window := range report.Gameplay.ReviewWindows {
 				fmt.Fprintf(&buf, "### %s: %s\n\n", strings.ToUpper(string(window.Severity)), window.Title)

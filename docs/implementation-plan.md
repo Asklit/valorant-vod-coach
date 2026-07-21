@@ -459,9 +459,9 @@ Current status:
 
 - Extract candidate clips around deaths and round ends.
 - Generate prompt/eval fixtures for selected windows. Current local MVP writes `model_review_tasks` into report schema.
-- Send selected windows to the Python ML service.
-- Merge VLM observations into the report schema.
-- Add prompt/eval fixtures.
+- Send selected windows to the Python ML service. Current local MVP has a `vision-service` contract stub at `ml/vision-service`.
+- Merge VLM observations into the report schema. Current local MVP writes `model_review_runs` and merges model findings when `model_review` is enabled.
+- Replace the deterministic stub with real Qwen/VLM inference and add golden eval fixtures.
 
 ### Milestone 6: Web Review UI
 

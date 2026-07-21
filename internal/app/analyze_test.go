@@ -120,6 +120,61 @@ func TestAnalysisRunnerAttachesReviewClips(t *testing.T) {
 	}
 }
 
+func TestAnalysisRunnerMergesModelReview(t *testing.T) {
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeClipMediaProcessor{},
+		Analyzer: fakeGameplayAnalyzer{},
+		Reviewer: fakeModelReviewer{},
+		Reports:  &fakeReportStore{},
+	}
+
+	result, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "model_review_contract",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+		ModelReview:  true,
+	})
+	if err != nil {
+		t.Fatalf("run analysis: %v", err)
+	}
+
+	if result.Report.Gameplay == nil || result.Report.Gameplay.ModelReviewRunCount != 1 {
+		t.Fatalf("expected model review run: %+v", result.Report.Gameplay)
+	}
+	if result.Report.Gameplay.ModelReviewTasks[0].Status != "completed" {
+		t.Fatalf("expected completed model review task: %+v", result.Report.Gameplay.ModelReviewTasks[0])
+	}
+	if !hasFinding(result.Report.Findings, "model_review_vlm_review_01_positioning") {
+		t.Fatalf("expected merged model finding: %+v", result.Report.Findings)
+	}
+}
+
+func TestAnalysisRunnerRequiresReviewerWhenModelReviewIsEnabled(t *testing.T) {
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeClipMediaProcessor{},
+		Analyzer: fakeGameplayAnalyzer{},
+		Reports:  &fakeReportStore{},
+	}
+
+	_, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "missing_reviewer",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+		ModelReview:  true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "model reviewer is not configured") {
+		t.Fatalf("expected missing reviewer error, got %v", err)
+	}
+}
+
 func TestBaselineAnalyzerEndsFullSampleAtLastFrame(t *testing.T) {
 	result, err := BaselineObservationAnalyzer{}.AnalyzeObservations(context.Background(), ObservationRequest{
 		Media: domain.MediaSummary{DurationSeconds: 120, HasDuration: true},
@@ -241,6 +296,49 @@ func (fakeGameplayAnalyzer) AnalyzeObservations(context.Context, ObservationRequ
 		Metadata: domain.AnalysisRunMetadata{
 			Analyzer: "fake-gameplay",
 			Mode:     "local-test",
+		},
+	}, nil
+}
+
+type fakeModelReviewer struct{}
+
+func (fakeModelReviewer) ReviewModelTasks(_ context.Context, request ModelReviewRequest) (ModelReviewResult, error) {
+	if len(request.Tasks) != 1 {
+		return ModelReviewResult{}, nil
+	}
+	return ModelReviewResult{
+		Runs: []domain.ModelReviewRun{
+			{
+				ID:            "vlm_review_01",
+				TaskID:        request.Tasks[0].ID,
+				WindowID:      request.Tasks[0].WindowID,
+				Status:        "completed",
+				Model:         "fake-vlm",
+				PromptVersion: request.Tasks[0].PromptVersion,
+				Verdict:       "The player exposed the angle without a trade.",
+				Practice:      "Pause before each fight and call out trade setup.",
+				Findings: []domain.ModelReviewFinding{
+					{
+						Category:         "positioning",
+						Severity:         domain.FindingSeverityMedium,
+						TimestampSeconds: 16,
+						Evidence:         "The clip shows a wide swing into contact.",
+						Recommendation:   "Hold tighter and wait for teammate spacing.",
+						Confidence:       0.77,
+					},
+				},
+			},
+		},
+		Findings: []domain.Finding{
+			{
+				ID:             "model_review_vlm_review_01_positioning",
+				Severity:       domain.FindingSeverityMedium,
+				Category:       "positioning",
+				Title:          "Model review: positioning",
+				Detail:         "The clip shows a wide swing into contact.",
+				Recommendation: "Hold tighter and wait for teammate spacing.",
+				Confidence:     0.77,
+			},
 		},
 	}, nil
 }

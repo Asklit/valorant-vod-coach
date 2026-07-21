@@ -28,6 +28,10 @@ type ObservationAnalyzer interface {
 	AnalyzeObservations(ctx context.Context, request ObservationRequest) (ObservationResult, error)
 }
 
+type ModelReviewer interface {
+	ReviewModelTasks(ctx context.Context, request ModelReviewRequest) (ModelReviewResult, error)
+}
+
 type ReportStore interface {
 	SaveReport(ctx context.Context, report domain.AnalysisReport, overwrite bool) (SavedReport, error)
 }
@@ -36,6 +40,7 @@ type AnalysisRunner struct {
 	Resolver VODResolver
 	Media    MediaProcessor
 	Analyzer ObservationAnalyzer
+	Reviewer ModelReviewer
 	Reports  ReportStore
 	Clock    func() time.Time
 }
@@ -49,6 +54,7 @@ type RunAnalysisRequest struct {
 	Duration     time.Duration
 	ImageQuality int
 	Overwrite    bool
+	ModelReview  bool
 }
 
 type RunAnalysisResult struct {
@@ -86,6 +92,17 @@ type FrameSampleResult struct {
 type ReviewClipResult struct {
 	Windows   []domain.ReviewWindow
 	Artifacts []domain.Artifact
+}
+
+type ModelReviewRequest struct {
+	RunID string
+	VOD   domain.VOD
+	Tasks []domain.ModelReviewTask
+}
+
+type ModelReviewResult struct {
+	Runs     []domain.ModelReviewRun
+	Findings []domain.Finding
 }
 
 type ObservationRequest struct {
@@ -199,6 +216,23 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	if observations.Gameplay != nil {
 		observations.Gameplay.ModelReviewTasks = BuildModelReviewTasks(vod, observations.Gameplay)
 		observations.Gameplay.ModelReviewTaskCount = len(observations.Gameplay.ModelReviewTasks)
+		if request.ModelReview && r.Reviewer == nil {
+			return RunAnalysisResult{}, fmt.Errorf("model review requested but model reviewer is not configured")
+		}
+		if request.ModelReview && len(observations.Gameplay.ModelReviewTasks) > 0 {
+			review, err := r.Reviewer.ReviewModelTasks(ctx, ModelReviewRequest{
+				RunID: runID,
+				VOD:   vod,
+				Tasks: observations.Gameplay.ModelReviewTasks,
+			})
+			if err != nil {
+				return RunAnalysisResult{}, err
+			}
+			observations.Gameplay.ModelReviewRuns = review.Runs
+			observations.Gameplay.ModelReviewRunCount = len(review.Runs)
+			observations.Findings = append(observations.Findings, review.Findings...)
+			markCompletedModelTasks(observations.Gameplay.ModelReviewTasks, review.Runs)
+		}
 	}
 
 	report := domain.AnalysisReport{
@@ -236,6 +270,20 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 
 	return RunAnalysisResult{Report: report, Saved: saved}, nil
+}
+
+func markCompletedModelTasks(tasks []domain.ModelReviewTask, runs []domain.ModelReviewRun) {
+	statusByTask := make(map[string]string, len(runs))
+	for _, run := range runs {
+		if run.TaskID != "" && run.Status != "" {
+			statusByTask[run.TaskID] = run.Status
+		}
+	}
+	for index := range tasks {
+		if status, ok := statusByTask[tasks[index].ID]; ok {
+			tasks[index].Status = status
+		}
+	}
 }
 
 func DefaultRunID(now time.Time) string {

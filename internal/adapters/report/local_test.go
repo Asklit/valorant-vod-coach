@@ -44,6 +44,7 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 		!strings.Contains(string(rawMarkdown), "## Gameplay Review") ||
 		!strings.Contains(string(rawMarkdown), "Estimated Round Segments") ||
 		!strings.Contains(string(rawMarkdown), "Model Review Tasks") ||
+		!strings.Contains(string(rawMarkdown), "Model Review Results") ||
 		!strings.Contains(string(rawMarkdown), "High-impact fight window") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
 		!strings.Contains(string(rawMarkdown), "Review the recommendation.") ||
@@ -110,6 +111,7 @@ func sampleReport() domain.AnalysisReport {
 			PeakCombatScore:      0.66,
 			RoundSegmentCount:    1,
 			ModelReviewTaskCount: 1,
+			ModelReviewRunCount:  1,
 			RoundSegments: []domain.RoundSegment{
 				{
 					RoundNumber:     1,
@@ -133,6 +135,17 @@ func sampleReport() domain.AnalysisReport {
 					ClipPath:       "clips/review_001.mp4",
 					Prompt:         "Review this clip.",
 					ExpectedOutput: `{"findings":[]}`,
+				},
+			},
+			ModelReviewRuns: []domain.ModelReviewRun{
+				{
+					ID:            "vlm_result_001",
+					TaskID:        "vlm_combatspike_001",
+					WindowID:      "combatspike_001",
+					Status:        "completed",
+					Model:         "stub-vlm",
+					PromptVersion: "vlm-review-v1",
+					Verdict:       "The duel needs manual review.",
 				},
 			},
 			ReviewWindows: []domain.ReviewWindow{
