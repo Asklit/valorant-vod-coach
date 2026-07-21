@@ -171,7 +171,7 @@ export function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/vods");
+      const response = await fetch(apiURL("/api/vods"));
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -190,7 +190,7 @@ export function App() {
     setLoadingReport(true);
     setError("");
     try {
-      const response = await fetch(`/api/reports/latest?vod_label=${encodeURIComponent(label)}`);
+      const response = await fetch(apiURL(`/api/reports/latest?vod_label=${encodeURIComponent(label)}`));
       if (response.status === 404) {
         setReport(null);
         return;
@@ -214,7 +214,7 @@ export function App() {
     setAnalyzing(true);
     setError("");
     try {
-      const response = await fetch("/api/analysis-runs", {
+      const response = await fetch(apiURL("/api/analysis-runs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -538,7 +538,20 @@ function artifactURL(path: string) {
   const marker = "data/processed/";
   const index = normalized.indexOf(marker);
   if (index >= 0) {
-    return `/artifacts/${normalized.slice(index + marker.length)}`;
+    return apiURL(`/artifacts/${normalized.slice(index + marker.length)}`);
   }
-  return `/artifacts/${normalized.replace(/^\/+/, "")}`;
+  return apiURL(`/artifacts/${normalized.replace(/^\/+/, "")}`);
+}
+
+function apiURL(path: string) {
+  const explicitBase = import.meta.env.VITE_API_BASE as string | undefined;
+  const base = explicitBase || devBackendBase();
+  return `${base}${path}`;
+}
+
+function devBackendBase() {
+  if (window.location.port === "5173") {
+    return "http://127.0.0.1:8080";
+  }
+  return "";
 }

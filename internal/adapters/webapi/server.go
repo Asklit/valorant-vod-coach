@@ -111,6 +111,15 @@ func NewServer(config Config) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -389,6 +398,15 @@ func matchesSearch(vod dataset.VOD, search string) bool {
 		}
 	}
 	return false
+}
+
+func isAllowedDevOrigin(origin string) bool {
+	switch origin {
+	case "http://127.0.0.1:5173", "http://localhost:5173":
+		return true
+	default:
+		return false
+	}
 }
 
 func secondsDuration(seconds float64) time.Duration {
