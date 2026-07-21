@@ -129,6 +129,7 @@ type ReportSummary struct {
 	FrameCount        int       `json:"frame_count"`
 	ReviewWindowCount int       `json:"review_window_count"`
 	RoundSegmentCount int       `json:"round_segment_count"`
+	ModelTaskCount    int       `json:"model_review_task_count"`
 	Analyzer          string    `json:"analyzer,omitempty"`
 	SampleName        string    `json:"sample_name"`
 	SampleFPS         string    `json:"sample_fps"`
@@ -552,6 +553,7 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 				FrameCount:        report.Sample.FrameCount,
 				ReviewWindowCount: reviewWindowCount(report.Gameplay),
 				RoundSegmentCount: roundSegmentCount(report.Gameplay),
+				ModelTaskCount:    modelReviewTaskCount(report.Gameplay),
 				Analyzer:          report.Metadata.Analyzer,
 				SampleName:        report.Sample.Name,
 				SampleFPS:         report.Sample.FPS,
@@ -584,6 +586,16 @@ func roundSegmentCount(gameplay *domain.GameplaySummary) int {
 		return len(gameplay.RoundSegments)
 	}
 	return gameplay.RoundSegmentCount
+}
+
+func modelReviewTaskCount(gameplay *domain.GameplaySummary) int {
+	if gameplay == nil {
+		return 0
+	}
+	if gameplay.ModelReviewTaskCount == 0 && len(gameplay.ModelReviewTasks) > 0 {
+		return len(gameplay.ModelReviewTasks)
+	}
+	return gameplay.ModelReviewTaskCount
 }
 
 func readReport(path string) (domain.AnalysisReport, error) {

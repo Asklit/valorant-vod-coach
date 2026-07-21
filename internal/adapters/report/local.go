@@ -170,6 +170,21 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "\n")
 		}
 
+		if len(report.Gameplay.ModelReviewTasks) > 0 {
+			fmt.Fprintf(&buf, "### Model Review Tasks\n\n")
+			for _, task := range report.Gameplay.ModelReviewTasks {
+				fmt.Fprintf(&buf, "- `%s`: %s priority `%s`, window `%s`", task.ID, task.Status, task.Priority, task.WindowID)
+				if task.RoundNumber > 0 {
+					fmt.Fprintf(&buf, ", estimated round %d", task.RoundNumber)
+				}
+				if task.ClipPath != "" {
+					fmt.Fprintf(&buf, ", clip `%s`", task.ClipPath)
+				}
+				fmt.Fprintf(&buf, ", prompt `%s`\n", task.PromptVersion)
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
 		if len(report.Gameplay.ReviewWindows) > 0 {
 			for _, window := range report.Gameplay.ReviewWindows {
 				fmt.Fprintf(&buf, "### %s: %s\n\n", strings.ToUpper(string(window.Severity)), window.Title)

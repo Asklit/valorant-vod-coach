@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Copy,
   Crosshair,
   Database,
   FileText,
@@ -155,6 +156,28 @@ type RoundSegment = {
   summary?: string;
 };
 
+type ModelReviewTask = {
+  id: string;
+  status: string;
+  priority: string;
+  prompt_version: string;
+  model_hint?: string;
+  window_id: string;
+  round_number?: number;
+  kind: string;
+  severity: string;
+  clip_path?: string;
+  clip_duration_seconds?: number;
+  start_seconds: number;
+  end_seconds: number;
+  peak_seconds: number;
+  evidence?: Finding["evidence"];
+  context?: string[];
+  questions?: string[];
+  expected_output: string;
+  prompt: string;
+};
+
 type CoachSummary = {
   verdict: string;
   confidence: number;
@@ -170,6 +193,7 @@ type GameplaySummary = {
   skipped_frames?: number;
   review_window_count: number;
   round_segment_count?: number;
+  model_review_task_count?: number;
   average_motion_score?: number;
   average_minimap_signal?: number;
   average_hud_signal?: number;
@@ -177,6 +201,7 @@ type GameplaySummary = {
   coach?: CoachSummary;
   phase_profile?: PhaseStat[];
   round_segments?: RoundSegment[];
+  model_review_tasks?: ModelReviewTask[];
   frame_observations?: FrameObservation[];
   review_windows?: ReviewWindow[];
   notes?: string[];
@@ -259,6 +284,7 @@ type ReportSummary = {
   frame_count: number;
   review_window_count: number;
   round_segment_count: number;
+  model_review_task_count: number;
   analyzer?: string;
   sample_name: string;
   sample_fps: string;
@@ -290,6 +316,7 @@ export function App() {
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
+  const [copiedTaskID, setCopiedTaskID] = useState("");
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
@@ -473,10 +500,11 @@ export function App() {
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
   const reviewWindows = report?.gameplay?.review_windows ?? [];
   const roundSegments = report?.gameplay?.round_segments ?? [];
+  const modelReviewTasks = report?.gameplay?.model_review_tasks ?? [];
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 5 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 6 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -485,6 +513,16 @@ export function App() {
     }
     player.currentTime = Math.max(0, seconds);
     void player.play().catch(() => undefined);
+  }
+
+  async function copyTaskPrompt(task: ModelReviewTask) {
+    try {
+      await navigator.clipboard.writeText(task.prompt);
+      setCopiedTaskID(task.id);
+      window.setTimeout(() => setCopiedTaskID((current) => (current === task.id ? "" : current)), 1600);
+    } catch {
+      setError("Clipboard is unavailable in this browser context.");
+    }
   }
 
   return (
@@ -706,7 +744,7 @@ export function App() {
                     >
                       <span>{item.run_id}</span>
                       <small>
-                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.finding_count} findings
+                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.model_review_task_count || 0} tasks
                       </small>
                       <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
                     </button>
@@ -807,6 +845,45 @@ export function App() {
                               {Math.round(clamp01(segment.confidence) * 100)}% / {segment.detection_method.replaceAll("_", " ")}
                             </small>
                             {segment.review_window_ids?.length ? <em>{segment.review_window_ids.join(" / ")}</em> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {modelReviewTasks.length ? (
+                      <div className="model-task-list">
+                        {modelReviewTasks.map((task) => (
+                          <article className={`model-task priority-${task.priority}`} key={task.id}>
+                            <div className="model-task-head">
+                              <div>
+                                <span>
+                                  {task.status} / {task.priority} / {task.prompt_version}
+                                </span>
+                                <h3>
+                                  {task.round_number ? `R${task.round_number} / ` : ""}
+                                  {task.window_id}
+                                </h3>
+                              </div>
+                              <button onClick={() => void copyTaskPrompt(task)} title="Copy model prompt" type="button">
+                                <Copy size={14} />
+                                {copiedTaskID === task.id ? "Copied" : "Prompt"}
+                              </button>
+                            </div>
+                            <p>{task.questions?.[0] ?? "Review this selected gameplay window with the configured model prompt."}</p>
+                            <div className="evidence-links">
+                              {task.clip_path ? (
+                                <a href={artifactURL(task.clip_path)} target="_blank" rel="noreferrer">
+                                  <Video size={13} />
+                                  Clip
+                                </a>
+                              ) : null}
+                              {task.evidence?.slice(0, 2).map((evidence) => (
+                                <a href={artifactURL(evidence.path)} key={`${task.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
+                                  <Link2 size={13} />
+                                  {evidenceLabel(evidence)}
+                                </a>
+                              ))}
+                            </div>
                           </article>
                         ))}
                       </div>

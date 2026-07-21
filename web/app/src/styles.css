@@ -901,14 +901,16 @@ button {
 }
 
 .focus-grid,
-.practice-list {
+.practice-list,
+.model-task-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .focus-card,
-.practice-task {
+.practice-task,
+.model-task {
   min-height: 128px;
   padding: 13px;
   border: 1px solid var(--line);
@@ -924,6 +926,14 @@ button {
   border-color: rgba(255, 200, 87, 0.36);
 }
 
+.model-task.priority-high {
+  border-color: rgba(255, 70, 85, 0.48);
+}
+
+.model-task.priority-medium {
+  border-color: rgba(255, 200, 87, 0.36);
+}
+
 .focus-card small {
   display: block;
   margin-top: 10px;
@@ -932,6 +942,65 @@ button {
   font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.model-task {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.model-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.model-task-head > div {
+  min-width: 0;
+}
+
+.model-task-head span {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.model-task-head h3 {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 920;
+  line-height: 1.2;
+}
+
+.model-task-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 86px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(40, 215, 255, 0.48);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.09);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.model-task p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.42;
 }
 
 .phase-profile {
@@ -1570,6 +1639,7 @@ button {
   .report-stats,
   .focus-grid,
   .practice-list,
+  .model-task-list,
   .signal-grid,
   .round-segments,
   .pipeline-track,

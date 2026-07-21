@@ -105,6 +105,16 @@ func TestAnalysisRunnerAttachesReviewClips(t *testing.T) {
 	if window.ClipDurationSeconds != 12 {
 		t.Fatalf("expected clip duration, got %.3f", window.ClipDurationSeconds)
 	}
+	if result.Report.Gameplay.ModelReviewTaskCount != 1 || len(result.Report.Gameplay.ModelReviewTasks) != 1 {
+		t.Fatalf("expected model review task: %+v", result.Report.Gameplay)
+	}
+	task := result.Report.Gameplay.ModelReviewTasks[0]
+	if task.Status != "ready" || task.ClipPath != window.ClipPath {
+		t.Fatalf("unexpected model review task: %+v", task)
+	}
+	if !strings.Contains(task.Prompt, window.ClipPath) || !strings.Contains(task.ExpectedOutput, `"findings"`) {
+		t.Fatalf("unexpected model review prompt: %+v", task)
+	}
 	if !hasArtifact(result.Report.Artifacts, "review_clip") {
 		t.Fatalf("expected review clip artifact: %+v", result.Report.Artifacts)
 	}

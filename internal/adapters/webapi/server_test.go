@@ -100,7 +100,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 5`) ||
+		!strings.Contains(got, `"schema_version": 6`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
 	}
@@ -164,7 +164,7 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 5`) ||
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 6`) ||
 		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) {
 		t.Fatalf("unexpected health response:\n%s", got)
 	}
