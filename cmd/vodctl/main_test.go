@@ -117,8 +117,15 @@ for arg in "$@"; do
 done
 dir="$(dirname "$last")"
 mkdir -p "$dir"
-printf fake > "$dir/frame_000001.jpg"
-printf fake > "$dir/frame_000002.jpg"
+case "$last" in
+  *contact_sheet.jpg)
+    printf fake > "$last"
+    ;;
+  *)
+    printf fake > "$dir/frame_000001.jpg"
+    printf fake > "$dir/frame_000002.jpg"
+    ;;
+esac
 `
 	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatalf("write fake ffmpeg: %v", err)
@@ -155,6 +162,14 @@ printf fake > "$dir/frame_000002.jpg"
 
 	if got := string(raw); !strings.Contains(got, `"frame_count": 2`) || !strings.Contains(got, `"timestamp_seconds": 10.5`) {
 		t.Fatalf("unexpected frames manifest:\n%s", got)
+	}
+
+	contactSheetPath := filepath.Join(outRoot, "diamond_example", "frames", "test_sample", "contact_sheet.jpg")
+	if _, err := os.Stat(contactSheetPath); err != nil {
+		t.Fatalf("expected contact sheet: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "contact_sheet.jpg") {
+		t.Fatalf("expected contact sheet path in stdout:\n%s", got)
 	}
 }
 
@@ -221,8 +236,15 @@ for arg in "$@"; do
 done
 dir="$(dirname "$last")"
 mkdir -p "$dir"
-printf fake > "$dir/frame_000001.jpg"
-printf fake > "$dir/frame_000002.jpg"
+case "$last" in
+  *contact_sheet.jpg)
+    printf fake > "$last"
+    ;;
+  *)
+    printf fake > "$dir/frame_000001.jpg"
+    printf fake > "$dir/frame_000002.jpg"
+    ;;
+esac
 `
 	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatalf("write fake ffmpeg: %v", err)
@@ -257,7 +279,9 @@ printf fake > "$dir/frame_000002.jpg"
 		t.Fatalf("expected JSON report: %v", err)
 	}
 
-	if got := string(rawReport); !strings.Contains(got, `"run_id": "test_run"`) || !strings.Contains(got, `"baseline_ai_not_enabled"`) {
+	if got := string(rawReport); !strings.Contains(got, `"run_id": "test_run"`) ||
+		!strings.Contains(got, `"baseline_ai_not_enabled"`) ||
+		!strings.Contains(got, `"contact_sheet_path"`) {
 		t.Fatalf("unexpected report:\n%s", got)
 	}
 

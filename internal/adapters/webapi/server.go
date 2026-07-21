@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,7 @@ type VODItem struct {
 	Enabled          bool    `json:"enabled"`
 	LocalStatus      string  `json:"local_status"`
 	LocalSizeBytes   int64   `json:"local_size_bytes"`
+	VideoURL         string  `json:"video_url,omitempty"`
 	ReportCount      int     `json:"report_count"`
 	LatestReportID   string  `json:"latest_report_id,omitempty"`
 	LatestGenerated  string  `json:"latest_generated,omitempty"`
@@ -98,6 +100,7 @@ type ReportSummary struct {
 	SampleName     string    `json:"sample_name"`
 	SampleFPS      string    `json:"sample_fps"`
 	SampleDuration float64   `json:"sample_duration_seconds,omitempty"`
+	ContactSheet   string    `json:"contact_sheet,omitempty"`
 	JSONPath       string    `json:"json_path"`
 	MarkdownPath   string    `json:"markdown_path"`
 }
@@ -144,6 +147,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
+	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
@@ -218,6 +222,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 		}
 		if asset.Status == dataset.LocalStatusDownloaded {
 			counts.Downloaded++
+			item.VideoURL = "/api/vods/" + url.PathEscape(asset.VOD.Label) + "/video"
 		}
 		if len(reports) > 0 {
 			counts.Reported++
@@ -234,6 +239,41 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 		Counts:      counts,
 		VODs:        items,
 	})
+}
+
+func (s *Server) handleVODVideo(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/vods/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "video" {
+		writeError(w, http.StatusBadRequest, errors.New("expected /api/vods/{label}/video"))
+		return
+	}
+
+	label, err := url.PathUnescape(parts[0])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode VOD label: %w", err))
+		return
+	}
+
+	vods, err := dataset.LoadManifest(s.config.ManifestPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("load manifest: %w", err))
+		return
+	}
+
+	vod, ok := dataset.FindByLabel(vods, label)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown VOD label %q", label))
+		return
+	}
+
+	videoPath, _, ok := dataset.FindLocalVideo(s.config.RawRoot, vod)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("video file not found: %s", videoPath))
+		return
+	}
+
+	http.ServeFile(w, r, videoPath)
 }
 
 func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +450,7 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 				SampleName:     report.Sample.Name,
 				SampleFPS:      report.Sample.FPS,
 				SampleDuration: report.Sample.DurationSeconds,
+				ContactSheet:   report.Sample.ContactSheetPath,
 				JSONPath:       path,
 				MarkdownPath:   filepath.Join(root, entry.Name(), reportstore.MarkdownReportName),
 			},
@@ -461,7 +502,13 @@ func isAllowedDevOrigin(origin string) bool {
 	case "http://127.0.0.1:5173", "http://localhost:5173":
 		return true
 	default:
-		return false
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Scheme != "http" {
+			return false
+		}
+		host := parsed.Hostname()
+		port := parsed.Port()
+		return (host == "127.0.0.1" || host == "localhost") && strings.HasPrefix(port, "517")
 	}
 }
 

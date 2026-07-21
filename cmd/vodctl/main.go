@@ -183,13 +183,14 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tFINDINGS\tREPORT_JSON\tREPORT_MD")
-	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n",
+	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n",
 		result.Report.VOD.Label,
 		result.Report.RunID,
 		result.Report.Status,
 		result.Report.Sample.FrameCount,
 		len(result.Report.Findings),
+		result.Report.Sample.ContactSheetPath,
 		result.Saved.JSONPath,
 		result.Saved.MarkdownPath,
 	)
@@ -392,20 +393,35 @@ func runVideoSample(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	contactSheetPath := ""
+	if result.FrameCount > 0 {
+		contactSheet, err := media.RunContactSheet(ctx, media.ContactSheetOptions{
+			FFmpegPath: *ffmpegPath,
+			FramesDir:  result.OutputDir,
+			Overwrite:  *force,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 1
+		}
+		contactSheetPath = contactSheet.Path
+	}
+
 	durationText := duration.String()
 	if duration == 0 {
 		durationText = "full"
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "LABEL\tSAMPLE\tFPS\tSTART\tDURATION\tFRAMES\tFRAMES_JSON")
-	fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+	fmt.Fprintln(table, "LABEL\tSAMPLE\tFPS\tSTART\tDURATION\tFRAMES\tCONTACT_SHEET\tFRAMES_JSON")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 		vod.Label,
 		name,
 		*fps,
 		start.String(),
 		durationText,
 		result.FrameCount,
+		contactSheetPath,
 		manifest,
 	)
 	table.Flush()

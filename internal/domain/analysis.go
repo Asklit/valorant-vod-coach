@@ -30,15 +30,16 @@ type MediaSummary struct {
 }
 
 type FrameSampleSummary struct {
-	Name            string  `json:"name"`
-	OutputDir       string  `json:"output_dir"`
-	ManifestPath    string  `json:"manifest_path"`
-	FPS             string  `json:"fps"`
-	FPSValue        float64 `json:"fps_value"`
-	StartSeconds    float64 `json:"start_seconds"`
-	DurationSeconds float64 `json:"duration_seconds,omitempty"`
-	FrameCount      int     `json:"frame_count"`
-	Frames          []Frame `json:"frames,omitempty"`
+	Name             string  `json:"name"`
+	OutputDir        string  `json:"output_dir"`
+	ManifestPath     string  `json:"manifest_path"`
+	FPS              string  `json:"fps"`
+	FPSValue         float64 `json:"fps_value"`
+	StartSeconds     float64 `json:"start_seconds"`
+	DurationSeconds  float64 `json:"duration_seconds,omitempty"`
+	FrameCount       int     `json:"frame_count"`
+	Frames           []Frame `json:"frames,omitempty"`
+	ContactSheetPath string  `json:"contact_sheet_path,omitempty"`
 }
 
 type Frame struct {

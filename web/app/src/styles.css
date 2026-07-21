@@ -251,11 +251,11 @@ button {
 }
 
 .vod-row-title {
-  overflow: hidden;
   font-size: 13px;
   font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .vod-row-meta {
@@ -297,6 +297,10 @@ button {
   min-height: 76px;
 }
 
+.topbar > div:first-child {
+  min-width: 0;
+}
+
 .topbar h1,
 .panel-heading h2 {
   margin: 2px 0 0;
@@ -306,9 +310,9 @@ button {
 .topbar h1 {
   max-width: 980px;
   overflow-wrap: anywhere;
-  font-size: clamp(28px, 3.7vw, 54px);
+  font-size: clamp(28px, 3.3vw, 48px);
   font-weight: 950;
-  line-height: 1;
+  line-height: 1.06;
   text-transform: uppercase;
 }
 
@@ -507,6 +511,38 @@ button {
   text-transform: uppercase;
 }
 
+.video-stage {
+  overflow: hidden;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.video-stage video,
+.video-placeholder {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
+.video-stage video {
+  background: #020305;
+}
+
+.video-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.video-placeholder span {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .run-controls {
   display: grid;
   grid-template-columns: minmax(104px, 0.9fr) 88px minmax(150px, 1fr);
@@ -562,7 +598,7 @@ button {
 
 .pipeline-track {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-top: 18px;
 }
@@ -780,7 +816,8 @@ button {
   gap: 10px;
 }
 
-.frame-tile {
+.frame-tile,
+.contact-sheet-tile {
   position: relative;
   overflow: hidden;
   min-height: 104px;
@@ -799,11 +836,25 @@ button {
   transition: transform 200ms ease;
 }
 
+.contact-sheet-tile {
+  grid-column: 1 / -1;
+  min-height: 220px;
+}
+
+.contact-sheet-tile img {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.24);
+}
+
 .frame-tile:hover img {
   transform: scale(1.04);
 }
 
-.frame-tile figcaption {
+.frame-tile figcaption,
+.contact-sheet-tile figcaption {
   position: absolute;
   right: 7px;
   bottom: 7px;

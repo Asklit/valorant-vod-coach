@@ -20,7 +20,8 @@ flowchart LR
   resolver[dataset.LocalVODResolver]
   media[media.LocalProcessor]
   ffprobe[ffprobe]
-  ffmpeg[ffmpeg]
+  frames[ffmpeg frames]
+  sheet[ffmpeg contact sheet]
   baseline[BaselineObservationAnalyzer]
   report[report.LocalStore]
   raw[(data/raw/youtube)]
@@ -29,6 +30,7 @@ flowchart LR
   user --> cli
   user --> ui
   ui --> api
+  api --> raw
   cli --> runner
   api --> runner
   api --> processed
@@ -36,7 +38,8 @@ flowchart LR
   resolver --> raw
   runner --> media
   media --> ffprobe
-  media --> ffmpeg
+  media --> frames
+  media --> sheet
   media --> processed
   runner --> baseline
   runner --> report

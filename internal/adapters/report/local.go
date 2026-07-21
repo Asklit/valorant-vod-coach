@@ -96,7 +96,11 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 		fmt.Fprintf(&buf, "- Duration: full input\n")
 	}
 	fmt.Fprintf(&buf, "- Frames: %d\n", report.Sample.FrameCount)
-	fmt.Fprintf(&buf, "- Manifest: `%s`\n\n", report.Sample.ManifestPath)
+	fmt.Fprintf(&buf, "- Manifest: `%s`\n", report.Sample.ManifestPath)
+	if report.Sample.ContactSheetPath != "" {
+		fmt.Fprintf(&buf, "- Contact sheet: `%s`\n", report.Sample.ContactSheetPath)
+	}
+	fmt.Fprintf(&buf, "\n")
 
 	fmt.Fprintf(&buf, "## Findings\n\n")
 	if len(report.Findings) == 0 {

@@ -38,7 +38,7 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 - Normalize file naming and metadata.
 - Extract low-frequency frames for global analysis.
 - Extract higher-frequency clips around candidate events.
-- Generate contact sheets for manual inspection.
+- Generate contact sheets for manual inspection; this is implemented in the current local CLI/API pipeline.
 - Save all derived artifacts under `data/processed/<vod_id>/`.
 
 ### Detection

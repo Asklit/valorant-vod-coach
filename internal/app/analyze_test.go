@@ -44,8 +44,8 @@ func TestAnalysisRunnerCreatesBaselineReport(t *testing.T) {
 	if result.Report.Status != "completed" {
 		t.Fatalf("unexpected status: %s", result.Report.Status)
 	}
-	if len(result.Report.Artifacts) != 2 {
-		t.Fatalf("expected 2 input artifacts, got %d", len(result.Report.Artifacts))
+	if len(result.Report.Artifacts) != 3 {
+		t.Fatalf("expected 3 input artifacts, got %d", len(result.Report.Artifacts))
 	}
 	if result.Saved.JSONPath == "" || result.Saved.MarkdownPath == "" {
 		t.Fatalf("expected saved report paths: %+v", result.Saved)
@@ -106,18 +106,20 @@ func (fakeMediaProcessor) ProbeMedia(context.Context, domain.VOD, string) (Media
 func (fakeMediaProcessor) SampleFrames(_ context.Context, _ domain.VOD, _ string, request FrameSampleRequest) (FrameSampleResult, error) {
 	return FrameSampleResult{
 		Summary: domain.FrameSampleSummary{
-			Name:            request.Name,
-			OutputDir:       "/tmp/frames",
-			ManifestPath:    "/tmp/frames/frames.json",
-			FPS:             request.FPS,
-			FPSValue:        0.5,
-			DurationSeconds: request.Duration.Seconds(),
-			FrameCount:      90,
+			Name:             request.Name,
+			OutputDir:        "/tmp/frames",
+			ManifestPath:     "/tmp/frames/frames.json",
+			FPS:              request.FPS,
+			FPSValue:         0.5,
+			DurationSeconds:  request.Duration.Seconds(),
+			FrameCount:       90,
+			ContactSheetPath: "/tmp/frames/contact_sheet.jpg",
 			Frames: []domain.Frame{
 				{Index: 1, TimestampSeconds: 0, Path: "/tmp/frames/frame_000001.jpg"},
 			},
 		},
-		Artifact: domain.Artifact{Type: "frame_sample", Format: "frames_manifest_json", Path: "/tmp/frames/frames.json"},
+		Artifact:             domain.Artifact{Type: "frame_sample", Format: "frames_manifest_json", Path: "/tmp/frames/frames.json"},
+		ContactSheetArtifact: domain.Artifact{Type: "contact_sheet", Format: "jpeg", Path: "/tmp/frames/contact_sheet.jpg"},
 	}, nil
 }
 

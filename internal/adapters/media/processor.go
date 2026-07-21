@@ -83,23 +83,44 @@ func (p LocalProcessor) SampleFrames(ctx context.Context, vod domain.VOD, videoP
 		return app.FrameSampleResult{}, err
 	}
 
+	var contactSheetArtifact domain.Artifact
+	contactSheetPath := ""
+	if result.FrameCount > 0 {
+		contactSheet, err := RunContactSheet(runCtx, ContactSheetOptions{
+			FFmpegPath: ffmpegPath,
+			FramesDir:  result.OutputDir,
+			Overwrite:  request.Overwrite,
+		})
+		if err != nil {
+			return app.FrameSampleResult{}, err
+		}
+		contactSheetPath = contactSheet.Path
+		contactSheetArtifact = domain.Artifact{
+			Type:   "contact_sheet",
+			Format: "jpeg",
+			Path:   contactSheet.Path,
+		}
+	}
+
 	return app.FrameSampleResult{
 		Summary: domain.FrameSampleSummary{
-			Name:            sampleName,
-			OutputDir:       result.OutputDir,
-			ManifestPath:    manifestPath,
-			FPS:             result.FPS,
-			FPSValue:        result.FPSValue,
-			StartSeconds:    result.Start.Seconds(),
-			DurationSeconds: result.Duration.Seconds(),
-			FrameCount:      result.FrameCount,
-			Frames:          summarizeFrames(result.Frames),
+			Name:             sampleName,
+			OutputDir:        result.OutputDir,
+			ManifestPath:     manifestPath,
+			FPS:              result.FPS,
+			FPSValue:         result.FPSValue,
+			StartSeconds:     result.Start.Seconds(),
+			DurationSeconds:  result.Duration.Seconds(),
+			FrameCount:       result.FrameCount,
+			Frames:           summarizeFrames(result.Frames),
+			ContactSheetPath: contactSheetPath,
 		},
 		Artifact: domain.Artifact{
 			Type:   "frame_sample",
 			Format: "frames_manifest_json",
 			Path:   manifestPath,
 		},
+		ContactSheetArtifact: contactSheetArtifact,
 	}, nil
 }
 
