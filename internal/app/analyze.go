@@ -66,8 +66,9 @@ type MediaProbeResult struct {
 }
 
 type FrameSampleResult struct {
-	Summary  domain.FrameSampleSummary
-	Artifact domain.Artifact
+	Summary              domain.FrameSampleSummary
+	Artifact             domain.Artifact
+	ContactSheetArtifact domain.Artifact
 }
 
 type ObservationRequest struct {
@@ -175,6 +176,9 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 			Analyzer: "baseline",
 			Mode:     "local",
 		},
+	}
+	if sample.ContactSheetArtifact.Path != "" {
+		report.Artifacts = append(report.Artifacts, sample.ContactSheetArtifact)
 	}
 
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)

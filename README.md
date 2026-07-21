@@ -180,10 +180,11 @@ The command writes:
 
 - `data/processed/<vod_label>/probe.ffprobe.json`
 - `data/processed/<vod_label>/frames/<sample_name>/frames.json`
+- `data/processed/<vod_label>/frames/<sample_name>/contact_sheet.jpg`
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a deterministic baseline. It validates ingestion, media quality, sample coverage, and report generation. Vision-model gameplay analysis will be added behind the same app-layer port.
+The current analyzer is a deterministic baseline. It validates ingestion, media quality, sample coverage, generates sampled frame evidence plus a contact sheet, and writes reproducible reports. Vision-model gameplay analysis will be added behind the same app-layer port.
 
 After building, the same commands can be run through `bin/vodctl`.
 
@@ -216,9 +217,10 @@ The UI can:
 - browse the curated VOD library;
 - filter by rank and search text;
 - show downloaded/report-ready status;
+- play downloaded local VOD files through the Go API;
 - run the local baseline analysis pipeline;
 - switch between generated report runs for a selected VOD;
-- render findings, timeline events, media stats, and sampled frame evidence.
+- render findings, timeline events, media stats, contact sheets, and sampled frame evidence.
 
 Production-style local serving:
 

@@ -37,6 +37,7 @@ type VODItem = {
   enabled: boolean;
   local_status: string;
   local_size_bytes: number;
+  video_url?: string;
   report_count: number;
   latest_report_id?: string;
   latest_generated?: string;
@@ -106,6 +107,7 @@ type Report = {
     duration_seconds?: number;
     frame_count: number;
     frames?: Frame[];
+    contact_sheet_path?: string;
   };
   findings: Finding[];
   timeline: Array<{
@@ -140,6 +142,7 @@ type ReportSummary = {
   sample_name: string;
   sample_fps: string;
   sample_duration_seconds?: number;
+  contact_sheet?: string;
   json_path: string;
   markdown_path: string;
 };
@@ -284,6 +287,8 @@ export function App() {
   }
 
   const sampleFrames = report?.sample.frames?.slice(0, 12) ?? [];
+  const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
+  const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
 
   return (
     <main className="app-shell">
@@ -401,6 +406,17 @@ export function App() {
               </div>
             </div>
 
+            <div className="video-stage">
+              {selectedVod?.video_url ? (
+                <video controls preload="metadata" src={apiURL(selectedVod.video_url)} />
+              ) : (
+                <div className="video-placeholder">
+                  <Video size={30} />
+                  <span>Local video unavailable</span>
+                </div>
+              )}
+            </div>
+
             <div className="run-controls">
               <label>
                 <span>Sample seconds</span>
@@ -421,7 +437,7 @@ export function App() {
             </div>
 
             <div className="pipeline-track">
-              {["Manifest", "Probe", "Frames", "Report"].map((step, index) => (
+              {["Manifest", "Probe", "Frames", "Sheet", "Report"].map((step, index) => (
                 <div className={report || analyzing ? "pipeline-step lit" : "pipeline-step"} key={step}>
                   <span>{index + 1}</span>
                   {step}
@@ -541,13 +557,19 @@ export function App() {
               <ChevronRight size={19} />
             </div>
             <div className="frame-grid">
+              {contactSheetPath && (
+                <figure className="contact-sheet-tile">
+                  <img src={artifactURL(contactSheetPath)} alt="Contact sheet overview" loading="lazy" />
+                  <figcaption>contact sheet</figcaption>
+                </figure>
+              )}
               {sampleFrames.map((frame) => (
                 <figure className="frame-tile" key={frame.path}>
                   <img src={artifactURL(frame.path)} alt={`Frame ${frame.index}`} loading="lazy" />
                   <figcaption>{formatSeconds(frame.timestamp_seconds)}</figcaption>
                 </figure>
               ))}
-              {!sampleFrames.length && <div className="muted-line">No frames loaded.</div>}
+              {!sampleFrames.length && !contactSheetPath && <div className="muted-line">No frames loaded.</div>}
             </div>
           </section>
         </div>
@@ -639,7 +661,8 @@ function apiURL(path: string) {
 }
 
 function devBackendBase() {
-  if (window.location.port === "5173") {
+  const isLocalHost = window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost";
+  if (isLocalHost && window.location.port.startsWith("517")) {
     return "http://127.0.0.1:8080";
   }
   return "";

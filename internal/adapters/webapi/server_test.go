@@ -34,6 +34,25 @@ func TestServerListsVODs(t *testing.T) {
 	if len(payload.VODs) != 1 || payload.VODs[0].Label != "diamond_example" {
 		t.Fatalf("unexpected VODs: %+v", payload.VODs)
 	}
+	if payload.VODs[0].VideoURL != "/api/vods/diamond_example/video" {
+		t.Fatalf("unexpected video URL: %s", payload.VODs[0].VideoURL)
+	}
+}
+
+func TestServerServesLocalVODVideo(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/vods/diamond_example/video", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); got != "fake video" {
+		t.Fatalf("unexpected video response body: %q", got)
+	}
 }
 
 func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
@@ -49,7 +68,9 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
 
-	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) || !strings.Contains(got, `"frame_count": 2`) {
+	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
+		!strings.Contains(got, `"frame_count": 2`) ||
+		!strings.Contains(got, `"contact_sheet_path"`) {
 		t.Fatalf("unexpected analysis response:\n%s", got)
 	}
 
@@ -76,8 +97,25 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) || !strings.Contains(got, `"frame_count": 2`) {
+	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
+		!strings.Contains(got, `"frame_count": 2`) ||
+		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
+	}
+}
+
+func TestDevCORSAllowsFallbackVitePorts(t *testing.T) {
+	if !isAllowedDevOrigin("http://127.0.0.1:5174") {
+		t.Fatalf("expected fallback Vite port to be allowed")
+	}
+	if !isAllowedDevOrigin("http://localhost:5179") {
+		t.Fatalf("expected localhost Vite port to be allowed")
+	}
+	if isAllowedDevOrigin("https://127.0.0.1:5174") {
+		t.Fatalf("expected https dev origin to be rejected")
+	}
+	if isAllowedDevOrigin("http://example.com:5174") {
+		t.Fatalf("expected non-local dev origin to be rejected")
 	}
 }
 
@@ -150,8 +188,15 @@ for arg in "$@"; do
 done
 dir="$(dirname "$last")"
 mkdir -p "$dir"
-printf fake > "$dir/frame_000001.jpg"
-printf fake > "$dir/frame_000002.jpg"
+case "$last" in
+  *contact_sheet.jpg)
+    printf fake > "$last"
+    ;;
+  *)
+    printf fake > "$dir/frame_000001.jpg"
+    printf fake > "$dir/frame_000002.jpg"
+    ;;
+esac
 `
 	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatalf("write fake ffmpeg: %v", err)

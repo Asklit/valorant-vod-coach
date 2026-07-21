@@ -40,7 +40,9 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read markdown report: %v", err)
 	}
-	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") || !strings.Contains(string(rawMarkdown), "Baseline finding") {
+	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") ||
+		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
+		!strings.Contains(string(rawMarkdown), "contact_sheet.jpg") {
 		t.Fatalf("unexpected markdown report:\n%s", string(rawMarkdown))
 	}
 }
@@ -84,11 +86,12 @@ func sampleReport() domain.AnalysisReport {
 			HasSize:         true,
 		},
 		Sample: domain.FrameSampleSummary{
-			Name:            "analysis_run_01",
-			ManifestPath:    "frames.json",
-			FPS:             "0.5",
-			DurationSeconds: 120,
-			FrameCount:      60,
+			Name:             "analysis_run_01",
+			ManifestPath:     "frames.json",
+			FPS:              "0.5",
+			DurationSeconds:  120,
+			FrameCount:       60,
+			ContactSheetPath: "frames/contact_sheet.jpg",
 		},
 		Findings: []domain.Finding{
 			{

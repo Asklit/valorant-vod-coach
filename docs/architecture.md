@@ -35,7 +35,8 @@ vodctl analyze run
       -> dataset.LocalVODResolver
       -> media.LocalProcessor
           -> ffprobe
-          -> ffmpeg
+          -> ffmpeg frame sampling
+          -> ffmpeg contact sheet generation
       -> app.BaselineObservationAnalyzer
       -> report.LocalStore
           -> report.json
@@ -46,6 +47,7 @@ This local command intentionally uses the same boundaries as the future service 
 
 - dataset lookup is an adapter;
 - media probing and sampling are adapters;
+- contact sheet generation is part of the media adapter and becomes a first UI evidence artifact;
 - report schema lives in `internal/domain`;
 - orchestration lives in `internal/app`;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can be added without changing the CLI contract.
@@ -56,6 +58,7 @@ The first UI slice is `web/app` plus `cmd/vod-web`.
 React/Vite UI
   -> Go vod-web API
       -> dataset manifest and local video inventory
+      -> local video streaming by VOD label
       -> app.AnalysisRunner
       -> data/processed reports and frame artifacts
 ```
