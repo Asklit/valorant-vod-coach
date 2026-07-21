@@ -20,6 +20,10 @@ type MediaProcessor interface {
 	SampleFrames(ctx context.Context, vod domain.VOD, videoPath string, request FrameSampleRequest) (FrameSampleResult, error)
 }
 
+type ReviewClipExtractor interface {
+	ExtractReviewClips(ctx context.Context, vod domain.VOD, videoPath string, request ReviewClipRequest) (ReviewClipResult, error)
+}
+
 type ObservationAnalyzer interface {
 	AnalyzeObservations(ctx context.Context, request ObservationRequest) (ObservationResult, error)
 }
@@ -61,6 +65,13 @@ type FrameSampleRequest struct {
 	Overwrite    bool
 }
 
+type ReviewClipRequest struct {
+	RunID      string
+	SampleName string
+	Windows    []domain.ReviewWindow
+	Overwrite  bool
+}
+
 type MediaProbeResult struct {
 	Summary  domain.MediaSummary
 	Artifact domain.Artifact
@@ -70,6 +81,11 @@ type FrameSampleResult struct {
 	Summary              domain.FrameSampleSummary
 	Artifact             domain.Artifact
 	ContactSheetArtifact domain.Artifact
+}
+
+type ReviewClipResult struct {
+	Windows   []domain.ReviewWindow
+	Artifacts []domain.Artifact
 }
 
 type ObservationRequest struct {
@@ -160,6 +176,25 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	})
 	if err != nil {
 		return RunAnalysisResult{}, err
+	}
+
+	if observations.Gameplay != nil && len(observations.Gameplay.ReviewWindows) > 0 {
+		if extractor, ok := r.Media.(ReviewClipExtractor); ok {
+			clips, err := extractor.ExtractReviewClips(ctx, vod, videoPath, ReviewClipRequest{
+				RunID:      runID,
+				SampleName: sampleName,
+				Windows:    observations.Gameplay.ReviewWindows,
+				Overwrite:  request.Overwrite,
+			})
+			if err != nil {
+				return RunAnalysisResult{}, err
+			}
+			if len(clips.Windows) > 0 {
+				observations.Gameplay.ReviewWindows = clips.Windows
+				observations.Gameplay.ReviewWindowCount = len(clips.Windows)
+			}
+			observations.Artifacts = append(observations.Artifacts, clips.Artifacts...)
+		}
 	}
 
 	report := domain.AnalysisReport{

@@ -182,10 +182,12 @@ The command writes:
 - `data/processed/<vod_label>/frames/<sample_name>/frames.json`
 - `data/processed/<vod_label>/frames/<sample_name>/contact_sheet.jpg`
 - `data/processed/<vod_label>/frames/<sample_name>/gameplay_review.json`
+- `data/processed/<vod_label>/clips/<run_id>/review_*.mp4`
+- `data/processed/<vod_label>/clips/<run_id>/review_clips.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, selects gameplay review windows, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
+The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, selects gameplay review windows, extracts short mp4 review clips for those windows, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
 
 This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The next ML stage will replace or enrich the same `ObservationAnalyzer` port with OCR, round detection, kill/death windows, and model reasoning over selected clips.
 
@@ -224,7 +226,8 @@ The UI can:
 - run the local heuristic analysis pipeline against a sample window or the full VOD through async analysis jobs;
 - switch between generated report runs for a selected VOD;
 - render gameplay review windows, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
-- jump from a selected review window to the matching VOD timestamp in the local video player.
+- jump from a selected review window to the matching VOD timestamp in the local video player;
+- open generated review clips for selected gameplay windows.
 
 Production-style local serving:
 

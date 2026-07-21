@@ -39,6 +39,7 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 - Extract low-frequency frames for global analysis.
 - Extract higher-frequency clips around candidate events.
 - Generate contact sheets for manual inspection; this is implemented in the current local CLI/API pipeline.
+- Extract short mp4 review clips for selected gameplay windows; this is implemented in the current local CLI/API pipeline.
 - Save all derived artifacts under `data/processed/<vod_id>/`.
 
 ### Detection
@@ -80,7 +81,8 @@ Implemented local UI slice:
 - play downloaded VOD files through the Go API;
 - run sample or full-VOD analysis from the browser;
 - show visual signal metrics, gameplay review windows, coach findings, timeline events, contact sheet, and sampled frame evidence;
-- jump from a review window to the matching timestamp in the local video player.
+- jump from a review window to the matching timestamp in the local video player;
+- open generated mp4 clips for selected gameplay windows.
 
 ## Mistake Taxonomy
 

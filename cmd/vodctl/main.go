@@ -186,13 +186,14 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
-	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n",
+	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tCLIPS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n",
 		result.Report.VOD.Label,
 		result.Report.RunID,
 		result.Report.Status,
 		result.Report.Sample.FrameCount,
 		reviewWindowCount(result.Report.Gameplay),
+		artifactCount(result.Report.Artifacts, "review_clip"),
 		len(result.Report.Findings),
 		result.Report.Sample.ContactSheetPath,
 		result.Saved.JSONPath,
@@ -207,6 +208,16 @@ func reviewWindowCount(gameplay *domain.GameplaySummary) int {
 		return 0
 	}
 	return gameplay.ReviewWindowCount
+}
+
+func artifactCount(artifacts []domain.Artifact, artifactType string) int {
+	count := 0
+	for _, artifact := range artifacts {
+		if artifact.Type == artifactType {
+			count++
+		}
+	}
+	return count
 }
 
 func runVideo(args []string, stdout, stderr io.Writer) int {

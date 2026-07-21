@@ -1128,6 +1128,33 @@ button {
   white-space: nowrap;
 }
 
+.window-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 210px;
+}
+
+.clip-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 76px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(183, 255, 74, 0.45);
+  border-radius: var(--radius);
+  background: rgba(183, 255, 74, 0.1);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .finding-list {
   display: grid;
   gap: 10px;
@@ -1493,6 +1520,12 @@ button {
   .coach-summary,
   .review-window-head {
     flex-direction: column;
+  }
+
+  .window-actions {
+    justify-content: flex-start;
+    max-width: none;
+    width: 100%;
   }
 
   .topbar h1 {

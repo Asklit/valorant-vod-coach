@@ -156,6 +156,13 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 				fmt.Fprintf(&buf, "- Kind: `%s`\n", window.Kind)
 				fmt.Fprintf(&buf, "- Window: %.3fs - %.3fs (peak %.3fs)\n", window.StartSeconds, window.EndSeconds, window.PeakSeconds)
 				fmt.Fprintf(&buf, "- Score: %.2f\n", window.Score)
+				if window.ClipPath != "" {
+					fmt.Fprintf(&buf, "- Clip: `%s`", window.ClipPath)
+					if window.ClipDurationSeconds > 0 {
+						fmt.Fprintf(&buf, " (%.3fs)", window.ClipDurationSeconds)
+					}
+					fmt.Fprintf(&buf, "\n")
+				}
 				fmt.Fprintf(&buf, "- Summary: %s\n", window.Summary)
 				fmt.Fprintf(&buf, "- Recommendation: %s\n", window.Recommendation)
 				if len(window.Evidence) > 0 {
