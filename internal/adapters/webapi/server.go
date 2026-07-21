@@ -35,9 +35,10 @@ type Config struct {
 }
 
 type Server struct {
-	config Config
-	mux    *http.ServeMux
-	jobs   *analysisJobStore
+	config  Config
+	mux     *http.ServeMux
+	jobs    *analysisJobStore
+	metrics *serverMetrics
 }
 
 type VODItem struct {
@@ -164,25 +165,35 @@ func NewServer(config Config) *Server {
 		config.FFmpegPath = "ffmpeg"
 	}
 
-	server := &Server{config: config, mux: http.NewServeMux(), jobs: &analysisJobStore{jobs: map[string]*analysisJob{}}}
+	server := &Server{
+		config:  config,
+		mux:     http.NewServeMux(),
+		jobs:    &analysisJobStore{jobs: map[string]*analysisJob{}},
+		metrics: newServerMetrics(time.Now().UTC()),
+	}
 	server.routes()
 	return server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	recorder := &statusRecorder{ResponseWriter: w}
 	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		recorder.Header().Set("Access-Control-Allow-Origin", origin)
+		recorder.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	}
 	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
+		recorder.WriteHeader(http.StatusNoContent)
+		s.metrics.record(r.Method, r.URL.Path, recorder.statusCode(), time.Since(started))
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	s.mux.ServeHTTP(recorder, r)
+	s.metrics.record(r.Method, r.URL.Path, recorder.statusCode(), time.Since(started))
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
@@ -241,6 +252,45 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"model_review_available":  available,
 		"vision_service":          visionStatus,
 	})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	startedAt, requestMetrics := s.metrics.snapshot()
+	jobCounts := s.jobs.countByStatus()
+	uptime := time.Since(startedAt).Seconds()
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	fmt.Fprintf(w, "# HELP vodcoach_info Static application information.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_info gauge\n")
+	fmt.Fprintf(w, "vodcoach_info{schema_version=\"%d\",analyzer=\"visual-heuristic-gameplay\"} 1\n", domain.AnalysisReportSchemaVersion)
+
+	fmt.Fprintf(w, "# HELP vodcoach_uptime_seconds Process uptime in seconds.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_uptime_seconds gauge\n")
+	fmt.Fprintf(w, "vodcoach_uptime_seconds %.3f\n", uptime)
+
+	fmt.Fprintf(w, "# HELP vodcoach_model_review_configured Whether VISION_SERVICE_URL is configured.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_model_review_configured gauge\n")
+	fmt.Fprintf(w, "vodcoach_model_review_configured %d\n", boolGauge(strings.TrimSpace(s.config.VisionURL) != ""))
+
+	fmt.Fprintf(w, "# HELP vodcoach_http_requests_total HTTP requests by method, route, and status.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_http_requests_total counter\n")
+	for _, item := range requestMetrics {
+		fmt.Fprintf(w, "vodcoach_http_requests_total{method=\"%s\",route=\"%s\",status=\"%d\"} %d\n", promLabel(item.key.Method), promLabel(item.key.Route), item.key.Status, item.value.Count)
+	}
+
+	fmt.Fprintf(w, "# HELP vodcoach_http_request_duration_seconds HTTP request duration by method, route, and status.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_http_request_duration_seconds summary\n")
+	for _, item := range requestMetrics {
+		labels := fmt.Sprintf("method=\"%s\",route=\"%s\",status=\"%d\"", promLabel(item.key.Method), promLabel(item.key.Route), item.key.Status)
+		fmt.Fprintf(w, "vodcoach_http_request_duration_seconds_sum{%s} %.6f\n", labels, item.value.DurationSeconds)
+		fmt.Fprintf(w, "vodcoach_http_request_duration_seconds_count{%s} %d\n", labels, item.value.Count)
+	}
+
+	fmt.Fprintf(w, "# HELP vodcoach_analysis_jobs_total In-memory analysis jobs by status.\n")
+	fmt.Fprintf(w, "# TYPE vodcoach_analysis_jobs_total gauge\n")
+	for _, status := range []string{"queued", "running", "completed", "failed"} {
+		fmt.Fprintf(w, "vodcoach_analysis_jobs_total{status=\"%s\"} %d\n", status, jobCounts[status])
+	}
 }
 
 func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
@@ -732,6 +782,156 @@ func (s *analysisJobStore) update(jobID string, mutate func(*analysisJob)) {
 	if job, ok := s.jobs[jobID]; ok {
 		mutate(job)
 	}
+}
+
+func (s *analysisJobStore) countByStatus() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := map[string]int{}
+	for _, job := range s.jobs {
+		counts[job.Status]++
+	}
+	return counts
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusRecorder) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *statusRecorder) statusCode() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+type serverMetrics struct {
+	mu        sync.Mutex
+	startedAt time.Time
+	requests  map[requestMetricKey]requestMetricValue
+}
+
+type requestMetricKey struct {
+	Method string
+	Route  string
+	Status int
+}
+
+type requestMetricValue struct {
+	Count           int64
+	DurationSeconds float64
+}
+
+type requestMetricSnapshot struct {
+	key   requestMetricKey
+	value requestMetricValue
+}
+
+func newServerMetrics(startedAt time.Time) *serverMetrics {
+	return &serverMetrics{
+		startedAt: startedAt,
+		requests:  map[requestMetricKey]requestMetricValue{},
+	}
+}
+
+func (m *serverMetrics) record(method, path string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	key := requestMetricKey{
+		Method: method,
+		Route:  metricRoute(path),
+		Status: status,
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value := m.requests[key]
+	value.Count++
+	value.DurationSeconds += duration.Seconds()
+	m.requests[key] = value
+}
+
+func (m *serverMetrics) snapshot() (time.Time, []requestMetricSnapshot) {
+	if m == nil {
+		return time.Now().UTC(), nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]requestMetricSnapshot, 0, len(m.requests))
+	for key, value := range m.requests {
+		items = append(items, requestMetricSnapshot{key: key, value: value})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].key.Route == items[j].key.Route {
+			if items[i].key.Method == items[j].key.Method {
+				return items[i].key.Status < items[j].key.Status
+			}
+			return items[i].key.Method < items[j].key.Method
+		}
+		return items[i].key.Route < items[j].key.Route
+	})
+	return m.startedAt, items
+}
+
+func metricRoute(path string) string {
+	switch {
+	case path == "":
+		return "/"
+	case path == "/metrics":
+		return "/metrics"
+	case path == "/api/health":
+		return "/api/health"
+	case path == "/api/vods":
+		return "/api/vods"
+	case strings.HasPrefix(path, "/api/vods/"):
+		return "/api/vods/{label}/video"
+	case path == "/api/analysis-runs":
+		return "/api/analysis-runs"
+	case strings.HasPrefix(path, "/api/analysis-runs/"):
+		return "/api/analysis-runs/{job_id}"
+	case path == "/api/reports":
+		return "/api/reports"
+	case path == "/api/reports/latest":
+		return "/api/reports/latest"
+	case strings.HasPrefix(path, "/api/reports/"):
+		return "/api/reports/{vod_label}/{run_id}"
+	case strings.HasPrefix(path, "/artifacts/"):
+		return "/artifacts/*"
+	case strings.HasPrefix(path, "/api/"):
+		return "/api/unknown"
+	default:
+		return "static"
+	}
+}
+
+func promLabel(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	return value
+}
+
+func boolGauge(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

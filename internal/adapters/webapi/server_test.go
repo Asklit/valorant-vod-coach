@@ -190,6 +190,33 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	}
 }
 
+func TestServerMetricsEndpoint(t *testing.T) {
+	server := NewServer(Config{VisionURL: "http://vision.invalid"})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	for _, expected := range []string{
+		`vodcoach_info{schema_version="8",analyzer="visual-heuristic-gameplay"} 1`,
+		`vodcoach_model_review_configured 1`,
+		`vodcoach_http_requests_total{method="GET",route="/api/health",status="200"} 1`,
+		`vodcoach_analysis_jobs_total{status="completed"} 0`,
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("metrics missing %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestDevCORSAllowsFallbackVitePorts(t *testing.T) {
 	if !isAllowedDevOrigin("http://127.0.0.1:5174") {
 		t.Fatalf("expected fallback Vite port to be allowed")
