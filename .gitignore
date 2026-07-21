@@ -14,6 +14,7 @@ data/cache/
 bin/
 node_modules/
 web/app/node_modules/
+web/app/.vite/
 web/app/dist/
 
 # Large media files should never be committed.
