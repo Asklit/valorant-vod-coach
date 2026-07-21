@@ -25,6 +25,8 @@ Go API / Go workers / Python vision-service
 
 Detailed Mermaid diagrams are available in [system-diagrams.md](system-diagrams.md). The repository layout and testing policy are documented in [project-structure.md](project-structure.md) and [testing-strategy.md](testing-strategy.md).
 
+The current `vod-web` process exposes a dependency-free Prometheus text endpoint at `/metrics`. The local compose Prometheus config scrapes it through `host.docker.internal:8090`.
+
 ## Current Local MVP Slice
 
 The first implemented vertical slice is `vodctl analyze run`.

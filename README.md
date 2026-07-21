@@ -127,6 +127,8 @@ Useful local consoles:
 - MinIO S3 API: `http://localhost:9002`
 - ClickHouse HTTP: `http://localhost:8123`
 
+The Go API exposes Prometheus metrics at `http://localhost:8090/metrics`.
+
 ## Benchmarks
 
 Preview a benchmark run:
