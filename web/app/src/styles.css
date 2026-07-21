@@ -306,9 +306,9 @@ button {
 .topbar h1 {
   max-width: 980px;
   overflow-wrap: anywhere;
-  font-size: clamp(28px, 4vw, 58px);
+  font-size: clamp(28px, 3.7vw, 54px);
   font-weight: 950;
-  line-height: 0.95;
+  line-height: 1;
   text-transform: uppercase;
 }
 
@@ -445,13 +445,16 @@ button {
 }
 
 .panel-heading {
+  flex-wrap: wrap;
   justify-content: space-between;
   margin-bottom: 16px;
 }
 
 .panel-heading h2 {
+  overflow-wrap: anywhere;
   font-size: 21px;
   font-weight: 920;
+  line-height: 1.12;
   text-transform: uppercase;
 }
 
@@ -483,11 +486,11 @@ button {
 
 .vod-intel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
   gap: 10px;
 }
 
-.vod-intel div {
+.vod-intel .intel-card {
   min-height: 74px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -498,22 +501,21 @@ button {
 .vod-intel strong {
   display: block;
   margin-top: 8px;
-  overflow: hidden;
-  font-size: 18px;
+  overflow-wrap: anywhere;
+  font-size: 16px;
   font-weight: 920;
-  text-overflow: ellipsis;
   text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .run-controls {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.9fr) 88px minmax(150px, 1fr);
   align-items: end;
   margin-top: 16px;
 }
 
 .run-controls label {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 7px;
   min-width: 0;
@@ -536,13 +538,17 @@ button {
 }
 
 .run-button {
-  min-width: 166px;
+  min-width: 0;
+  width: 100%;
   padding: 0 16px;
   border-color: rgba(255, 70, 85, 0.72);
   background: linear-gradient(135deg, var(--red), #aa1f30);
   color: white;
   font-weight: 950;
+  line-height: 1.1;
+  text-align: center;
   text-transform: uppercase;
+  white-space: normal;
   box-shadow: 0 0 36px rgba(255, 70, 85, 0.26);
 }
 
@@ -587,6 +593,89 @@ button {
 .report-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.report-history {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.history-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.history-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.history-run {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  text-align: left;
+}
+
+.history-run.active {
+  border-color: rgba(40, 215, 255, 0.62);
+  background: rgba(40, 215, 255, 0.08);
+}
+
+.history-run span {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-run small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.artifact-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+  text-transform: uppercase;
 }
 
 .finding-list {
@@ -778,10 +867,13 @@ button {
     grid-template-columns: 300px minmax(0, 1fr);
   }
 
-  .hud-grid,
+  .hud-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .primary-grid,
   .secondary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .frame-grid {
@@ -810,10 +902,13 @@ button {
     max-height: 340px;
   }
 
-  .topbar,
-  .run-controls {
+  .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .run-controls {
+    grid-template-columns: 1fr;
   }
 
   .topbar-actions,

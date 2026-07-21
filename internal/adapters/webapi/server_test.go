@@ -68,6 +68,17 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) {
 		t.Fatalf("unexpected latest report response:\n%s", got)
 	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/reports?vod_label=diamond_example", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) || !strings.Contains(got, `"frame_count": 2`) {
+		t.Fatalf("unexpected report list response:\n%s", got)
+	}
 }
 
 type fixture struct {

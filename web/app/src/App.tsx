@@ -7,8 +7,10 @@ import {
   Clock3,
   Crosshair,
   Database,
+  FileText,
   FileJson2,
   Gauge,
+  History,
   Play,
   Radar,
   RefreshCw,
@@ -129,6 +131,24 @@ type AnalyzeResponse = {
   report_md: string;
 };
 
+type ReportSummary = {
+  run_id: string;
+  status: string;
+  generated_at: string;
+  finding_count: number;
+  frame_count: number;
+  sample_name: string;
+  sample_fps: string;
+  sample_duration_seconds?: number;
+  json_path: string;
+  markdown_path: string;
+};
+
+type ReportListResponse = {
+  vod_label: string;
+  reports: ReportSummary[];
+};
+
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 
 export function App() {
@@ -138,6 +158,7 @@ export function App() {
   const [rank, setRank] = useState("all");
   const [query, setQuery] = useState("");
   const [report, setReport] = useState<Report | null>(null);
+  const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -162,9 +183,10 @@ export function App() {
   useEffect(() => {
     if (!selectedLabel) {
       setReport(null);
+      setReportHistory([]);
       return;
     }
-    void loadLatestReport(selectedLabel);
+    void loadReports(selectedLabel);
   }, [selectedLabel]);
 
   async function loadVods() {
@@ -186,15 +208,35 @@ export function App() {
     }
   }
 
-  async function loadLatestReport(label: string) {
+  async function loadReports(label: string) {
     setLoadingReport(true);
     setError("");
     try {
-      const response = await fetch(apiURL(`/api/reports/latest?vod_label=${encodeURIComponent(label)}`));
-      if (response.status === 404) {
+      const response = await fetch(apiURL(`/api/reports?vod_label=${encodeURIComponent(label)}`));
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const payload = (await response.json()) as ReportListResponse;
+      setReportHistory(payload.reports);
+      if (payload.reports.length === 0) {
         setReport(null);
         return;
       }
+      await loadReport(label, payload.reports[0].run_id);
+    } catch (err) {
+      setError(messageFromError(err));
+      setReport(null);
+      setReportHistory([]);
+    } finally {
+      setLoadingReport(false);
+    }
+  }
+
+  async function loadReport(label: string, runID: string) {
+    setLoadingReport(true);
+    setError("");
+    try {
+      const response = await fetch(apiURL(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`));
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -232,6 +274,7 @@ export function App() {
       const payload = (await response.json()) as AnalyzeResponse;
       setReport(payload.report);
       await loadVods();
+      await loadReports(selectedVod.label);
       setSelectedLabel(selectedVod.label);
     } catch (err) {
       setError(messageFromError(err));
@@ -325,7 +368,7 @@ export function App() {
 
         <div className="hud-grid">
           <Metric icon={<Database size={18} />} label="Dataset" value={counts ? `${counts.downloaded}/${counts.enabled}` : "..."} detail="downloaded" />
-          <Metric icon={<FileJson2 size={18} />} label="Reports" value={counts ? String(counts.reported) : "..."} detail="ready" />
+          <Metric icon={<FileJson2 size={18} />} label="Reports" value={counts ? String(counts.reported) : "..."} detail="VODs ready" />
           <Metric icon={<Gauge size={18} />} label="Analyzer" value={report?.metadata.analyzer ?? "baseline"} detail={report?.metadata.mode ?? "local"} />
           <Metric icon={<Timer size={18} />} label="Sample" value={report ? `${report.sample.frame_count}` : "0"} detail="frames" />
         </div>
@@ -344,17 +387,17 @@ export function App() {
             </div>
 
             <div className="vod-intel">
-              <div>
+              <div className="intel-card">
                 <span>Rank</span>
-                <strong>{selectedVod?.rank ?? "unknown"}</strong>
+                <strong>{selectedVod?.rank ?? "select VOD"}</strong>
               </div>
-              <div>
+              <div className="intel-card">
                 <span>Duration</span>
-                <strong>{selectedVod?.duration_text ?? "unknown"}</strong>
+                <strong>{selectedVod?.duration_text ?? "--"}</strong>
               </div>
-              <div>
+              <div className="intel-card">
                 <span>Status</span>
-                <strong>{selectedVod?.local_status ?? "unknown"}</strong>
+                <strong>{selectedVod?.local_status ?? "idle"}</strong>
               </div>
             </div>
 
@@ -401,12 +444,47 @@ export function App() {
               )}
             </div>
 
+            {reportHistory.length > 0 && (
+              <div className="report-history">
+                <div className="history-title">
+                  <History size={15} />
+                  Report history
+                </div>
+                <div className="history-list">
+                  {reportHistory.map((item) => (
+                    <button
+                      className={report?.run_id === item.run_id ? "history-run active" : "history-run"}
+                      key={item.run_id}
+                      onClick={() => selectedVod && void loadReport(selectedVod.label, item.run_id)}
+                      type="button"
+                    >
+                      <span>{item.run_id}</span>
+                      <small>
+                        {item.frame_count} frames / {item.finding_count} findings
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {report ? (
               <>
                 <div className="report-stats">
                   <Metric icon={<Shield size={18} />} label="Media" value={formatResolution(report)} detail={report.media.frame_rate ?? "unknown"} compact />
                   <Metric icon={<Swords size={18} />} label="Findings" value={String(report.findings.length)} detail="baseline" compact />
                   <Metric icon={<Clock3 size={18} />} label="Coverage" value={`${Math.round(report.sample.duration_seconds ?? 0)}s`} detail={`${report.sample.fps} fps`} compact />
+                </div>
+
+                <div className="artifact-actions">
+                  <a href={artifactURL(reportPath(reportHistory, report.run_id, "json"))} target="_blank" rel="noreferrer">
+                    <FileJson2 size={15} />
+                    JSON
+                  </a>
+                  <a href={artifactURL(reportPath(reportHistory, report.run_id, "markdown"))} target="_blank" rel="noreferrer">
+                    <FileText size={15} />
+                    Markdown
+                  </a>
                 </div>
 
                 <div className="finding-list">
@@ -534,6 +612,9 @@ function formatSeconds(seconds: number) {
 }
 
 function artifactURL(path: string) {
+  if (!path) {
+    return "#";
+  }
   const normalized = path.replaceAll("\\", "/");
   const marker = "data/processed/";
   const index = normalized.indexOf(marker);
@@ -541,6 +622,14 @@ function artifactURL(path: string) {
     return apiURL(`/artifacts/${normalized.slice(index + marker.length)}`);
   }
   return apiURL(`/artifacts/${normalized.replace(/^\/+/, "")}`);
+}
+
+function reportPath(history: ReportSummary[], runID: string, kind: "json" | "markdown") {
+  const item = history.find((entry) => entry.run_id === runID);
+  if (!item) {
+    return "";
+  }
+  return kind === "json" ? item.json_path : item.markdown_path;
 }
 
 function apiURL(path: string) {

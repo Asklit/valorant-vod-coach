@@ -84,6 +84,24 @@ type AnalyzeResponse struct {
 	ArtifactBase string                `json:"artifact_base"`
 }
 
+type ReportListResponse struct {
+	VODLabel string          `json:"vod_label"`
+	Reports  []ReportSummary `json:"reports"`
+}
+
+type ReportSummary struct {
+	RunID          string    `json:"run_id"`
+	Status         string    `json:"status"`
+	GeneratedAt    time.Time `json:"generated_at"`
+	FindingCount   int       `json:"finding_count"`
+	FrameCount     int       `json:"frame_count"`
+	SampleName     string    `json:"sample_name"`
+	SampleFPS      string    `json:"sample_fps"`
+	SampleDuration float64   `json:"sample_duration_seconds,omitempty"`
+	JSONPath       string    `json:"json_path"`
+	MarkdownPath   string    `json:"markdown_path"`
+}
+
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -127,6 +145,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
+	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
 	s.mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(s.config.ProcessedRoot))))
@@ -306,6 +325,30 @@ func (s *Server) handleLatestReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
+	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
+	if label == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
+		return
+	}
+
+	reports, err := s.listReports(label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	summaries := make([]ReportSummary, 0, len(reports))
+	for _, report := range reports {
+		summaries = append(summaries, report.Summary)
+	}
+
+	writeJSON(w, http.StatusOK, ReportListResponse{
+		VODLabel: label,
+		Reports:  summaries,
+	})
+}
+
 func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/reports/")
 	parts := strings.Split(rest, "/")
@@ -331,6 +374,7 @@ type reportIndexItem struct {
 	RunID       string
 	Path        string
 	GeneratedAt time.Time
+	Summary     ReportSummary
 }
 
 func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
@@ -357,6 +401,18 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 			RunID:       report.RunID,
 			Path:        path,
 			GeneratedAt: report.GeneratedAt,
+			Summary: ReportSummary{
+				RunID:          report.RunID,
+				Status:         report.Status,
+				GeneratedAt:    report.GeneratedAt,
+				FindingCount:   len(report.Findings),
+				FrameCount:     report.Sample.FrameCount,
+				SampleName:     report.Sample.Name,
+				SampleFPS:      report.Sample.FPS,
+				SampleDuration: report.Sample.DurationSeconds,
+				JSONPath:       path,
+				MarkdownPath:   filepath.Join(root, entry.Name(), reportstore.MarkdownReportName),
+			},
 		})
 	}
 

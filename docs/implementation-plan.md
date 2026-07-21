@@ -412,13 +412,16 @@ Current status:
 - Add a Go HTTP API server for local MVP interaction.
 - Show VOD library, ranks, local download status, report readiness, and latest report.
 - Run baseline analysis from the UI.
+- List generated report runs for the selected VOD.
+- Switch between existing reports without rerunning analysis.
 - Show findings, timeline events, media stats, and sampled frame evidence.
 
 Current status:
 
 - Implemented through `cmd/vod-web` and `web/app`.
-- The dev setup uses Vite proxying `/api` and `/artifacts` to the Go server.
+- The dev setup runs Vite on `127.0.0.1:5173` and calls the Go API on `127.0.0.1:8080` with local CORS.
 - The production-style local setup serves `web/app/dist` from `vod-web`.
+- Report history selection is implemented through `GET /api/reports?vod_label=<label>`.
 
 ### Milestone 3: First Detection Layer
 
@@ -479,7 +482,7 @@ Current status:
 
 1. Manually check the Platinum item marked `search_metadata`.
 2. Add contact sheet generation for sampled frames so reports are easier to review manually.
-3. Add report history and report selection to the web UI.
+3. Add contact sheet preview to the report evidence area.
 4. Add local Docker Compose infrastructure.
 5. Add Postgres migrations, typed DB access, and `outbox_events`.
 6. Persist VOD/assets/report metadata in PostgreSQL from the analysis pipeline.
