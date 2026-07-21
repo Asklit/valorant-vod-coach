@@ -11,6 +11,8 @@ import {
   FileJson2,
   Gauge,
   History,
+  Lightbulb,
+  Link2,
   Play,
   Radar,
   RefreshCw,
@@ -61,6 +63,8 @@ type Finding = {
   category: string;
   title: string;
   detail: string;
+  recommendation?: string;
+  confidence?: number;
   evidence?: Array<{
     artifact_type: string;
     path: string;
@@ -166,8 +170,9 @@ export function App() {
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
-  const [runDuration, setRunDuration] = useState(10);
+  const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
+  const [fullVod, setFullVod] = useState(false);
 
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
   const filteredVods = useMemo(() => {
@@ -266,8 +271,8 @@ export function App() {
           vod_label: selectedVod.label,
           run_id: `ui_${compactTimestamp(new Date())}`,
           fps: runFps,
-          duration_seconds: runDuration,
           image_quality: 3,
+          duration_seconds: fullVod ? 0 : runDuration,
           force: true
         })
       });
@@ -349,7 +354,7 @@ export function App() {
 
       <section className="workspace">
         <header className="topbar">
-          <div>
+          <div className="topbar-copy">
             <p className="eyebrow">LOCAL MVP</p>
             <h1>{selectedVod?.title ?? "Valorant VOD Coach"}</h1>
           </div>
@@ -394,7 +399,7 @@ export function App() {
             <div className="vod-intel">
               <div className="intel-card">
                 <span>Rank</span>
-                <strong>{selectedVod?.rank ?? "select VOD"}</strong>
+                <strong>{selectedVod?.rank ?? "select"}</strong>
               </div>
               <div className="intel-card">
                 <span>Duration</span>
@@ -402,17 +407,19 @@ export function App() {
               </div>
               <div className="intel-card">
                 <span>Status</span>
-                <strong>{selectedVod?.local_status ?? "idle"}</strong>
+                <strong>{displayLocalStatus(selectedVod)}</strong>
               </div>
             </div>
 
             <div className="video-stage">
-              {selectedVod?.video_url ? (
+              {loading ? (
+                <div className="video-placeholder loading" />
+              ) : selectedVod?.video_url ? (
                 <video controls preload="metadata" src={apiURL(selectedVod.video_url)} />
               ) : (
                 <div className="video-placeholder">
                   <Video size={30} />
-                  <span>Local video unavailable</span>
+                  <span>{selectedVod ? "Not downloaded" : "Select VOD"}</span>
                 </div>
               )}
             </div>
@@ -420,7 +427,15 @@ export function App() {
             <div className="run-controls">
               <label>
                 <span>Sample seconds</span>
-                <input min={5} max={300} step={5} type="number" value={runDuration} onChange={(event) => setRunDuration(Number(event.target.value))} />
+                <input
+                  disabled={fullVod}
+                  min={30}
+                  max={600}
+                  step={30}
+                  type="number"
+                  value={runDuration}
+                  onChange={(event) => setRunDuration(Number(event.target.value))}
+                />
               </label>
               <label>
                 <span>FPS</span>
@@ -430,9 +445,13 @@ export function App() {
                   <option value="2">2</option>
                 </select>
               </label>
+              <label className="toggle-control">
+                <input checked={fullVod} onChange={(event) => setFullVod(event.target.checked)} type="checkbox" />
+                <span>Full VOD</span>
+              </label>
               <button className="run-button" disabled={!selectedVod || selectedVod.local_status !== "downloaded" || analyzing} onClick={() => void runAnalysis()} type="button">
                 <Play size={18} fill="currentColor" />
-                {analyzing ? "Analyzing" : "Run baseline"}
+                {analyzing ? "Analyzing" : "Run analysis"}
               </button>
             </div>
 
@@ -450,7 +469,8 @@ export function App() {
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">REPORT</p>
-                <h2>{report ? `Run ${report.run_id}` : loadingReport ? "Loading report" : "No report selected"}</h2>
+                <h2>{report ? "Coach findings" : loadingReport ? "Loading report" : "No report selected"}</h2>
+                {report && <small className="panel-subline">Run {report.run_id}</small>}
               </div>
               {report && (
                 <span className="success-chip">
@@ -488,8 +508,8 @@ export function App() {
               <>
                 <div className="report-stats">
                   <Metric icon={<Shield size={18} />} label="Media" value={formatResolution(report)} detail={report.media.frame_rate ?? "unknown"} compact />
-                  <Metric icon={<Swords size={18} />} label="Findings" value={String(report.findings.length)} detail="baseline" compact />
-                  <Metric icon={<Clock3 size={18} />} label="Coverage" value={`${Math.round(report.sample.duration_seconds ?? 0)}s`} detail={`${report.sample.fps} fps`} compact />
+                  <Metric icon={<Swords size={18} />} label="Findings" value={String(report.findings.length)} detail={report.metadata.analyzer} compact />
+                  <Metric icon={<Clock3 size={18} />} label="Coverage" value={coverageLabel(report)} detail={`${report.sample.fps} fps`} compact />
                 </div>
 
                 <div className="artifact-actions">
@@ -506,11 +526,32 @@ export function App() {
                 <div className="finding-list">
                   {report.findings.map((finding) => (
                     <article className={`finding severity-${finding.severity}`} key={finding.id}>
-                      <div>
-                        <span>{finding.severity}</span>
-                        <h3>{finding.title}</h3>
+                      <div className="finding-head">
+                        <div>
+                          <span>
+                            {finding.severity} / {finding.category}
+                          </span>
+                          <h3>{finding.title}</h3>
+                        </div>
+                        {finding.confidence ? <strong>{Math.round(finding.confidence * 100)}%</strong> : null}
                       </div>
                       <p>{finding.detail}</p>
+                      {finding.recommendation && (
+                        <div className="finding-recommendation">
+                          <Lightbulb size={15} />
+                          <p>{finding.recommendation}</p>
+                        </div>
+                      )}
+                      {finding.evidence?.length ? (
+                        <div className="evidence-links">
+                          {finding.evidence.map((evidence) => (
+                            <a href={artifactURL(evidence.path)} key={`${finding.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
+                              <Link2 size={13} />
+                              {evidenceLabel(evidence)}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -629,8 +670,32 @@ function formatResolution(report: Report) {
   return `${report.media.width}x${report.media.height}`;
 }
 
+function coverageLabel(report: Report) {
+  if (!report.sample.duration_seconds) {
+    return "full";
+  }
+  return `${Math.round(report.sample.duration_seconds)}s`;
+}
+
+function displayLocalStatus(vod: VODItem | null) {
+  if (!vod) {
+    return "idle";
+  }
+  if (vod.local_status === "downloaded") {
+    return "ready";
+  }
+  return vod.local_status;
+}
+
 function formatSeconds(seconds: number) {
   return `${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)}s`;
+}
+
+function evidenceLabel(evidence: NonNullable<Finding["evidence"]>[number]) {
+  if (evidence.frame_index) {
+    return `${evidence.artifact_type} #${evidence.frame_index}`;
+  }
+  return evidence.artifact_type;
 }
 
 function artifactURL(path: string) {

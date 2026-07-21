@@ -42,6 +42,8 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 	}
 	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
+		!strings.Contains(string(rawMarkdown), "Review the recommendation.") ||
+		!strings.Contains(string(rawMarkdown), "Confidence: 0.80") ||
 		!strings.Contains(string(rawMarkdown), "contact_sheet.jpg") {
 		t.Fatalf("unexpected markdown report:\n%s", string(rawMarkdown))
 	}
@@ -95,11 +97,13 @@ func sampleReport() domain.AnalysisReport {
 		},
 		Findings: []domain.Finding{
 			{
-				ID:       "baseline",
-				Severity: domain.FindingSeverityInfo,
-				Category: "test",
-				Title:    "Baseline finding",
-				Detail:   "A deterministic test finding.",
+				ID:             "baseline",
+				Severity:       domain.FindingSeverityInfo,
+				Category:       "test",
+				Title:          "Baseline finding",
+				Detail:         "A deterministic test finding.",
+				Recommendation: "Review the recommendation.",
+				Confidence:     0.8,
 			},
 		},
 	}
