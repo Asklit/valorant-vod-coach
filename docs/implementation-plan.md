@@ -227,7 +227,7 @@ Initial commands:
 - `vodctl dataset list`
 - `vodctl video probe --vod <label>`
 - `vodctl video sample --vod <label>`
-- `vodctl report generate --vod <label>`
+- `vodctl analyze run --vod <label>`
 
 ### Go API
 
@@ -354,6 +354,16 @@ Current status:
 - `vodctl dataset validate/list/status` exists.
 - `vodctl video probe --vod <label>` exists and writes `probe.ffprobe.json`.
 - `vodctl video sample --vod <label>` exists and writes sampled frames plus `frames.json`.
+- `vodctl analyze run --vod <label>` exists and runs the local MVP pipeline:
+  - manifest lookup;
+  - local video resolution;
+  - ffprobe metadata extraction;
+  - low-frequency frame sampling;
+  - deterministic baseline observations;
+  - JSON and Markdown report artifacts.
+- `internal/domain` contains the first analysis/report schema.
+- `internal/app` contains the first orchestration use case and ports.
+- `internal/adapters/report` writes local report artifacts.
 - Postgres-backed status is not implemented yet.
 
 ### Milestone 1.5: Media Benchmarks
@@ -371,6 +381,21 @@ Current status:
 - Implement simple outbox relay.
 - Publish first lifecycle events from dataset/probe commands.
 - Add a ClickHouse sink consumer for pipeline timing events.
+
+### Milestone 1.7: Local MVP Analysis Pipeline
+
+- Add app-layer orchestration for a single VOD analysis run.
+- Probe media metadata through the media adapter.
+- Extract a configurable low-frequency frame sample.
+- Generate a deterministic baseline report before using a VLM.
+- Save `report.json` and `report.md` under `data/processed/<vod_label>/reports/<run_id>/`.
+- Keep the analyzer behind a port so the Python Qwen/VLM service can replace or augment it.
+
+Current status:
+
+- Implemented in `vodctl analyze run`.
+- Smoke-tested on `diamond_crazies_01` with `--duration 10s --fps 1`.
+- Current report is intentionally baseline-only and marks AI gameplay analysis as not enabled.
 
 ### Milestone 2: Frame Extraction
 
@@ -437,8 +462,9 @@ Current status:
 ## Immediate Next Steps
 
 1. Manually check the Platinum item marked `search_metadata`.
-2. Add local Docker Compose infrastructure.
-3. Add Postgres migrations and typed DB access.
-4. Implement `vodctl dataset status` backed by Postgres.
-5. Add contact sheet generation for sampled frames.
-6. Add the first OpenTelemetry traces and structured logs.
+2. Add contact sheet generation for sampled frames so reports are easier to review manually.
+3. Add local Docker Compose infrastructure.
+4. Add Postgres migrations, typed DB access, and `outbox_events`.
+5. Persist VOD/assets/report metadata in PostgreSQL from the analysis pipeline.
+6. Publish the first `vod.probed`, `frames.extracted`, and `report.ready` events through the outbox-to-Kafka path.
+7. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run`.

@@ -25,6 +25,31 @@ Go API / Go workers / Python vision-service
 
 Detailed Mermaid diagrams are available in [system-diagrams.md](system-diagrams.md). The repository layout and testing policy are documented in [project-structure.md](project-structure.md) and [testing-strategy.md](testing-strategy.md).
 
+## Current Local MVP Slice
+
+The first implemented vertical slice is `vodctl analyze run`.
+
+```text
+vodctl analyze run
+  -> app.AnalysisRunner
+      -> dataset.LocalVODResolver
+      -> media.LocalProcessor
+          -> ffprobe
+          -> ffmpeg
+      -> app.BaselineObservationAnalyzer
+      -> report.LocalStore
+          -> report.json
+          -> report.md
+```
+
+This local command intentionally uses the same boundaries as the future service version:
+
+- dataset lookup is an adapter;
+- media probing and sampling are adapters;
+- report schema lives in `internal/domain`;
+- orchestration lives in `internal/app`;
+- AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can be added without changing the CLI contract.
+
 ## Language Boundaries
 
 - Go owns product logic, API, CLI, workers, media orchestration, database access, and report assembly.
@@ -81,6 +106,7 @@ internal/
   adapters/
     dataset/            # manifest parsing, local dataset metadata
     media/              # ffmpeg probing, frame extraction, clip slicing
+    report/             # local JSON/Markdown report writer
     postgres/           # Postgres repositories
     clickhouse/         # ClickHouse writers and analytical queries
     kafka/              # event publishing, consuming, outbox relay support
