@@ -98,6 +98,12 @@ Run a quick extraction benchmark on one VOD:
 ./scripts/benchmark_video.sh --rank diamond --limit 1 --sample-seconds 180 --fps 1
 ```
 
+The Go CLI can also extract a reusable artifact for one VOD:
+
+```sh
+go run ./cmd/vodctl video sample --vod diamond_crazies_01 --duration 60s --fps 1
+```
+
 Run a named benchmark so multiple commands append to the same result folder:
 
 ```sh

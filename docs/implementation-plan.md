@@ -350,6 +350,7 @@ Current status:
 - Go module exists.
 - `vodctl dataset validate/list/status` exists.
 - `vodctl video probe --vod <label>` exists and writes `probe.ffprobe.json`.
+- `vodctl video sample --vod <label>` exists and writes sampled frames plus `frames.json`.
 - Postgres-backed status is not implemented yet.
 
 ### Milestone 1.5: Media Benchmarks
@@ -436,5 +437,5 @@ Current status:
 2. Add local Docker Compose infrastructure.
 3. Add Postgres migrations and typed DB access.
 4. Implement `vodctl dataset status` backed by Postgres.
-5. Add frame extraction command and metadata schema.
+5. Add contact sheet generation for sampled frames.
 6. Add the first OpenTelemetry traces and structured logs.
