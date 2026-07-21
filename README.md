@@ -100,6 +100,7 @@ The downloader is intentionally not run automatically. Review `data/manifests/vo
 - [Implementation plan](docs/implementation-plan.md)
 - [Product and architecture decisions](docs/product-and-architecture-decisions.md)
 - [Kafka event streaming](docs/kafka-event-streaming.md)
+- [Git workflow](docs/git-workflow.md)
 - [Benchmarks](docs/benchmarks.md)
 
 ## Benchmarks
