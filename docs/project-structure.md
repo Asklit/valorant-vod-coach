@@ -51,6 +51,7 @@ Rules:
 ```text
 cmd/
   vodctl/                         # CLI entrypoint for local operations
+  vod-web/                        # local Go HTTP API and optional static UI server
 
 internal/
   domain/                         # pure product concepts: VOD, media summary, findings, reports
@@ -59,6 +60,7 @@ internal/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling
     report/                       # local JSON/Markdown report persistence
+    webapi/                       # local HTTP API for React UI
   platform/                       # config/logging/observability/runtime helpers
 
 scripts/
@@ -73,6 +75,8 @@ data/
   processed/                      # ignored generated artifacts
 tests/
   integration/                    # integration/e2e tests that need real services or tools
+web/
+  app/                            # React/TypeScript/Vite MVP UI
 ```
 
 ## Target Layout

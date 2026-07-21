@@ -50,6 +50,18 @@ This local command intentionally uses the same boundaries as the future service 
 - orchestration lives in `internal/app`;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can be added without changing the CLI contract.
 
+The first UI slice is `web/app` plus `cmd/vod-web`.
+
+```text
+React/Vite UI
+  -> Go vod-web API
+      -> dataset manifest and local video inventory
+      -> app.AnalysisRunner
+      -> data/processed reports and frame artifacts
+```
+
+In development, Vite proxies `/api` and `/artifacts` to `vod-web`. For a production-style local run, `vod-web` can serve the built `web/app/dist` directory directly.
+
 ## Language Boundaries
 
 - Go owns product logic, API, CLI, workers, media orchestration, database access, and report assembly.
@@ -96,6 +108,7 @@ The Go code follows a modular monolith with ports/adapters boundaries. See [proj
 ```text
 cmd/
   vodctl/               # Go CLI
+  vod-web/              # local Go HTTP API and optional static UI server
   vod-api/              # Go HTTP API
   vod-worker/           # Go Temporal worker
   vod-outbox-relay/     # Go PostgreSQL outbox to Kafka relay
@@ -107,6 +120,7 @@ internal/
     dataset/            # manifest parsing, local dataset metadata
     media/              # ffmpeg probing, frame extraction, clip slicing
     report/             # local JSON/Markdown report writer
+    webapi/             # local HTTP API for the React UI
     postgres/           # Postgres repositories
     clickhouse/         # ClickHouse writers and analytical queries
     kafka/              # event publishing, consuming, outbox relay support

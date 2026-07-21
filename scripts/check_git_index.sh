@@ -4,7 +4,7 @@ set -euo pipefail
 max_bytes="${MAX_GIT_FILE_BYTES:-52428800}"
 
 blocked_path_re='(^data/raw/|^data/processed/|^data/cache/|^bin/|^\.cache/)'
-blocked_ext_re='\.(mp4|mkv|webm|mov|avi|flv|ts|part|ytdl|tmp)$'
+blocked_ext_re='\.(mp4|mkv|webm|mov|avi|flv|part|ytdl|tmp)$'
 
 fail=0
 
@@ -51,4 +51,3 @@ MSG
 fi
 
 echo "git index ok"
-
