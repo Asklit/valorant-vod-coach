@@ -217,6 +217,7 @@ The UI can:
 - filter by rank and search text;
 - show downloaded/report-ready status;
 - run the local baseline analysis pipeline;
+- switch between generated report runs for a selected VOD;
 - render findings, timeline events, media stats, and sampled frame evidence.
 
 Production-style local serving:

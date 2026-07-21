@@ -60,7 +60,7 @@ React/Vite UI
       -> data/processed reports and frame artifacts
 ```
 
-In development, Vite proxies `/api` and `/artifacts` to `vod-web`. For a production-style local run, `vod-web` can serve the built `web/app/dist` directory directly.
+In development, Vite runs on `127.0.0.1:5173` and calls `vod-web` on `127.0.0.1:8080` with local CORS enabled. For a production-style local run, `vod-web` can serve the built `web/app/dist` directory directly.
 
 ## Language Boundaries
 
