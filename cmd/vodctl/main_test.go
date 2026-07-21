@@ -157,3 +157,25 @@ printf fake > "$dir/frame_000002.jpg"
 		t.Fatalf("unexpected frames manifest:\n%s", got)
 	}
 }
+
+func TestFlagHelpReturnsSuccess(t *testing.T) {
+	tests := [][]string{
+		{"dataset", "validate", "--help"},
+		{"dataset", "list", "--help"},
+		{"dataset", "status", "--help"},
+		{"video", "probe", "--help"},
+		{"video", "sample", "--help"},
+	}
+
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			code := run(args, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
