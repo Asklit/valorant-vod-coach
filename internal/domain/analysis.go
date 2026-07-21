@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 4
+const AnalysisReportSchemaVersion = 5
 
 type Rank string
 
@@ -96,12 +96,14 @@ type GameplaySummary struct {
 	AnalyzedFrames       int                `json:"analyzed_frames"`
 	SkippedFrames        int                `json:"skipped_frames,omitempty"`
 	ReviewWindowCount    int                `json:"review_window_count"`
+	RoundSegmentCount    int                `json:"round_segment_count,omitempty"`
 	AverageMotionScore   float64            `json:"average_motion_score,omitempty"`
 	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
 	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
 	PeakCombatScore      float64            `json:"peak_combat_score,omitempty"`
 	Coach                *CoachSummary      `json:"coach,omitempty"`
 	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
+	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
 	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
 	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
 	Notes                []string           `json:"notes,omitempty"`
@@ -153,6 +155,18 @@ type FrameObservation struct {
 	Phase            string  `json:"phase"`
 }
 
+type RoundSegment struct {
+	RoundNumber     int         `json:"round_number"`
+	StartSeconds    float64     `json:"start_seconds"`
+	EndSeconds      float64     `json:"end_seconds"`
+	DurationSeconds float64     `json:"duration_seconds"`
+	DetectionMethod string      `json:"detection_method"`
+	Confidence      float64     `json:"confidence"`
+	PhaseProfile    []PhaseStat `json:"phase_profile,omitempty"`
+	ReviewWindowIDs []string    `json:"review_window_ids,omitempty"`
+	Summary         string      `json:"summary,omitempty"`
+}
+
 type ReviewWindow struct {
 	ID                  string          `json:"id"`
 	Kind                string          `json:"kind"`
@@ -163,6 +177,7 @@ type ReviewWindow struct {
 	StartSeconds        float64         `json:"start_seconds"`
 	EndSeconds          float64         `json:"end_seconds"`
 	PeakSeconds         float64         `json:"peak_seconds"`
+	RoundNumber         int             `json:"round_number,omitempty"`
 	Score               float64         `json:"score"`
 	ClipPath            string          `json:"clip_path,omitempty"`
 	ClipDurationSeconds float64         `json:"clip_duration_seconds,omitempty"`

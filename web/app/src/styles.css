@@ -719,7 +719,7 @@ button {
 
 .report-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .report-history {
@@ -976,6 +976,65 @@ button {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--red), var(--cyan));
+}
+
+.round-segments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.round-segment {
+  display: grid;
+  gap: 8px;
+  min-height: 136px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.round-segment > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.round-segment span,
+.round-segment small,
+.round-segment em {
+  color: var(--cyan);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.round-segment strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.round-segment p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.38;
+}
+
+.round-segment small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.round-segment em {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--green);
 }
 
 .window-filter {
@@ -1512,6 +1571,7 @@ button {
   .focus-grid,
   .practice-list,
   .signal-grid,
+  .round-segments,
   .pipeline-track,
   .frame-grid {
     grid-template-columns: 1fr;

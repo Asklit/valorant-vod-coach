@@ -111,6 +111,7 @@ type ReviewWindow = {
   start_seconds: number;
   end_seconds: number;
   peak_seconds: number;
+  round_number?: number;
   score: number;
   clip_path?: string;
   clip_duration_seconds?: number;
@@ -142,6 +143,18 @@ type PhaseStat = {
   ratio: number;
 };
 
+type RoundSegment = {
+  round_number: number;
+  start_seconds: number;
+  end_seconds: number;
+  duration_seconds: number;
+  detection_method: string;
+  confidence: number;
+  phase_profile?: PhaseStat[];
+  review_window_ids?: string[];
+  summary?: string;
+};
+
 type CoachSummary = {
   verdict: string;
   confidence: number;
@@ -156,12 +169,14 @@ type GameplaySummary = {
   analyzed_frames: number;
   skipped_frames?: number;
   review_window_count: number;
+  round_segment_count?: number;
   average_motion_score?: number;
   average_minimap_signal?: number;
   average_hud_signal?: number;
   peak_combat_score?: number;
   coach?: CoachSummary;
   phase_profile?: PhaseStat[];
+  round_segments?: RoundSegment[];
   frame_observations?: FrameObservation[];
   review_windows?: ReviewWindow[];
   notes?: string[];
@@ -243,6 +258,7 @@ type ReportSummary = {
   finding_count: number;
   frame_count: number;
   review_window_count: number;
+  round_segment_count: number;
   analyzer?: string;
   sample_name: string;
   sample_fps: string;
@@ -456,10 +472,11 @@ export function App() {
   const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
   const reviewWindows = report?.gameplay?.review_windows ?? [];
+  const roundSegments = report?.gameplay?.round_segments ?? [];
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 4 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 5 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -689,7 +706,7 @@ export function App() {
                     >
                       <span>{item.run_id}</span>
                       <small>
-                        {item.frame_count} frames / {item.review_window_count} windows / {item.finding_count} findings
+                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.finding_count} findings
                       </small>
                       <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
                     </button>
@@ -703,6 +720,7 @@ export function App() {
                 <div className="report-stats">
                   <Metric icon={<Shield size={18} />} label="Media" value={formatResolution(report)} detail={report.media.frame_rate ?? "unknown"} compact />
                   <Metric icon={<Swords size={18} />} label="Windows" value={String(report.gameplay?.review_window_count ?? 0)} detail={report.metadata.analyzer} compact />
+                  <Metric icon={<Timer size={18} />} label="Rounds" value={String(report.gameplay?.round_segment_count ?? 0)} detail="estimated" compact />
                   <Metric icon={<Clock3 size={18} />} label="Coverage" value={coverageLabel(report)} detail={`${report.sample.fps} fps`} compact />
                 </div>
 
@@ -776,6 +794,24 @@ export function App() {
                       </div>
                     ) : null}
 
+                    {roundSegments.length ? (
+                      <div className="round-segments">
+                        {roundSegments.map((segment) => (
+                          <article className="round-segment" key={segment.round_number}>
+                            <div>
+                              <span>R{segment.round_number}</span>
+                              <strong>{roundRange(segment)}</strong>
+                            </div>
+                            <p>{segment.summary || "Estimated visual timeline segment."}</p>
+                            <small>
+                              {Math.round(clamp01(segment.confidence) * 100)}% / {segment.detection_method.replaceAll("_", " ")}
+                            </small>
+                            {segment.review_window_ids?.length ? <em>{segment.review_window_ids.join(" / ")}</em> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+
                     {report.gameplay.coach?.practice_plan?.length ? (
                       <div className="practice-list">
                         {report.gameplay.coach.practice_plan.map((task) => (
@@ -804,6 +840,7 @@ export function App() {
                           <div className="review-window-head">
                             <div>
                               <span>
+                                {window.round_number ? `R${window.round_number} / ` : ""}
                                 {window.kind.replaceAll("_", " ")} / {windowRange(window)}
                               </span>
                               <h3>{window.title}</h3>
@@ -1057,6 +1094,10 @@ function formatSeconds(seconds: number) {
 
 function windowRange(window: ReviewWindow) {
   return `${formatSeconds(window.start_seconds)}-${formatSeconds(window.end_seconds)}`;
+}
+
+function roundRange(segment: RoundSegment) {
+  return `${formatSeconds(segment.start_seconds)}-${formatSeconds(segment.end_seconds)}`;
 }
 
 function evidenceRangeLabel(start: number, count: number, total: number) {

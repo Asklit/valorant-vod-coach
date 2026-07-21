@@ -42,6 +42,7 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 	}
 	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") ||
 		!strings.Contains(string(rawMarkdown), "## Gameplay Review") ||
+		!strings.Contains(string(rawMarkdown), "Estimated Round Segments") ||
 		!strings.Contains(string(rawMarkdown), "High-impact fight window") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
 		!strings.Contains(string(rawMarkdown), "Review the recommendation.") ||
@@ -106,6 +107,19 @@ func sampleReport() domain.AnalysisReport {
 			AverageMinimapSignal: 0.32,
 			AverageHUDSignal:     0.21,
 			PeakCombatScore:      0.66,
+			RoundSegmentCount:    1,
+			RoundSegments: []domain.RoundSegment{
+				{
+					RoundNumber:     1,
+					StartSeconds:    0,
+					EndSeconds:      120,
+					DurationSeconds: 120,
+					DetectionMethod: "estimated_from_visual_timeline",
+					Confidence:      0.62,
+					ReviewWindowIDs: []string{"combatspike_001"},
+					Summary:         "Estimated round segment.",
+				},
+			},
 			ReviewWindows: []domain.ReviewWindow{
 				{
 					ID:             "combatspike_001",
@@ -117,6 +131,7 @@ func sampleReport() domain.AnalysisReport {
 					StartSeconds:   8,
 					EndSeconds:     24,
 					PeakSeconds:    16,
+					RoundNumber:    1,
 					Score:          0.66,
 					Evidence: []domain.EvidenceRef{
 						{ArtifactType: "frame", Path: "frames/frame_000016.jpg", TimestampSeconds: 16, FrameIndex: 16},

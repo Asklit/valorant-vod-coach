@@ -39,6 +39,7 @@ vodctl analyze run
           -> ffmpeg contact sheet generation
       -> vision.LocalGameplayAnalyzer
           -> visual frame signal extraction
+          -> estimated round segment generation
           -> gameplay review window selection
           -> coach summary, focus areas, phase profile, practice plan
           -> gameplay_review.json
@@ -57,7 +58,8 @@ This local command intentionally uses the same boundaries as the future service 
 - contact sheet generation and review clip extraction are part of the media adapter and become UI evidence artifacts;
 - report schema lives in `internal/domain`;
 - orchestration lives in `internal/app`;
-- the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
+- the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, builds estimated round segments, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
+- round segments use `detection_method=estimated_from_visual_timeline`; they are useful for navigation and grouping, but OCR-confirmed timer/score boundaries remain the next detection stage;
 - selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can replace or enrich this analyzer without changing the CLI/API/UI report contract.
 
