@@ -93,6 +93,7 @@ type ReportListResponse struct {
 }
 
 type ReportSummary struct {
+	SchemaVersion     int       `json:"schema_version"`
 	RunID             string    `json:"run_id"`
 	Status            string    `json:"status"`
 	GeneratedAt       time.Time `json:"generated_at"`
@@ -175,7 +176,11 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"schema_version": domain.AnalysisReportSchemaVersion,
+		"analyzer":       "visual-heuristic-gameplay",
+	})
 }
 
 func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
@@ -451,6 +456,7 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 			Path:        path,
 			GeneratedAt: report.GeneratedAt,
 			Summary: ReportSummary{
+				SchemaVersion:     report.SchemaVersion,
 				RunID:             report.RunID,
 				Status:            report.Status,
 				GeneratedAt:       report.GeneratedAt,

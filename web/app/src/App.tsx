@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   Crosshair,
@@ -125,6 +126,7 @@ type GameplaySummary = {
 };
 
 type Report = {
+  schema_version: number;
   run_id: string;
   status: string;
   generated_at: string;
@@ -183,6 +185,7 @@ type AnalyzeResponse = {
 };
 
 type ReportSummary = {
+  schema_version: number;
   run_id: string;
   status: string;
   generated_at: string;
@@ -204,6 +207,7 @@ type ReportListResponse = {
 };
 
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
+const evidencePageSize = 24;
 
 export function App() {
   const [vods, setVods] = useState<VODItem[]>([]);
@@ -220,6 +224,7 @@ export function App() {
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
+  const [evidencePage, setEvidencePage] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
@@ -242,8 +247,12 @@ export function App() {
       setReportHistory([]);
       return;
     }
-    void loadReports(selectedLabel);
+    void loadReports(selectedLabel, { preferGameplay: true });
   }, [selectedLabel]);
+
+  useEffect(() => {
+    setEvidencePage(0);
+  }, [report?.run_id]);
 
   async function loadVods() {
     setLoading(true);
@@ -264,7 +273,7 @@ export function App() {
     }
   }
 
-  async function loadReports(label: string) {
+  async function loadReports(label: string, options: { preferredRunID?: string; preferGameplay?: boolean } = {}) {
     setLoadingReport(true);
     setError("");
     try {
@@ -278,7 +287,11 @@ export function App() {
         setReport(null);
         return;
       }
-      await loadReport(label, payload.reports[0].run_id);
+      const preferredReport =
+        payload.reports.find((item) => item.run_id === options.preferredRunID) ??
+        (options.preferGameplay ? payload.reports.find((item) => item.review_window_count > 0 || item.analyzer === "visual-heuristic-gameplay") : undefined) ??
+        payload.reports[0];
+      await loadReport(label, preferredReport.run_id);
     } catch (err) {
       setError(messageFromError(err));
       setReport(null);
@@ -328,10 +341,11 @@ export function App() {
         throw new Error(await readError(response));
       }
       const payload = (await response.json()) as AnalyzeResponse;
+      const analyzedLabel = selectedVod.label;
       setReport(payload.report);
       await loadVods();
-      await loadReports(selectedVod.label);
-      setSelectedLabel(selectedVod.label);
+      await loadReports(analyzedLabel, { preferredRunID: payload.report.run_id });
+      setSelectedLabel(analyzedLabel);
     } catch (err) {
       setError(messageFromError(err));
     } finally {
@@ -339,10 +353,15 @@ export function App() {
     }
   }
 
-  const sampleFrames = report?.sample.frames?.slice(0, 12) ?? [];
+  const allSampleFrames = report?.sample.frames ?? [];
+  const evidencePageCount = Math.max(1, Math.ceil(allSampleFrames.length / evidencePageSize));
+  const safeEvidencePage = Math.min(evidencePage, evidencePageCount - 1);
+  const evidenceStart = safeEvidencePage * evidencePageSize;
+  const evidenceFrames = allSampleFrames.slice(evidenceStart, evidenceStart + evidencePageSize);
   const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
   const reviewWindows = report?.gameplay?.review_windows ?? [];
+  const reportHasGameplay = report ? hasGameplayReview(report) : false;
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -509,7 +528,7 @@ export function App() {
               </label>
               <button className="run-button" disabled={!selectedVod || selectedVod.local_status !== "downloaded" || analyzing} onClick={() => void runAnalysis()} type="button">
                 <Play size={18} fill="currentColor" />
-                {analyzing ? "Analyzing" : "Run analysis"}
+                {analyzing ? "Analyzing" : fullVod ? "Run full VOD" : "Run analysis"}
               </button>
             </div>
 
@@ -527,7 +546,7 @@ export function App() {
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">REPORT</p>
-                <h2>{report ? "Coach findings" : loadingReport ? "Loading report" : "No report selected"}</h2>
+                <h2>{report ? (reportHasGameplay ? "Gameplay review" : "Legacy report") : loadingReport ? "Loading report" : "No report selected"}</h2>
                 {report && <small className="panel-subline">Run {report.run_id}</small>}
               </div>
               {report && (
@@ -556,6 +575,7 @@ export function App() {
                       <small>
                         {item.frame_count} frames / {item.review_window_count} windows / {item.finding_count} findings
                       </small>
+                      <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
                     </button>
                   ))}
                 </div>
@@ -569,6 +589,16 @@ export function App() {
                   <Metric icon={<Swords size={18} />} label="Windows" value={String(report.gameplay?.review_window_count ?? 0)} detail={report.metadata.analyzer} compact />
                   <Metric icon={<Clock3 size={18} />} label="Coverage" value={coverageLabel(report)} detail={`${report.sample.fps} fps`} compact />
                 </div>
+
+                {!reportHasGameplay && (
+                  <div className="compat-banner">
+                    <AlertTriangle size={17} />
+                    <div>
+                      <strong>Legacy baseline report</strong>
+                      <span>schema {report.schema_version || 1} / {report.metadata.analyzer || "unknown analyzer"}</span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="artifact-actions">
                   <a href={artifactURL(reportPath(reportHistory, report.run_id, "json"))} target="_blank" rel="noreferrer">
@@ -699,7 +729,25 @@ export function App() {
                 <p className="eyebrow">EVIDENCE</p>
                 <h2>Sample frames</h2>
               </div>
-              <ChevronRight size={19} />
+              <div className="evidence-controls">
+                <button
+                  disabled={safeEvidencePage === 0 || allSampleFrames.length === 0}
+                  onClick={() => setEvidencePage((page) => Math.max(0, page - 1))}
+                  title="Previous frames"
+                  type="button"
+                >
+                  <ChevronLeft size={17} />
+                </button>
+                <span>{evidenceRangeLabel(evidenceStart, evidenceFrames.length, allSampleFrames.length)}</span>
+                <button
+                  disabled={safeEvidencePage >= evidencePageCount - 1 || allSampleFrames.length === 0}
+                  onClick={() => setEvidencePage((page) => Math.min(evidencePageCount - 1, page + 1))}
+                  title="Next frames"
+                  type="button"
+                >
+                  <ChevronRight size={17} />
+                </button>
+              </div>
             </div>
             <div className="frame-grid">
               {contactSheetPath && (
@@ -708,13 +756,13 @@ export function App() {
                   <figcaption>contact sheet</figcaption>
                 </figure>
               )}
-              {sampleFrames.map((frame) => (
+              {evidenceFrames.map((frame) => (
                 <figure className="frame-tile" key={frame.path}>
                   <img src={artifactURL(frame.path)} alt={`Frame ${frame.index}`} loading="lazy" />
-                  <figcaption>{formatSeconds(frame.timestamp_seconds)}</figcaption>
+                  <figcaption>#{frame.index} / {formatSeconds(frame.timestamp_seconds)}</figcaption>
                 </figure>
               ))}
-              {!sampleFrames.length && !contactSheetPath && <div className="muted-line">No frames loaded.</div>}
+              {!evidenceFrames.length && !contactSheetPath && <div className="muted-line">No frames loaded.</div>}
             </div>
           </section>
         </div>
@@ -795,6 +843,10 @@ function coverageLabel(report: Report) {
   return `${Math.round(report.sample.duration_seconds)}s`;
 }
 
+function hasGameplayReview(report: Report) {
+  return Boolean(report.gameplay && report.metadata.analyzer === "visual-heuristic-gameplay");
+}
+
 function displayLocalStatus(vod: VODItem | null) {
   if (!vod) {
     return "idle";
@@ -811,6 +863,13 @@ function formatSeconds(seconds: number) {
 
 function windowRange(window: ReviewWindow) {
   return `${formatSeconds(window.start_seconds)}-${formatSeconds(window.end_seconds)}`;
+}
+
+function evidenceRangeLabel(start: number, count: number, total: number) {
+  if (total === 0) {
+    return "0 / 0";
+  }
+  return `${start + 1}-${start + count} / ${total}`;
 }
 
 function clamp01(value: number) {

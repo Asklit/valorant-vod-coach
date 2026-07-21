@@ -742,6 +742,44 @@ button {
   text-transform: uppercase;
 }
 
+.compat-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 200, 87, 0.28);
+  border-radius: var(--radius);
+  background: rgba(255, 200, 87, 0.065);
+  color: var(--amber);
+}
+
+.compat-banner svg {
+  flex: 0 0 auto;
+}
+
+.compat-banner div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.compat-banner strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 920;
+  text-transform: uppercase;
+}
+
+.compat-banner span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .artifact-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1042,6 +1080,40 @@ button {
 
 .timeline-event strong {
   font-size: 14px;
+}
+
+.evidence-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.evidence-controls button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(40, 215, 255, 0.36);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.08);
+  color: var(--text);
+}
+
+.evidence-controls button:disabled {
+  cursor: not-allowed;
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--subtle);
+}
+
+.evidence-controls span {
+  min-width: 92px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
 }
 
 .frame-grid {

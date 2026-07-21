@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -185,6 +186,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 		report.Artifacts = append(report.Artifacts, sample.ContactSheetArtifact)
 	}
 	report.Artifacts = append(report.Artifacts, observations.Artifacts...)
+	sortTimeline(report.Timeline)
 	if observations.Metadata.Analyzer != "" {
 		report.Metadata = observations.Metadata
 	}
@@ -361,9 +363,9 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 			Detail:           request.Sample.ContactSheetPath,
 		})
 	}
-	if request.Sample.DurationSeconds > 0 {
+	if endSeconds, ok := sampleEndSeconds(request); ok {
 		timeline = append(timeline, domain.TimelineEvent{
-			TimestampSeconds: request.Sample.StartSeconds + request.Sample.DurationSeconds,
+			TimestampSeconds: endSeconds,
 			Type:             "sample_finished",
 			Title:            "Frame sampling finished",
 		})
@@ -377,4 +379,44 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 			Mode:     "local",
 		},
 	}, nil
+}
+
+func sampleEndSeconds(request ObservationRequest) (float64, bool) {
+	if request.Sample.DurationSeconds > 0 {
+		return request.Sample.StartSeconds + request.Sample.DurationSeconds, true
+	}
+	if len(request.Sample.Frames) > 0 {
+		return request.Sample.Frames[len(request.Sample.Frames)-1].TimestampSeconds, true
+	}
+	if request.Media.HasDuration && request.Media.DurationSeconds > 0 {
+		return request.Media.DurationSeconds, true
+	}
+	return 0, false
+}
+
+func sortTimeline(events []domain.TimelineEvent) {
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].TimestampSeconds == events[j].TimestampSeconds {
+			leftPriority := timelinePriority(events[i].Type)
+			rightPriority := timelinePriority(events[j].Type)
+			if leftPriority != rightPriority {
+				return leftPriority < rightPriority
+			}
+			return events[i].Type < events[j].Type
+		}
+		return events[i].TimestampSeconds < events[j].TimestampSeconds
+	})
+}
+
+func timelinePriority(eventType string) int {
+	switch eventType {
+	case "sample_started":
+		return 0
+	case "contact_sheet_ready":
+		return 1
+	case "sample_finished":
+		return 9
+	default:
+		return 5
+	}
 }

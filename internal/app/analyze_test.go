@@ -72,6 +72,28 @@ func TestAnalysisRunnerRequiresPorts(t *testing.T) {
 	}
 }
 
+func TestBaselineAnalyzerEndsFullSampleAtLastFrame(t *testing.T) {
+	result, err := BaselineObservationAnalyzer{}.AnalyzeObservations(context.Background(), ObservationRequest{
+		Media: domain.MediaSummary{DurationSeconds: 120, HasDuration: true},
+		Sample: domain.FrameSampleSummary{
+			StartSeconds: 0,
+			FrameCount:   3,
+			Frames: []domain.Frame{
+				{Index: 1, TimestampSeconds: 0, Path: "/tmp/frame_000001.jpg"},
+				{Index: 2, TimestampSeconds: 1, Path: "/tmp/frame_000002.jpg"},
+				{Index: 3, TimestampSeconds: 119, Path: "/tmp/frame_000003.jpg"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analyze observations: %v", err)
+	}
+
+	if got := timelineTimestamp(result.Timeline, "sample_finished"); got != 119 {
+		t.Fatalf("expected full sample to finish at last frame timestamp, got %.3f", got)
+	}
+}
+
 type fakeResolver struct{}
 
 func (fakeResolver) ResolveVOD(context.Context, string) (domain.VOD, string, error) {
@@ -145,4 +167,13 @@ func hasFinding(findings []domain.Finding, id string) bool {
 		}
 	}
 	return false
+}
+
+func timelineTimestamp(events []domain.TimelineEvent, eventType string) float64 {
+	for _, event := range events {
+		if event.Type == eventType {
+			return event.TimestampSeconds
+		}
+	}
+	return -1
 }
