@@ -271,7 +271,8 @@ esac
 
 	if got := stdout.String(); !strings.Contains(got, "diamond_example") ||
 		!strings.Contains(got, "test_run") ||
-		!strings.Contains(got, "WINDOWS") {
+		!strings.Contains(got, "WINDOWS") ||
+		!strings.Contains(got, "CLIPS") {
 		t.Fatalf("unexpected stdout:\n%s", got)
 	}
 

@@ -112,6 +112,8 @@ type ReviewWindow = {
   end_seconds: number;
   peak_seconds: number;
   score: number;
+  clip_path?: string;
+  clip_duration_seconds?: number;
   evidence?: Finding["evidence"];
   tags?: string[];
 };
@@ -457,7 +459,7 @@ export function App() {
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 3 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 4 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -806,10 +808,18 @@ export function App() {
                               </span>
                               <h3>{window.title}</h3>
                             </div>
-                            <button className="seek-button" onClick={() => seekVideo(window.peak_seconds)} type="button" title="Jump to peak">
-                              <Play size={14} fill="currentColor" />
-                              {formatSeconds(window.peak_seconds)}
-                            </button>
+                            <div className="window-actions">
+                              {window.clip_path ? (
+                                <a className="clip-button" href={artifactURL(window.clip_path)} target="_blank" rel="noreferrer" title="Open review clip">
+                                  <Video size={14} />
+                                  {window.clip_duration_seconds ? formatSeconds(window.clip_duration_seconds) : "Clip"}
+                                </a>
+                              ) : null}
+                              <button className="seek-button" onClick={() => seekVideo(window.peak_seconds)} type="button" title="Jump to peak">
+                                <Play size={14} fill="currentColor" />
+                                {formatSeconds(window.peak_seconds)}
+                              </button>
+                            </div>
                           </div>
                           <p>{window.summary}</p>
                           <div className="finding-recommendation">

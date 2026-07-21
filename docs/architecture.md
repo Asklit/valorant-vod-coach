@@ -42,6 +42,9 @@ vodctl analyze run
           -> gameplay review window selection
           -> coach summary, focus areas, phase profile, practice plan
           -> gameplay_review.json
+      -> media.LocalProcessor
+          -> ffmpeg review clip extraction
+          -> review_clips.json
       -> report.LocalStore
           -> report.json
           -> report.md
@@ -51,10 +54,11 @@ This local command intentionally uses the same boundaries as the future service 
 
 - dataset lookup is an adapter;
 - media probing and sampling are adapters;
-- contact sheet generation is part of the media adapter and becomes a first UI evidence artifact;
+- contact sheet generation and review clip extraction are part of the media adapter and become UI evidence artifacts;
 - report schema lives in `internal/domain`;
 - orchestration lives in `internal/app`;
 - the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
+- selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can replace or enrich this analyzer without changing the CLI/API/UI report contract.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.

@@ -72,6 +72,44 @@ func TestAnalysisRunnerRequiresPorts(t *testing.T) {
 	}
 }
 
+func TestAnalysisRunnerAttachesReviewClips(t *testing.T) {
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeClipMediaProcessor{},
+		Analyzer: fakeGameplayAnalyzer{},
+		Reports:  &fakeReportStore{},
+		Clock: func() time.Time {
+			return time.Date(2026, 7, 21, 12, 45, 0, 0, time.UTC)
+		},
+	}
+
+	result, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "clip_contract",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+	})
+	if err != nil {
+		t.Fatalf("run analysis: %v", err)
+	}
+
+	if result.Report.Gameplay == nil || len(result.Report.Gameplay.ReviewWindows) != 1 {
+		t.Fatalf("expected gameplay review window, got %+v", result.Report.Gameplay)
+	}
+	window := result.Report.Gameplay.ReviewWindows[0]
+	if window.ClipPath != "/tmp/clips/review_01.mp4" {
+		t.Fatalf("expected clip path on review window, got %q", window.ClipPath)
+	}
+	if window.ClipDurationSeconds != 12 {
+		t.Fatalf("expected clip duration, got %.3f", window.ClipDurationSeconds)
+	}
+	if !hasArtifact(result.Report.Artifacts, "review_clip") {
+		t.Fatalf("expected review clip artifact: %+v", result.Report.Artifacts)
+	}
+}
+
 func TestBaselineAnalyzerEndsFullSampleAtLastFrame(t *testing.T) {
 	result, err := BaselineObservationAnalyzer{}.AnalyzeObservations(context.Background(), ObservationRequest{
 		Media: domain.MediaSummary{DurationSeconds: 120, HasDuration: true},
@@ -148,6 +186,55 @@ func (fakeMediaProcessor) SampleFrames(_ context.Context, _ domain.VOD, _ string
 	}, nil
 }
 
+type fakeClipMediaProcessor struct {
+	fakeMediaProcessor
+}
+
+func (fakeClipMediaProcessor) ExtractReviewClips(_ context.Context, _ domain.VOD, _ string, request ReviewClipRequest) (ReviewClipResult, error) {
+	windows := append([]domain.ReviewWindow{}, request.Windows...)
+	for index := range windows {
+		windows[index].ClipPath = "/tmp/clips/review_01.mp4"
+		windows[index].ClipDurationSeconds = 12
+	}
+	return ReviewClipResult{
+		Windows: windows,
+		Artifacts: []domain.Artifact{
+			{Type: "review_clip", Format: "mp4", Path: "/tmp/clips/review_01.mp4"},
+		},
+	}, nil
+}
+
+type fakeGameplayAnalyzer struct{}
+
+func (fakeGameplayAnalyzer) AnalyzeObservations(context.Context, ObservationRequest) (ObservationResult, error) {
+	return ObservationResult{
+		Gameplay: &domain.GameplaySummary{
+			Analyzer:          "fake-gameplay",
+			SampledFrames:     1,
+			AnalyzedFrames:    1,
+			ReviewWindowCount: 1,
+			ReviewWindows: []domain.ReviewWindow{
+				{
+					ID:             "review_01",
+					Kind:           "combat_spike",
+					Severity:       domain.FindingSeverityMedium,
+					Title:          "Review this duel",
+					Summary:        "A concentrated combat moment needs manual review.",
+					Recommendation: "Pause before the swing and inspect crosshair placement.",
+					StartSeconds:   10,
+					EndSeconds:     22,
+					PeakSeconds:    16,
+					Score:          0.82,
+				},
+			},
+		},
+		Metadata: domain.AnalysisRunMetadata{
+			Analyzer: "fake-gameplay",
+			Mode:     "local-test",
+		},
+	}, nil
+}
+
 type fakeReportStore struct {
 	last domain.AnalysisReport
 }
@@ -163,6 +250,15 @@ func (s *fakeReportStore) SaveReport(_ context.Context, report domain.AnalysisRe
 func hasFinding(findings []domain.Finding, id string) bool {
 	for _, finding := range findings {
 		if finding.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArtifact(artifacts []domain.Artifact, artifactType string) bool {
+	for _, artifact := range artifacts {
+		if artifact.Type == artifactType {
 			return true
 		}
 	}

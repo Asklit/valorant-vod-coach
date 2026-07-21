@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 3
+const AnalysisReportSchemaVersion = 4
 
 type Rank string
 
@@ -154,18 +154,20 @@ type FrameObservation struct {
 }
 
 type ReviewWindow struct {
-	ID             string          `json:"id"`
-	Kind           string          `json:"kind"`
-	Severity       FindingSeverity `json:"severity"`
-	Title          string          `json:"title"`
-	Summary        string          `json:"summary"`
-	Recommendation string          `json:"recommendation"`
-	StartSeconds   float64         `json:"start_seconds"`
-	EndSeconds     float64         `json:"end_seconds"`
-	PeakSeconds    float64         `json:"peak_seconds"`
-	Score          float64         `json:"score"`
-	Evidence       []EvidenceRef   `json:"evidence,omitempty"`
-	Tags           []string        `json:"tags,omitempty"`
+	ID                  string          `json:"id"`
+	Kind                string          `json:"kind"`
+	Severity            FindingSeverity `json:"severity"`
+	Title               string          `json:"title"`
+	Summary             string          `json:"summary"`
+	Recommendation      string          `json:"recommendation"`
+	StartSeconds        float64         `json:"start_seconds"`
+	EndSeconds          float64         `json:"end_seconds"`
+	PeakSeconds         float64         `json:"peak_seconds"`
+	Score               float64         `json:"score"`
+	ClipPath            string          `json:"clip_path,omitempty"`
+	ClipDurationSeconds float64         `json:"clip_duration_seconds,omitempty"`
+	Evidence            []EvidenceRef   `json:"evidence,omitempty"`
+	Tags                []string        `json:"tags,omitempty"`
 }
 
 type AnalysisReport struct {
