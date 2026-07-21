@@ -72,6 +72,9 @@ scripts/
   run_vision_service.sh           # dependency-free local Python vision-service stub
 
 docs/                             # architecture and project decisions
+deployments/
+  compose/                        # local Docker Compose infrastructure
+  migrations/                     # Postgres and ClickHouse migration roots
 data/
   manifests/                      # tracked curated dataset manifest
   raw/                            # ignored local videos

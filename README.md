@@ -107,6 +107,26 @@ The downloader is intentionally not run automatically. Review `data/manifests/vo
 - [Git workflow](docs/git-workflow.md)
 - [Benchmarks](docs/benchmarks.md)
 
+## Local Infrastructure
+
+The production-shaped local stack is under `deployments/compose`.
+
+Start it:
+
+```sh
+cp .env.example .env
+docker compose --env-file .env -f deployments/compose/docker-compose.yml up -d
+```
+
+Useful local consoles:
+
+- Grafana: `http://localhost:3000`
+- Prometheus: `http://localhost:9090`
+- Temporal UI: `http://localhost:8233`
+- MinIO console: `http://localhost:9001`
+- MinIO S3 API: `http://localhost:9002`
+- ClickHouse HTTP: `http://localhost:8123`
+
 ## Benchmarks
 
 Preview a benchmark run:
