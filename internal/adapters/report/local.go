@@ -111,6 +111,12 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "- ID: `%s`\n", finding.ID)
 			fmt.Fprintf(&buf, "- Category: `%s`\n", finding.Category)
 			fmt.Fprintf(&buf, "- Detail: %s\n", finding.Detail)
+			if finding.Recommendation != "" {
+				fmt.Fprintf(&buf, "- Recommendation: %s\n", finding.Recommendation)
+			}
+			if finding.Confidence > 0 {
+				fmt.Fprintf(&buf, "- Confidence: %.2f\n", finding.Confidence)
+			}
 			if len(finding.Evidence) > 0 {
 				fmt.Fprintf(&buf, "- Evidence:")
 				for _, evidence := range finding.Evidence {

@@ -44,6 +44,9 @@ func TestAnalysisRunnerCreatesBaselineReport(t *testing.T) {
 	if result.Report.Status != "completed" {
 		t.Fatalf("unexpected status: %s", result.Report.Status)
 	}
+	if result.Report.Metadata.Analyzer != "heuristic-baseline" {
+		t.Fatalf("unexpected analyzer: %s", result.Report.Metadata.Analyzer)
+	}
 	if len(result.Report.Artifacts) != 3 {
 		t.Fatalf("expected 3 input artifacts, got %d", len(result.Report.Artifacts))
 	}

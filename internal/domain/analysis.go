@@ -65,13 +65,15 @@ const (
 )
 
 type Finding struct {
-	ID       string          `json:"id"`
-	Severity FindingSeverity `json:"severity"`
-	Category string          `json:"category"`
-	Title    string          `json:"title"`
-	Detail   string          `json:"detail"`
-	Evidence []EvidenceRef   `json:"evidence,omitempty"`
-	Tags     []string        `json:"tags,omitempty"`
+	ID             string          `json:"id"`
+	Severity       FindingSeverity `json:"severity"`
+	Category       string          `json:"category"`
+	Title          string          `json:"title"`
+	Detail         string          `json:"detail"`
+	Recommendation string          `json:"recommendation,omitempty"`
+	Confidence     float64         `json:"confidence,omitempty"`
+	Evidence       []EvidenceRef   `json:"evidence,omitempty"`
+	Tags           []string        `json:"tags,omitempty"`
 }
 
 type EvidenceRef struct {

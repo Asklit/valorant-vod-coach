@@ -173,7 +173,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 			sample.Artifact,
 		},
 		Metadata: domain.AnalysisRunMetadata{
-			Analyzer: "baseline",
+			Analyzer: "heuristic-baseline",
 			Mode:     "local",
 		},
 	}
@@ -202,30 +202,36 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 
 	findings := []domain.Finding{
 		{
-			ID:       "baseline_ingestion_ready",
-			Severity: domain.FindingSeverityInfo,
-			Category: "ingestion",
-			Title:    "VOD artifacts generated",
-			Detail:   "The MVP pipeline successfully loaded the VOD, probed media metadata, sampled frames, and produced a reproducible report artifact.",
-			Tags:     []string{"mvp", "local-pipeline"},
+			ID:             "baseline_ingestion_ready",
+			Severity:       domain.FindingSeverityInfo,
+			Category:       "pipeline",
+			Title:          "Local analysis artifacts are ready",
+			Detail:         "The pipeline loaded the VOD, probed media metadata, sampled frames, generated review artifacts, and wrote a reproducible report.",
+			Recommendation: "Use this run to verify the video, contact sheet, sampled frames, and report contract before enabling OCR or VLM gameplay review.",
+			Confidence:     1,
+			Tags:           []string{"mvp", "local-pipeline"},
 		},
 		{
-			ID:       "baseline_ai_not_enabled",
-			Severity: domain.FindingSeverityInfo,
-			Category: "analysis_gap",
-			Title:    "Vision model analysis is not enabled in this run",
-			Detail:   "This report is a deterministic baseline. Gameplay findings from minimap, HUD, OCR, economy, utility, and positioning analysis will be added through the vision-service adapter.",
-			Tags:     []string{"baseline", "vision-service"},
+			ID:             "baseline_ai_not_enabled",
+			Severity:       domain.FindingSeverityInfo,
+			Category:       "analysis_gap",
+			Title:          "Gameplay AI review is not enabled yet",
+			Detail:         "This run is a deterministic heuristic baseline. It does not yet inspect minimap, HUD, crosshair placement, utility, economy, or positioning.",
+			Recommendation: "The next MVP stage should add the Python vision-service adapter: OCR timer/score/HUD, detect round windows, then run VLM review only on selected clips.",
+			Confidence:     1,
+			Tags:           []string{"baseline", "vision-service"},
 		},
 	}
 
 	if request.Sample.FrameCount == 0 {
 		findings = append(findings, domain.Finding{
-			ID:       "baseline_no_frames",
-			Severity: domain.FindingSeverityHigh,
-			Category: "media_quality",
-			Title:    "No frames were extracted",
-			Detail:   "The frame sample is empty, so downstream visual analysis cannot run on this artifact.",
+			ID:             "baseline_no_frames",
+			Severity:       domain.FindingSeverityHigh,
+			Category:       "media_quality",
+			Title:          "No frames were extracted",
+			Detail:         "The frame sample is empty, so downstream visual analysis cannot run on this artifact.",
+			Recommendation: "Check that ffmpeg can decode the file, then retry with a short 30-60 second sample before running a full VOD pass.",
+			Confidence:     1,
 		})
 	} else {
 		findings[0].Evidence = append(findings[0].Evidence, domain.EvidenceRef{
@@ -234,25 +240,49 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 			TimestampSeconds: request.Sample.StartSeconds,
 			FrameIndex:       1,
 		})
+		if request.Sample.ContactSheetPath != "" {
+			findings[0].Evidence = append(findings[0].Evidence, domain.EvidenceRef{
+				ArtifactType:     "contact_sheet",
+				Path:             request.Sample.ContactSheetPath,
+				TimestampSeconds: request.Sample.StartSeconds,
+			})
+			findings = append(findings, domain.Finding{
+				ID:             "baseline_manual_review_ready",
+				Severity:       domain.FindingSeverityLow,
+				Category:       "review",
+				Title:          "Manual evidence board is ready",
+				Detail:         "The contact sheet gives a quick visual overview of the sampled window and the frame grid exposes timestamped evidence.",
+				Recommendation: "Scan the contact sheet for buy phases, deaths, score changes, scoreboard moments, and visible HUD/minimap quality. These are the candidate windows the next detector will automate.",
+				Confidence:     0.9,
+				Evidence: []domain.EvidenceRef{
+					{ArtifactType: "contact_sheet", Path: request.Sample.ContactSheetPath, TimestampSeconds: request.Sample.StartSeconds},
+				},
+				Tags: []string{"manual-review", "evidence"},
+			})
+		}
 	}
 
 	if !request.Media.HasAudio {
 		findings = append(findings, domain.Finding{
-			ID:       "baseline_audio_missing",
-			Severity: domain.FindingSeverityMedium,
-			Category: "media_quality",
-			Title:    "Audio stream is missing",
-			Detail:   "The video has no detected audio stream. Voice comms and sound-cue analysis would be unavailable for this VOD.",
+			ID:             "baseline_audio_missing",
+			Severity:       domain.FindingSeverityMedium,
+			Category:       "media_quality",
+			Title:          "Audio stream is missing",
+			Detail:         "The video has no detected audio stream. Voice comms and sound-cue analysis would be unavailable for this VOD.",
+			Recommendation: "Prefer VODs with game audio when evaluating sound-cue awareness, reload discipline, rotations, and post-plant decisions.",
+			Confidence:     1,
 		})
 	}
 
 	if request.Media.Width > 0 && request.Media.Height > 0 && (request.Media.Width < 1280 || request.Media.Height < 720) {
 		findings = append(findings, domain.Finding{
-			ID:       "baseline_low_resolution",
-			Severity: domain.FindingSeverityMedium,
-			Category: "media_quality",
-			Title:    "Capture resolution is below 720p",
-			Detail:   "Low resolution can make HUD, minimap, killfeed, weapon, and utility recognition less reliable.",
+			ID:             "baseline_low_resolution",
+			Severity:       domain.FindingSeverityMedium,
+			Category:       "media_quality",
+			Title:          "Capture resolution is below 720p",
+			Detail:         "Low resolution can make HUD, minimap, killfeed, weapon, and utility recognition less reliable.",
+			Recommendation: "Use 1080p recordings for the dataset whenever possible; OCR and minimap detectors will be materially more reliable.",
+			Confidence:     1,
 		})
 	}
 
@@ -260,11 +290,13 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 		delta := math.Abs(request.Media.DurationSeconds - request.VOD.ManifestDurationSeconds)
 		if delta > 120 {
 			findings = append(findings, domain.Finding{
-				ID:       "baseline_duration_mismatch",
-				Severity: domain.FindingSeverityLow,
-				Category: "dataset_quality",
-				Title:    "Manifest duration differs from media duration",
-				Detail:   fmt.Sprintf("The downloaded media duration differs from the manifest by %.0f seconds. The dataset row should be reviewed.", delta),
+				ID:             "baseline_duration_mismatch",
+				Severity:       domain.FindingSeverityLow,
+				Category:       "dataset_quality",
+				Title:          "Manifest duration differs from media duration",
+				Detail:         fmt.Sprintf("The downloaded media duration differs from the manifest by %.0f seconds. The dataset row should be reviewed.", delta),
+				Recommendation: "Update the manifest duration or replace the VOD if it contains menus, cuts, or non-match footage.",
+				Confidence:     1,
 			})
 		}
 	}
@@ -272,15 +304,38 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 	if request.Media.HasDuration && request.Sample.DurationSeconds > 0 {
 		covered := request.Sample.DurationSeconds
 		if covered < request.Media.DurationSeconds*0.95 {
+			severity := domain.FindingSeverityInfo
+			title := "Only part of the VOD was sampled"
+			recommendation := "Use a 180-300 second sample for quick iteration, then run duration 0 when you want a full-match extraction benchmark."
+			if covered < 120 {
+				severity = domain.FindingSeverityMedium
+				title = "Sample is too short for gameplay coaching"
+				recommendation = "Increase sample seconds to at least 180 for a meaningful review window, or run full VOD mode when you are ready for a slower pass."
+			}
 			findings = append(findings, domain.Finding{
-				ID:       "baseline_partial_sample",
-				Severity: domain.FindingSeverityInfo,
-				Category: "coverage",
-				Title:    "Only part of the VOD was sampled",
-				Detail:   fmt.Sprintf("This run sampled %.0f seconds out of %.0f seconds. Use --duration 0 when you want a full-video extraction benchmark.", covered, request.Media.DurationSeconds),
-				Tags:     []string{"sampling"},
+				ID:             "baseline_partial_sample",
+				Severity:       severity,
+				Category:       "coverage",
+				Title:          title,
+				Detail:         fmt.Sprintf("This run sampled %.0f seconds out of %.0f seconds. A very short sample is useful for pipeline smoke tests, not for real gameplay feedback.", covered, request.Media.DurationSeconds),
+				Recommendation: recommendation,
+				Confidence:     1,
+				Tags:           []string{"sampling"},
 			})
 		}
+	}
+
+	if request.Sample.FPSValue > 0 && request.Sample.FPSValue < 1 {
+		findings = append(findings, domain.Finding{
+			ID:             "baseline_sparse_sampling",
+			Severity:       domain.FindingSeverityLow,
+			Category:       "coverage",
+			Title:          "Frame sampling is sparse",
+			Detail:         fmt.Sprintf("The run sampled at %.2f fps. This is fine for coarse smoke tests but can miss kills, deaths, utility usage, and scoreboard moments.", request.Sample.FPSValue),
+			Recommendation: "Use 1 fps for general timeline detection and 2 fps for short windows where OCR or VLM review needs more temporal detail.",
+			Confidence:     1,
+			Tags:           []string{"sampling"},
+		})
 	}
 
 	timeline := []domain.TimelineEvent{
@@ -289,6 +344,14 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 			Type:             "sample_started",
 			Title:            "Frame sampling started",
 		},
+	}
+	if request.Sample.ContactSheetPath != "" {
+		timeline = append(timeline, domain.TimelineEvent{
+			TimestampSeconds: request.Sample.StartSeconds,
+			Type:             "contact_sheet_ready",
+			Title:            "Contact sheet generated",
+			Detail:           request.Sample.ContactSheetPath,
+		})
 	}
 	if request.Sample.DurationSeconds > 0 {
 		timeline = append(timeline, domain.TimelineEvent{

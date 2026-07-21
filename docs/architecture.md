@@ -50,6 +50,7 @@ This local command intentionally uses the same boundaries as the future service 
 - contact sheet generation is part of the media adapter and becomes a first UI evidence artifact;
 - report schema lives in `internal/domain`;
 - orchestration lives in `internal/app`;
+- the current analyzer is a deterministic heuristic baseline that emits recommendations, confidence, timeline events, and evidence references;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can be added without changing the CLI contract.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.

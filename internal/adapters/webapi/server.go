@@ -70,13 +70,13 @@ type Counts struct {
 }
 
 type AnalyzeRequest struct {
-	VODLabel        string  `json:"vod_label"`
-	RunID           string  `json:"run_id"`
-	FPS             string  `json:"fps"`
-	StartSeconds    float64 `json:"start_seconds"`
-	DurationSeconds float64 `json:"duration_seconds"`
-	ImageQuality    int     `json:"image_quality"`
-	Force           bool    `json:"force"`
+	VODLabel        string   `json:"vod_label"`
+	RunID           string   `json:"run_id"`
+	FPS             string   `json:"fps"`
+	StartSeconds    float64  `json:"start_seconds"`
+	DurationSeconds *float64 `json:"duration_seconds"`
+	ImageQuality    int      `json:"image_quality"`
+	Force           bool     `json:"force"`
 }
 
 type AnalyzeResponse struct {
@@ -291,8 +291,13 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	if request.FPS == "" {
 		request.FPS = "1"
 	}
-	if request.DurationSeconds <= 0 {
-		request.DurationSeconds = 10
+	durationSeconds := 180.0
+	if request.DurationSeconds != nil {
+		durationSeconds = *request.DurationSeconds
+	}
+	if durationSeconds < 0 {
+		writeError(w, http.StatusBadRequest, errors.New("duration_seconds must be non-negative"))
+		return
 	}
 	if request.ImageQuality <= 0 {
 		request.ImageQuality = 3
@@ -323,7 +328,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		RunID:        request.RunID,
 		FPS:          request.FPS,
 		Start:        secondsDuration(request.StartSeconds),
-		Duration:     secondsDuration(request.DurationSeconds),
+		Duration:     secondsDuration(durationSeconds),
 		ImageQuality: request.ImageQuality,
 		Overwrite:    request.Force,
 	})
