@@ -41,6 +41,8 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 		t.Fatalf("read markdown report: %v", err)
 	}
 	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") ||
+		!strings.Contains(string(rawMarkdown), "## Gameplay Review") ||
+		!strings.Contains(string(rawMarkdown), "High-impact fight window") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
 		!strings.Contains(string(rawMarkdown), "Review the recommendation.") ||
 		!strings.Contains(string(rawMarkdown), "Confidence: 0.80") ||
@@ -94,6 +96,33 @@ func sampleReport() domain.AnalysisReport {
 			DurationSeconds:  120,
 			FrameCount:       60,
 			ContactSheetPath: "frames/contact_sheet.jpg",
+		},
+		Gameplay: &domain.GameplaySummary{
+			Analyzer:             "visual-heuristic-gameplay",
+			SampledFrames:        60,
+			AnalyzedFrames:       60,
+			ReviewWindowCount:    1,
+			AverageMotionScore:   0.42,
+			AverageMinimapSignal: 0.32,
+			AverageHUDSignal:     0.21,
+			PeakCombatScore:      0.66,
+			ReviewWindows: []domain.ReviewWindow{
+				{
+					ID:             "combatspike_001",
+					Kind:           "combat_spike",
+					Severity:       domain.FindingSeverityMedium,
+					Title:          "High-impact fight window",
+					Summary:        "Visual intensity peaked.",
+					Recommendation: "Review the duel setup.",
+					StartSeconds:   8,
+					EndSeconds:     24,
+					PeakSeconds:    16,
+					Score:          0.66,
+					Evidence: []domain.EvidenceRef{
+						{ArtifactType: "frame", Path: "frames/frame_000016.jpg", TimestampSeconds: 16, FrameIndex: 16},
+					},
+				},
+			},
 		},
 		Findings: []domain.Finding{
 			{

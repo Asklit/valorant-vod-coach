@@ -80,8 +80,11 @@ type ObservationRequest struct {
 }
 
 type ObservationResult struct {
-	Findings []domain.Finding
-	Timeline []domain.TimelineEvent
+	Findings  []domain.Finding
+	Timeline  []domain.TimelineEvent
+	Gameplay  *domain.GameplaySummary
+	Artifacts []domain.Artifact
+	Metadata  domain.AnalysisRunMetadata
 }
 
 type SavedReport struct {
@@ -166,6 +169,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 		VOD:           vod,
 		Media:         probe.Summary,
 		Sample:        sample.Summary,
+		Gameplay:      observations.Gameplay,
 		Findings:      observations.Findings,
 		Timeline:      observations.Timeline,
 		Artifacts: []domain.Artifact{
@@ -179,6 +183,10 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 	if sample.ContactSheetArtifact.Path != "" {
 		report.Artifacts = append(report.Artifacts, sample.ContactSheetArtifact)
+	}
+	report.Artifacts = append(report.Artifacts, observations.Artifacts...)
+	if observations.Metadata.Analyzer != "" {
+		report.Metadata = observations.Metadata
 	}
 
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)
@@ -252,7 +260,7 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 				Category:       "review",
 				Title:          "Manual evidence board is ready",
 				Detail:         "The contact sheet gives a quick visual overview of the sampled window and the frame grid exposes timestamped evidence.",
-				Recommendation: "Scan the contact sheet for buy phases, deaths, score changes, scoreboard moments, and visible HUD/minimap quality. These are the candidate windows the next detector will automate.",
+				Recommendation: "Scan the contact sheet for buy phases, deaths, score changes, scoreboard moments, and visible HUD/minimap quality. Use it to audit the automated review windows and catch false positives.",
 				Confidence:     0.9,
 				Evidence: []domain.EvidenceRef{
 					{ArtifactType: "contact_sheet", Path: request.Sample.ContactSheetPath, TimestampSeconds: request.Sample.StartSeconds},
@@ -364,5 +372,9 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 	return ObservationResult{
 		Findings: findings,
 		Timeline: timeline,
+		Metadata: domain.AnalysisRunMetadata{
+			Analyzer: "heuristic-baseline",
+			Mode:     "local",
+		},
 	}, nil
 }

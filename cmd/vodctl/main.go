@@ -14,7 +14,9 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/app"
+	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
 
 const (
@@ -162,6 +164,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 			ProbeTimeout:  probeTimeout,
 			SampleTimeout: sampleTimeout,
 		},
+		Analyzer: vision.LocalGameplayAnalyzer{},
 		Reports: reportstore.LocalStore{
 			ProcessedRoot: *outRoot,
 		},
@@ -183,12 +186,13 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
-	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n",
+	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n",
 		result.Report.VOD.Label,
 		result.Report.RunID,
 		result.Report.Status,
 		result.Report.Sample.FrameCount,
+		reviewWindowCount(result.Report.Gameplay),
 		len(result.Report.Findings),
 		result.Report.Sample.ContactSheetPath,
 		result.Saved.JSONPath,
@@ -196,6 +200,13 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	)
 	table.Flush()
 	return 0
+}
+
+func reviewWindowCount(gameplay *domain.GameplaySummary) int {
+	if gameplay == nil {
+		return 0
+	}
+	return gameplay.ReviewWindowCount
 }
 
 func runVideo(args []string, stdout, stderr io.Writer) int {

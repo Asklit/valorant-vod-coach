@@ -22,7 +22,8 @@ flowchart LR
   ffprobe[ffprobe]
   frames[ffmpeg frames]
   sheet[ffmpeg contact sheet]
-  baseline[BaselineObservationAnalyzer]
+  vision[vision.LocalGameplayAnalyzer]
+  gameplay[gameplay_review.json]
   report[report.LocalStore]
   raw[(data/raw/youtube)]
   processed[(data/processed)]
@@ -41,7 +42,9 @@ flowchart LR
   media --> frames
   media --> sheet
   media --> processed
-  runner --> baseline
+  runner --> vision
+  vision --> gameplay
+  gameplay --> processed
   runner --> report
   report --> processed
 ```

@@ -112,7 +112,7 @@ internal/
     kafka/                        # producers, consumers, event envelopes
     temporal/                     # workflows and activities
     storage/                      # local filesystem and S3-compatible object storage
-    vision/                       # Python vision-service client
+    vision/                       # local visual analyzer and future Python vision-service client
     http/                         # HTTP handlers once vod-api exists
 
   platform/
