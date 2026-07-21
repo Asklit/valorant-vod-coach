@@ -196,6 +196,10 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 			observations.Artifacts = append(observations.Artifacts, clips.Artifacts...)
 		}
 	}
+	if observations.Gameplay != nil {
+		observations.Gameplay.ModelReviewTasks = BuildModelReviewTasks(vod, observations.Gameplay)
+		observations.Gameplay.ModelReviewTaskCount = len(observations.Gameplay.ModelReviewTasks)
+	}
 
 	report := domain.AnalysisReport{
 		SchemaVersion: domain.AnalysisReportSchemaVersion,

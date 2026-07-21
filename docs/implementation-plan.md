@@ -56,6 +56,7 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 
 - Produce a first report from heuristics before using a large vision model. The local MVP now does this with visual frame signals and selected gameplay review windows.
 - Build estimated round segments before OCR is available. The local MVP now groups review windows into `estimated_from_visual_timeline` segments with confidence and detection method metadata.
+- Generate Qwen/VLM-ready model review tasks with prompt version, clip/evidence references, context, questions, and expected JSON output shape.
 - Add VLM analysis only for selected review windows.
 - Output findings in a consistent schema:
   - timestamp;
@@ -83,6 +84,7 @@ Implemented local UI slice:
 - run sample or full-VOD analysis from the browser;
 - show visual signal metrics, gameplay review windows, coach findings, timeline events, contact sheet, and sampled frame evidence;
 - show estimated round segments and their linked review windows;
+- show model review tasks and allow copying prompt payloads;
 - jump from a review window to the matching timestamp in the local video player;
 - open generated mp4 clips for selected gameplay windows.
 
@@ -456,6 +458,7 @@ Current status:
 ### Milestone 5: VLM Clip Review
 
 - Extract candidate clips around deaths and round ends.
+- Generate prompt/eval fixtures for selected windows. Current local MVP writes `model_review_tasks` into report schema.
 - Send selected windows to the Python ML service.
 - Merge VLM observations into the report schema.
 - Add prompt/eval fixtures.

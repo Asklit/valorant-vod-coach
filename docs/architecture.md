@@ -46,6 +46,8 @@ vodctl analyze run
       -> media.LocalProcessor
           -> ffmpeg review clip extraction
           -> review_clips.json
+      -> app.BuildModelReviewTasks
+          -> Qwen/VLM-ready task and prompt payloads
       -> report.LocalStore
           -> report.json
           -> report.md
@@ -61,6 +63,7 @@ This local command intentionally uses the same boundaries as the future service 
 - the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, builds estimated round segments, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
 - round segments use `detection_method=estimated_from_visual_timeline`; they are useful for navigation and grouping, but OCR-confirmed timer/score boundaries remain the next detection stage;
 - selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
+- model review tasks are generated after clips exist and include prompt version, model hint, clip path, evidence, context, questions, and expected JSON output shape;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can replace or enrich this analyzer without changing the CLI/API/UI report contract.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.

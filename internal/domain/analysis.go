@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 5
+const AnalysisReportSchemaVersion = 6
 
 type Rank string
 
@@ -97,6 +97,7 @@ type GameplaySummary struct {
 	SkippedFrames        int                `json:"skipped_frames,omitempty"`
 	ReviewWindowCount    int                `json:"review_window_count"`
 	RoundSegmentCount    int                `json:"round_segment_count,omitempty"`
+	ModelReviewTaskCount int                `json:"model_review_task_count,omitempty"`
 	AverageMotionScore   float64            `json:"average_motion_score,omitempty"`
 	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
 	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
@@ -104,6 +105,7 @@ type GameplaySummary struct {
 	Coach                *CoachSummary      `json:"coach,omitempty"`
 	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
 	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
+	ModelReviewTasks     []ModelReviewTask  `json:"model_review_tasks,omitempty"`
 	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
 	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
 	Notes                []string           `json:"notes,omitempty"`
@@ -165,6 +167,28 @@ type RoundSegment struct {
 	PhaseProfile    []PhaseStat `json:"phase_profile,omitempty"`
 	ReviewWindowIDs []string    `json:"review_window_ids,omitempty"`
 	Summary         string      `json:"summary,omitempty"`
+}
+
+type ModelReviewTask struct {
+	ID                  string          `json:"id"`
+	Status              string          `json:"status"`
+	Priority            string          `json:"priority"`
+	PromptVersion       string          `json:"prompt_version"`
+	ModelHint           string          `json:"model_hint,omitempty"`
+	WindowID            string          `json:"window_id"`
+	RoundNumber         int             `json:"round_number,omitempty"`
+	Kind                string          `json:"kind"`
+	Severity            FindingSeverity `json:"severity"`
+	ClipPath            string          `json:"clip_path,omitempty"`
+	ClipDurationSeconds float64         `json:"clip_duration_seconds,omitempty"`
+	StartSeconds        float64         `json:"start_seconds"`
+	EndSeconds          float64         `json:"end_seconds"`
+	PeakSeconds         float64         `json:"peak_seconds"`
+	Evidence            []EvidenceRef   `json:"evidence,omitempty"`
+	Context             []string        `json:"context,omitempty"`
+	Questions           []string        `json:"questions,omitempty"`
+	ExpectedOutput      string          `json:"expected_output"`
+	Prompt              string          `json:"prompt"`
 }
 
 type ReviewWindow struct {
