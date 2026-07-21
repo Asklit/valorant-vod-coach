@@ -123,6 +123,7 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	summary.PhaseProfile = phaseProfile
 	summary.RoundSegments = roundSegments
 	summary.RoundSegmentCount = len(roundSegments)
+	summary.GameplayEvents = buildGameplayEvents(observations, windows, roundSegments, summary)
 	summary.Coach = buildCoachSummary(request, summary, phaseProfile, windows)
 	summary.FrameObservations = observations
 
@@ -1012,6 +1013,133 @@ func buildPracticePlan(focus []domain.CoachFocusArea) []domain.PracticeTask {
 		}
 	}
 	return tasks
+}
+
+func buildGameplayEvents(observations []domain.FrameObservation, windows []domain.ReviewWindow, segments []domain.RoundSegment, summary domain.GameplaySummary) []domain.GameplayEvent {
+	events := make([]domain.GameplayEvent, 0, len(windows)+len(segments)+3)
+
+	for _, segment := range segments {
+		events = append(events, domain.GameplayEvent{
+			ID:               fmt.Sprintf("event_round_%03d", segment.RoundNumber),
+			Type:             "round_estimate",
+			Category:         "round_timeline",
+			Severity:         domain.FindingSeverityInfo,
+			Title:            fmt.Sprintf("Estimated round %d", segment.RoundNumber),
+			Detail:           segment.Summary,
+			Recommendation:   "Use this as navigation only until OCR confirms timer, score, and round transition state.",
+			TimestampSeconds: segment.StartSeconds,
+			StartSeconds:     segment.StartSeconds,
+			EndSeconds:       segment.EndSeconds,
+			RoundNumber:      segment.RoundNumber,
+			Score:            segment.Confidence,
+			Confidence:       segment.Confidence,
+			Tags:             compactStrings("round", "estimated", dominantPhase(segment.PhaseProfile)),
+		})
+	}
+
+	for _, window := range windows {
+		eventType, category, title, detail := eventCopyForWindow(window)
+		events = append(events, domain.GameplayEvent{
+			ID:               "event_" + window.ID,
+			Type:             eventType,
+			Category:         category,
+			Severity:         window.Severity,
+			Title:            title,
+			Detail:           detail,
+			Recommendation:   window.Recommendation,
+			TimestampSeconds: window.PeakSeconds,
+			StartSeconds:     window.StartSeconds,
+			EndSeconds:       window.EndSeconds,
+			RoundNumber:      window.RoundNumber,
+			Score:            window.Score,
+			Confidence:       eventConfidence(window),
+			Evidence:         window.Evidence,
+			WindowID:         window.ID,
+			Tags:             compactStrings(append([]string{"review-window", "candidate"}, window.Tags...)...),
+		})
+	}
+
+	if summary.AverageMinimapSignal > 0 && summary.AverageMinimapSignal < 0.08 {
+		events = append(events, domain.GameplayEvent{
+			ID:               "event_capture_minimap_low",
+			Type:             "capture_quality",
+			Category:         "capture_quality",
+			Severity:         domain.FindingSeverityMedium,
+			Title:            "Minimap signal weak",
+			Detail:           fmt.Sprintf("Average minimap signal is %.2f; rotation and spacing coaching should be manually verified.", summary.AverageMinimapSignal),
+			Recommendation:   "Use uncropped VODs with a visible minimap before trusting macro conclusions.",
+			TimestampSeconds: firstObservationTimestamp(observations),
+			Score:            1 - summary.AverageMinimapSignal,
+			Confidence:       0.82,
+			Tags:             []string{"capture", "minimap"},
+		})
+	}
+
+	if summary.AverageHUDSignal > 0 && summary.AverageHUDSignal < 0.06 {
+		events = append(events, domain.GameplayEvent{
+			ID:               "event_capture_hud_low",
+			Type:             "capture_quality",
+			Category:         "capture_quality",
+			Severity:         domain.FindingSeverityMedium,
+			Title:            "HUD signal weak",
+			Detail:           fmt.Sprintf("Average HUD signal is %.2f; timer, score, ammo, and ability state may be hard to detect.", summary.AverageHUDSignal),
+			Recommendation:   "Use full-screen recordings without overlays that cover the timer, score, ammo, minimap, or ability bar.",
+			TimestampSeconds: firstObservationTimestamp(observations),
+			Score:            1 - summary.AverageHUDSignal,
+			Confidence:       0.82,
+			Tags:             []string{"capture", "hud"},
+		})
+	}
+
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].TimestampSeconds == events[j].TimestampSeconds {
+			return events[i].ID < events[j].ID
+		}
+		return events[i].TimestampSeconds < events[j].TimestampSeconds
+	})
+
+	return events
+}
+
+func eventCopyForWindow(window domain.ReviewWindow) (string, string, string, string) {
+	switch window.Kind {
+	case "combat_spike":
+		return "combat_candidate", "fight_selection", "Combat review candidate", window.Summary + " This is a fight/death candidate, not an OCR-confirmed killfeed event."
+	case "rotation_spike":
+		return "rotation_candidate", "rotation_timing", "Rotation review candidate", window.Summary + " Validate visible minimap and teammate spacing before treating it as a macro mistake."
+	case "low_activity":
+		return "tempo_candidate", "round_pacing", "Tempo review candidate", window.Summary + " Validate whether the hold gained information or only lost tempo."
+	default:
+		return "review_candidate", "gameplay_review", window.Title, window.Summary
+	}
+}
+
+func eventConfidence(window domain.ReviewWindow) float64 {
+	return round4(clamp01(0.48 + window.Score*0.45))
+}
+
+func firstObservationTimestamp(observations []domain.FrameObservation) float64 {
+	if len(observations) == 0 {
+		return 0
+	}
+	return observations[0].TimestampSeconds
+}
+
+func compactStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "unknown" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func buildGameplayTimeline(windows []domain.ReviewWindow, segments []domain.RoundSegment) []domain.TimelineEvent {

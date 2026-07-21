@@ -188,7 +188,7 @@ The command writes:
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, builds estimated round segments for navigation, selects gameplay review windows, extracts short mp4 review clips for those windows, builds Qwen/VLM-ready model review tasks, can call the Python vision-service for model review, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
+The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, builds estimated round segments for navigation, emits typed gameplay events, selects gameplay review windows, extracts short mp4 review clips for those windows, builds Qwen/VLM-ready model review tasks, can call the Python vision-service for model review, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
 
 This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The current Python vision-service is a deterministic contract stub; the next ML stage is replacing its reviewer implementation with OCR, round detection, kill/death windows, and real Qwen/VLM reasoning over selected clips.
 
@@ -261,7 +261,7 @@ The UI can:
 - run the local heuristic analysis pipeline against a sample window or the full VOD through async analysis jobs;
 - optionally run model review when `vod-web` has a configured and healthy `VISION_SERVICE_URL`;
 - switch between generated report runs for a selected VOD;
-- render gameplay review windows, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
+- render gameplay review windows, typed gameplay events, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
 - render estimated round segments and attach review windows to those segments;
 - render Qwen/VLM-ready model review tasks and copy their prompts;
 - jump from a selected review window to the matching VOD timestamp in the local video player;

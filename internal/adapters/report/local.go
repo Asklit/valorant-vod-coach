@@ -170,6 +170,30 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "\n")
 		}
 
+		if len(report.Gameplay.GameplayEvents) > 0 {
+			fmt.Fprintf(&buf, "### Gameplay Events\n\n")
+			for _, event := range report.Gameplay.GameplayEvents {
+				fmt.Fprintf(&buf, "- %.3fs `%s` `%s`: %s", event.TimestampSeconds, event.Severity, event.Type, event.Title)
+				if event.RoundNumber > 0 {
+					fmt.Fprintf(&buf, " (R%d)", event.RoundNumber)
+				}
+				if event.Score > 0 {
+					fmt.Fprintf(&buf, " score %.2f", event.Score)
+				}
+				if event.WindowID != "" {
+					fmt.Fprintf(&buf, " window `%s`", event.WindowID)
+				}
+				if event.Detail != "" {
+					fmt.Fprintf(&buf, " - %s", event.Detail)
+				}
+				if event.Recommendation != "" {
+					fmt.Fprintf(&buf, " Recommendation: %s", event.Recommendation)
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
 		if len(report.Gameplay.ModelReviewTasks) > 0 {
 			fmt.Fprintf(&buf, "### Model Review Tasks\n\n")
 			for _, task := range report.Gameplay.ModelReviewTasks {

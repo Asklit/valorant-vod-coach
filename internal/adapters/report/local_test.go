@@ -43,8 +43,10 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 	if !strings.Contains(string(rawMarkdown), "# VOD Analysis Report") ||
 		!strings.Contains(string(rawMarkdown), "## Gameplay Review") ||
 		!strings.Contains(string(rawMarkdown), "Estimated Round Segments") ||
+		!strings.Contains(string(rawMarkdown), "Gameplay Events") ||
 		!strings.Contains(string(rawMarkdown), "Model Review Tasks") ||
 		!strings.Contains(string(rawMarkdown), "Model Review Results") ||
+		!strings.Contains(string(rawMarkdown), "Combat review candidate") ||
 		!strings.Contains(string(rawMarkdown), "High-impact fight window") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
 		!strings.Contains(string(rawMarkdown), "Review the recommendation.") ||
@@ -122,6 +124,24 @@ func sampleReport() domain.AnalysisReport {
 					Confidence:      0.62,
 					ReviewWindowIDs: []string{"combatspike_001"},
 					Summary:         "Estimated round segment.",
+				},
+			},
+			GameplayEvents: []domain.GameplayEvent{
+				{
+					ID:               "event_combatspike_001",
+					Type:             "combat_candidate",
+					Category:         "fight_selection",
+					Severity:         domain.FindingSeverityMedium,
+					Title:            "Combat review candidate",
+					Detail:           "Visual intensity peaked.",
+					Recommendation:   "Review the duel setup.",
+					TimestampSeconds: 16,
+					StartSeconds:     8,
+					EndSeconds:       24,
+					RoundNumber:      1,
+					Score:            0.66,
+					Confidence:       0.78,
+					WindowID:         "combatspike_001",
 				},
 			},
 			ModelReviewTasks: []domain.ModelReviewTask{
