@@ -103,22 +103,25 @@ cmd/
   vodctl/               # Go CLI: dataset validate, probe, process, report
   vod-api/              # Go HTTP API for uploads, reports, assets
   vod-worker/           # Go background worker for video jobs
+  vod-outbox-relay/     # PostgreSQL outbox to Kafka relay
+  vod-clickhouse-sink/  # Kafka consumer for analytical projections
 
 internal/
-  app/                  # dependency wiring and configuration
-  dataset/              # manifest parsing and dataset inventory
-  db/                   # Postgres repositories and migrations wiring
-  analytics/            # Kafka consumers, ClickHouse writers, analytical queries
-  storage/              # local FS, later S3-compatible storage
-  video/                # ffmpeg/ffprobe wrappers and media primitives
-  jobs/                 # job definitions, queue adapters, idempotency
-  workflows/            # Temporal workflow definitions
-  events/               # Kafka event publishing, consuming, and outbox relay
-  vision/               # OCR and ML service clients
-  timeline/             # round/event timeline construction
-  analysis/             # finding generation and report assembly
-  observability/        # logging, metrics, tracing, health checks
-  domain/               # core entities and value objects
+  domain/               # pure product concepts and rules
+  app/                  # application use cases and consumed ports
+  adapters/
+    dataset/            # manifest parsing and dataset inventory
+    media/              # ffmpeg/ffprobe wrappers and media primitives
+    postgres/           # Postgres repositories and migrations wiring
+    clickhouse/         # Kafka consumers, ClickHouse writers, analytical queries
+    storage/            # local FS, later S3-compatible storage
+    kafka/              # event publishing, consuming, and outbox relay support
+    temporal/           # Temporal workflow definitions and activities
+    vision/             # OCR and ML service clients
+  platform/             # config, logging, metrics, tracing, health checks
+
+tests/
+  integration/          # slow tests requiring real tools or services
 
 ml/
   vision-service/       # Python FastAPI service for OCR/VLM inference

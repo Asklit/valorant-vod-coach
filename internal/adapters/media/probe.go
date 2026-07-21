@@ -1,4 +1,4 @@
-package video
+package media
 
 import (
 	"bytes"
@@ -12,9 +12,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/asklit/valorant-vod-coach/internal/dataset"
 )
+
+type VODInfo struct {
+	Label   string
+	VideoID string
+	Rank    string
+}
 
 type Metadata struct {
 	Streams []Stream `json:"streams"`
@@ -76,7 +80,7 @@ func ParseMetadata(raw []byte) (Metadata, error) {
 	return metadata, nil
 }
 
-func WriteProbeArtifact(processedRoot string, vod dataset.VOD, raw []byte) (string, error) {
+func WriteProbeArtifact(processedRoot string, vod VODInfo, raw []byte) (string, error) {
 	dir := filepath.Join(processedRoot, vod.Label)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

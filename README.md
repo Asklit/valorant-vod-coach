@@ -97,6 +97,8 @@ The downloader is intentionally not run automatically. Review `data/manifests/vo
 
 - [Architecture notes](docs/architecture.md)
 - [System diagrams](docs/system-diagrams.md)
+- [Project structure](docs/project-structure.md)
+- [Testing strategy](docs/testing-strategy.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Product and architecture decisions](docs/product-and-architecture-decisions.md)
 - [Kafka event streaming](docs/kafka-event-streaming.md)

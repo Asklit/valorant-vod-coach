@@ -11,8 +11,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/asklit/valorant-vod-coach/internal/dataset"
-	"github.com/asklit/valorant-vod-coach/internal/video"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 )
 
 const (
@@ -94,13 +94,13 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	probe, err := video.RunProbe(ctx, *ffprobePath, videoPath)
+	probe, err := media.RunProbe(ctx, *ffprobePath, videoPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
 	}
 
-	artifactPath, err := video.WriteProbeArtifact(*outRoot, vod, probe.Raw)
+	artifactPath, err := media.WriteProbeArtifact(*outRoot, mediaVODInfo(vod), probe.Raw)
 	if err != nil {
 		fmt.Fprintf(stderr, "write probe artifact: %v\n", err)
 		return 1
@@ -114,10 +114,10 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	videoStream, _ := video.VideoStream(probe.Metadata)
-	audioStream, hasAudio := video.AudioStream(probe.Metadata)
-	duration, hasDuration := video.Duration(probe.Metadata)
-	size, hasSize := video.SizeBytes(probe.Metadata)
+	videoStream, _ := media.VideoStream(probe.Metadata)
+	audioStream, hasAudio := media.AudioStream(probe.Metadata)
+	duration, hasDuration := media.Duration(probe.Metadata)
+	size, hasSize := media.SizeBytes(probe.Metadata)
 
 	durationText := "unknown"
 	if hasDuration {
@@ -140,8 +140,8 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 		vod.Label,
 		durationText,
 		videoStream.CodecName,
-		video.Resolution(videoStream),
-		video.FrameRate(videoStream),
+		media.Resolution(videoStream),
+		media.FrameRate(videoStream),
 		audioCodec,
 		sizeText,
 		artifactPath,
@@ -212,15 +212,15 @@ func runVideoSample(args []string, stdout, stderr io.Writer) int {
 
 	name := strings.TrimSpace(*sampleName)
 	if name == "" {
-		name = video.DefaultSampleName(*fps, start, duration)
+		name = media.DefaultSampleName(*fps, start, duration)
 	}
-	name = video.SafeArtifactName(name)
+	name = media.SafeArtifactName(name)
 
-	outputDir := video.SampleOutputDir(*outRoot, vod, name)
+	outputDir := media.SampleOutputDir(*outRoot, vod.Label, name)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	result, err := video.RunSample(ctx, video.SampleOptions{
+	result, err := media.RunSample(ctx, media.SampleOptions{
 		FFmpegPath:   *ffmpegPath,
 		InputPath:    videoPath,
 		OutputDir:    outputDir,
@@ -235,7 +235,7 @@ func runVideoSample(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	manifest, err := video.WriteFramesManifest(vod, name, result)
+	manifest, err := media.WriteFramesManifest(mediaVODInfo(vod), name, result)
 	if err != nil {
 		fmt.Fprintf(stderr, "write frames manifest: %v\n", err)
 		return 1
@@ -395,6 +395,14 @@ func loadVODAndVideoPath(manifestPath, rawRoot, label string) (dataset.VOD, stri
 	}
 
 	return vod, videoPath, nil
+}
+
+func mediaVODInfo(vod dataset.VOD) media.VODInfo {
+	return media.VODInfo{
+		Label:   vod.Label,
+		VideoID: vod.VideoID,
+		Rank:    string(vod.Rank),
+	}
 }
 
 func parseFlags(fs *flag.FlagSet, args []string) (bool, int) {
