@@ -71,6 +71,12 @@ func TestLocalGameplayAnalyzerBuildsReviewWindows(t *testing.T) {
 	if result.Gameplay.ReviewWindows[0].RoundNumber == 0 {
 		t.Fatalf("expected review window round number: %+v", result.Gameplay.ReviewWindows[0])
 	}
+	if len(result.Gameplay.GameplayEvents) == 0 {
+		t.Fatalf("expected gameplay events: %+v", result.Gameplay)
+	}
+	if !hasGameplayEventType(result.Gameplay.GameplayEvents, "combat_candidate") {
+		t.Fatalf("expected combat candidate gameplay event: %+v", result.Gameplay.GameplayEvents)
+	}
 	if hasFinding(result.Findings, "baseline_ai_not_enabled") {
 		t.Fatalf("baseline AI placeholder finding should be removed")
 	}
@@ -154,6 +160,15 @@ func zeroPad(value int) string {
 func hasFinding(findings []domain.Finding, id string) bool {
 	for _, finding := range findings {
 		if finding.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGameplayEventType(events []domain.GameplayEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
 			return true
 		}
 	}

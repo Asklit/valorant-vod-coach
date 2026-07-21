@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 7
+const AnalysisReportSchemaVersion = 8
 
 type Rank string
 
@@ -106,6 +106,7 @@ type GameplaySummary struct {
 	Coach                *CoachSummary      `json:"coach,omitempty"`
 	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
 	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
+	GameplayEvents       []GameplayEvent    `json:"gameplay_events,omitempty"`
 	ModelReviewTasks     []ModelReviewTask  `json:"model_review_tasks,omitempty"`
 	ModelReviewRuns      []ModelReviewRun   `json:"model_review_runs,omitempty"`
 	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
@@ -169,6 +170,25 @@ type RoundSegment struct {
 	PhaseProfile    []PhaseStat `json:"phase_profile,omitempty"`
 	ReviewWindowIDs []string    `json:"review_window_ids,omitempty"`
 	Summary         string      `json:"summary,omitempty"`
+}
+
+type GameplayEvent struct {
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Category         string          `json:"category"`
+	Severity         FindingSeverity `json:"severity"`
+	Title            string          `json:"title"`
+	Detail           string          `json:"detail"`
+	Recommendation   string          `json:"recommendation,omitempty"`
+	TimestampSeconds float64         `json:"timestamp_seconds"`
+	StartSeconds     float64         `json:"start_seconds,omitempty"`
+	EndSeconds       float64         `json:"end_seconds,omitempty"`
+	RoundNumber      int             `json:"round_number,omitempty"`
+	Score            float64         `json:"score,omitempty"`
+	Confidence       float64         `json:"confidence,omitempty"`
+	Evidence         []EvidenceRef   `json:"evidence,omitempty"`
+	WindowID         string          `json:"window_id,omitempty"`
+	Tags             []string        `json:"tags,omitempty"`
 }
 
 type ModelReviewTask struct {

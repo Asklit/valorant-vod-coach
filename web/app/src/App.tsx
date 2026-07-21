@@ -168,6 +168,25 @@ type RoundSegment = {
   summary?: string;
 };
 
+type GameplayEvent = {
+  id: string;
+  type: string;
+  category: string;
+  severity: string;
+  title: string;
+  detail: string;
+  recommendation?: string;
+  timestamp_seconds: number;
+  start_seconds?: number;
+  end_seconds?: number;
+  round_number?: number;
+  score?: number;
+  confidence?: number;
+  evidence?: Finding["evidence"];
+  window_id?: string;
+  tags?: string[];
+};
+
 type ModelReviewTask = {
   id: string;
   status: string;
@@ -227,6 +246,7 @@ type GameplaySummary = {
   coach?: CoachSummary;
   phase_profile?: PhaseStat[];
   round_segments?: RoundSegment[];
+  gameplay_events?: GameplayEvent[];
   model_review_tasks?: ModelReviewTask[];
   model_review_runs?: ModelReviewRun[];
   frame_observations?: FrameObservation[];
@@ -530,12 +550,13 @@ export function App() {
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
   const reviewWindows = report?.gameplay?.review_windows ?? [];
   const roundSegments = report?.gameplay?.round_segments ?? [];
+  const gameplayEvents = report?.gameplay?.gameplay_events ?? [];
   const modelReviewTasks = report?.gameplay?.model_review_tasks ?? [];
   const modelReviewRuns = report?.gameplay?.model_review_runs ?? [];
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 7 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 8 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
   const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
   const modelReviewConfigured = Boolean(backendHealth?.model_review_configured);
   const visionStatusLabel = modelReviewAvailable
@@ -901,6 +922,53 @@ export function App() {
                       </div>
                     ) : null}
 
+                    {gameplayEvents.length ? (
+                      <div className="gameplay-event-list">
+                        {gameplayEvents.slice(0, 28).map((event) => (
+                          <article className={`gameplay-event severity-${event.severity}`} key={event.id}>
+                            <div className="gameplay-event-time">
+                              <button onClick={() => seekVideo(event.timestamp_seconds)} title="Jump to event" type="button">
+                                <Play size={13} fill="currentColor" />
+                                {formatSeconds(event.timestamp_seconds)}
+                              </button>
+                              {event.round_number ? <span>R{event.round_number}</span> : null}
+                            </div>
+                            <div className="gameplay-event-body">
+                              <div>
+                                <span>
+                                  {event.type.replaceAll("_", " ")} / {event.category}
+                                </span>
+                                <h3>{event.title}</h3>
+                              </div>
+                              <p>{event.detail}</p>
+                              {event.recommendation ? (
+                                <div className="finding-recommendation compact">
+                                  <Lightbulb size={14} />
+                                  <p>{event.recommendation}</p>
+                                </div>
+                              ) : null}
+                              <div className="gameplay-event-meta">
+                                {typeof event.score === "number" ? <strong>{Math.round(clamp01(event.score) * 100)} score</strong> : null}
+                                {typeof event.confidence === "number" ? <small>{Math.round(clamp01(event.confidence) * 100)}% confidence</small> : null}
+                                {event.window_id ? <small>{event.window_id}</small> : null}
+                                {event.start_seconds !== undefined && event.end_seconds !== undefined ? <small>{eventRange(event)}</small> : null}
+                              </div>
+                              {event.evidence?.length ? (
+                                <div className="evidence-links">
+                                  {event.evidence.slice(0, 2).map((evidence) => (
+                                    <a href={artifactURL(evidence.path)} key={`${event.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
+                                      <Link2 size={13} />
+                                      {evidenceLabel(evidence)}
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+
                     {modelReviewTasks.length ? (
                       <div className="model-task-list">
                         {modelReviewTasks.map((task) => (
@@ -1075,6 +1143,7 @@ export function App() {
                   <div>
                     <strong>{event.title}</strong>
                     <small>{event.type}</small>
+                    {event.detail ? <p>{event.detail}</p> : null}
                   </div>
                 </div>
               ))}
@@ -1234,6 +1303,10 @@ function windowRange(window: ReviewWindow) {
 
 function roundRange(segment: RoundSegment) {
   return `${formatSeconds(segment.start_seconds)}-${formatSeconds(segment.end_seconds)}`;
+}
+
+function eventRange(event: GameplayEvent) {
+  return `${formatSeconds(event.start_seconds ?? event.timestamp_seconds)}-${formatSeconds(event.end_seconds ?? event.timestamp_seconds)}`;
 }
 
 function evidenceRangeLabel(start: number, count: number, total: number) {

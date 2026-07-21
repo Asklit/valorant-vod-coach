@@ -415,7 +415,7 @@ Current status:
 - Implemented in `vodctl analyze run`.
 - Smoke-tested on `iron_spudbud_01` with `--duration 60s --fps 1`; the run decoded 60/60 frames and selected 2 review windows.
 - Full-VOD smoke-tested on `iron_spudbud_01` with `--duration 0 --fps 0.5`; the run decoded 991/991 frames and selected 18 review windows.
-- Current report schema v7 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `round_segments`, `review_windows`, `model_review_tasks`, optional `model_review_runs`, `gameplay_review.json`, review clips, timeline events, findings, recommendations, confidence, and frame evidence. Real Qwen/VLM reasoning is still the next adapter stage.
+- Current report schema v8 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `round_segments`, `gameplay_events`, `review_windows`, `model_review_tasks`, optional `model_review_runs`, `gameplay_review.json`, review clips, timeline events, findings, recommendations, confidence, and frame evidence. Real Qwen/VLM reasoning is still the next adapter stage.
 
 ### Milestone 2: Frame Extraction
 

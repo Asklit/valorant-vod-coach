@@ -1153,6 +1153,93 @@ button {
   color: var(--green);
 }
 
+.gameplay-event-list {
+  display: grid;
+  gap: 10px;
+}
+
+.gameplay-event {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cyan);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.gameplay-event.severity-medium,
+.gameplay-event.severity-high,
+.gameplay-event.severity-critical {
+  border-left-color: var(--red);
+}
+
+.gameplay-event-time {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gameplay-event-time button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid rgba(255, 70, 85, 0.46);
+  border-radius: var(--radius);
+  background: rgba(255, 70, 85, 0.09);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.gameplay-event-time span,
+.gameplay-event-body span,
+.gameplay-event-meta small,
+.gameplay-event-meta strong {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.gameplay-event-body {
+  min-width: 0;
+}
+
+.gameplay-event-body h3 {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 920;
+  line-height: 1.2;
+}
+
+.gameplay-event-body p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.gameplay-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gameplay-event-meta strong {
+  color: var(--green);
+}
+
+.gameplay-event-meta small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .window-filter {
   display: flex;
   flex-wrap: wrap;
@@ -1406,6 +1493,15 @@ button {
   color: var(--text);
 }
 
+.finding-recommendation.compact {
+  margin-top: 9px;
+  padding: 8px;
+}
+
+.finding-recommendation.compact p {
+  font-size: 12px;
+}
+
 .evidence-links {
   display: flex;
   flex-wrap: wrap;
@@ -1475,6 +1571,13 @@ button {
 
 .timeline-event strong {
   font-size: 14px;
+}
+
+.timeline-event p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .evidence-controls {
@@ -1695,7 +1798,9 @@ button {
   }
 
   .coach-summary,
+  .gameplay-event,
   .review-window-head {
+    grid-template-columns: 1fr;
     flex-direction: column;
   }
 
