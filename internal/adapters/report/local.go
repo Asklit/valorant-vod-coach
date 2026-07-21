@@ -149,11 +149,35 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "\n")
 		}
 
+		if len(report.Gameplay.RoundSegments) > 0 {
+			fmt.Fprintf(&buf, "### Estimated Round Segments\n\n")
+			for _, segment := range report.Gameplay.RoundSegments {
+				fmt.Fprintf(&buf, "- Round %d: %.3fs - %.3fs", segment.RoundNumber, segment.StartSeconds, segment.EndSeconds)
+				if segment.DurationSeconds > 0 {
+					fmt.Fprintf(&buf, " (%.3fs)", segment.DurationSeconds)
+				}
+				if segment.Confidence > 0 {
+					fmt.Fprintf(&buf, " confidence %.0f%%", segment.Confidence*100)
+				}
+				if len(segment.ReviewWindowIDs) > 0 {
+					fmt.Fprintf(&buf, " windows `%s`", strings.Join(segment.ReviewWindowIDs, "`, `"))
+				}
+				if segment.Summary != "" {
+					fmt.Fprintf(&buf, " - %s", segment.Summary)
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
 		if len(report.Gameplay.ReviewWindows) > 0 {
 			for _, window := range report.Gameplay.ReviewWindows {
 				fmt.Fprintf(&buf, "### %s: %s\n\n", strings.ToUpper(string(window.Severity)), window.Title)
 				fmt.Fprintf(&buf, "- ID: `%s`\n", window.ID)
 				fmt.Fprintf(&buf, "- Kind: `%s`\n", window.Kind)
+				if window.RoundNumber > 0 {
+					fmt.Fprintf(&buf, "- Estimated round: %d\n", window.RoundNumber)
+				}
 				fmt.Fprintf(&buf, "- Window: %.3fs - %.3fs (peak %.3fs)\n", window.StartSeconds, window.EndSeconds, window.PeakSeconds)
 				fmt.Fprintf(&buf, "- Score: %.2f\n", window.Score)
 				if window.ClipPath != "" {

@@ -55,6 +55,7 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 ### Analysis
 
 - Produce a first report from heuristics before using a large vision model. The local MVP now does this with visual frame signals and selected gameplay review windows.
+- Build estimated round segments before OCR is available. The local MVP now groups review windows into `estimated_from_visual_timeline` segments with confidence and detection method metadata.
 - Add VLM analysis only for selected review windows.
 - Output findings in a consistent schema:
   - timestamp;
@@ -81,6 +82,7 @@ Implemented local UI slice:
 - play downloaded VOD files through the Go API;
 - run sample or full-VOD analysis from the browser;
 - show visual signal metrics, gameplay review windows, coach findings, timeline events, contact sheet, and sampled frame evidence;
+- show estimated round segments and their linked review windows;
 - jump from a review window to the matching timestamp in the local video player;
 - open generated mp4 clips for selected gameplay windows.
 

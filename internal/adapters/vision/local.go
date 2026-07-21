@@ -116,16 +116,20 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	classifyPhases(observations)
 	windows := buildReviewWindows(observations, maxWindows)
 	phaseProfile := buildPhaseProfile(observations)
+	roundSegments := buildRoundSegments(observations, windows, request)
+	windows = assignWindowRoundNumbers(windows, roundSegments)
 	summary.ReviewWindows = windows
 	summary.ReviewWindowCount = len(windows)
 	summary.PhaseProfile = phaseProfile
+	summary.RoundSegments = roundSegments
+	summary.RoundSegmentCount = len(roundSegments)
 	summary.Coach = buildCoachSummary(request, summary, phaseProfile, windows)
 	summary.FrameObservations = observations
 
 	return GameplayResult{
 		Summary:  summary,
 		Findings: buildGameplayFindings(request, summary),
-		Timeline: buildGameplayTimeline(windows),
+		Timeline: buildGameplayTimeline(windows, roundSegments),
 	}
 }
 
@@ -373,6 +377,175 @@ func buildPhaseProfile(observations []domain.FrameObservation) []domain.PhaseSta
 	return stats
 }
 
+func buildRoundSegments(observations []domain.FrameObservation, windows []domain.ReviewWindow, request app.ObservationRequest) []domain.RoundSegment {
+	if len(observations) == 0 {
+		return nil
+	}
+
+	first := observations[0].TimestampSeconds
+	last := observations[len(observations)-1].TimestampSeconds
+	total := math.Max(0, last-first)
+	roundCount := estimateRoundCount(total)
+	if roundCount <= 0 {
+		roundCount = 1
+	}
+
+	boundaries := make([]float64, 0, roundCount+1)
+	boundaries = append(boundaries, first)
+
+	snapQualityTotal := 0.55
+	snapCount := 1
+	if roundCount > 1 {
+		cadence := total / float64(roundCount)
+		for index := 1; index < roundCount; index++ {
+			target := first + cadence*float64(index)
+			boundary, quality := snapRoundBoundary(observations, target, math.Min(22, cadence*0.24))
+			minBoundary := boundaries[len(boundaries)-1] + math.Min(45, cadence*0.55)
+			maxBoundary := last - math.Min(30, cadence*0.38)
+			if boundary < minBoundary || boundary > maxBoundary {
+				boundary = target
+				quality = 0.35
+			}
+			boundaries = append(boundaries, round3(boundary))
+			snapQualityTotal += quality
+			snapCount++
+		}
+	}
+	boundaries = append(boundaries, last)
+
+	confidence := estimatedRoundConfidence(total, request.Sample.FPSValue, snapQualityTotal/float64(snapCount))
+	segments := make([]domain.RoundSegment, 0, roundCount)
+	for index := 0; index < len(boundaries)-1; index++ {
+		start := boundaries[index]
+		end := boundaries[index+1]
+		if end < start {
+			end = start
+		}
+		segmentFrames := observationsInRange(observations, start, end, index == len(boundaries)-2)
+		phaseProfile := buildPhaseProfile(segmentFrames)
+		windowIDs := reviewWindowIDsInRange(windows, start, end, index == len(boundaries)-2)
+		primaryPhase := dominantPhase(phaseProfile)
+		summary := fmt.Sprintf("Estimated from %s visual frames. Dominant phase: %s. Review windows: %d.", formatCoverage(end-start), primaryPhase, len(windowIDs))
+		segments = append(segments, domain.RoundSegment{
+			RoundNumber:     index + 1,
+			StartSeconds:    round3(start),
+			EndSeconds:      round3(end),
+			DurationSeconds: round3(end - start),
+			DetectionMethod: "estimated_from_visual_timeline",
+			Confidence:      confidence,
+			PhaseProfile:    phaseProfile,
+			ReviewWindowIDs: windowIDs,
+			Summary:         summary,
+		})
+	}
+
+	return segments
+}
+
+func estimateRoundCount(totalSeconds float64) int {
+	switch {
+	case totalSeconds <= 0:
+		return 1
+	case totalSeconds < 95:
+		return 1
+	case totalSeconds < 180:
+		return 2
+	}
+	return min(26, max(2, int(math.Round(totalSeconds/105))))
+}
+
+func snapRoundBoundary(observations []domain.FrameObservation, target, radius float64) (float64, float64) {
+	bestTimestamp := target
+	bestScore := -1.0
+	for _, observation := range observations {
+		if math.Abs(observation.TimestampSeconds-target) > radius {
+			continue
+		}
+		score := clamp01(1 - (observation.CombatSignal*0.62 + observation.MotionScore*0.38))
+		switch observation.Phase {
+		case "hold":
+			score = clamp01(score + 0.08)
+		case "midround":
+			score = clamp01(score + 0.03)
+		case "fight":
+			score = clamp01(score - 0.12)
+		}
+		if score > bestScore {
+			bestScore = score
+			bestTimestamp = observation.TimestampSeconds
+		}
+	}
+	if bestScore < 0 {
+		return target, 0.35
+	}
+	return bestTimestamp, bestScore
+}
+
+func estimatedRoundConfidence(totalSeconds, fpsValue, snapQuality float64) float64 {
+	coverageScore := clamp01(totalSeconds / (20 * 60))
+	fpsScore := clamp01(fpsValue)
+	confidence := 0.42 + coverageScore*0.16 + fpsScore*0.1 + clamp01(snapQuality)*0.2
+	return round4(math.Min(0.72, confidence))
+}
+
+func observationsInRange(observations []domain.FrameObservation, start, end float64, includeEnd bool) []domain.FrameObservation {
+	segment := make([]domain.FrameObservation, 0)
+	for _, observation := range observations {
+		if observation.TimestampSeconds < start {
+			continue
+		}
+		if observation.TimestampSeconds > end || (!includeEnd && observation.TimestampSeconds == end) {
+			continue
+		}
+		segment = append(segment, observation)
+	}
+	return segment
+}
+
+func reviewWindowIDsInRange(windows []domain.ReviewWindow, start, end float64, includeEnd bool) []string {
+	ids := make([]string, 0)
+	for _, window := range windows {
+		if window.PeakSeconds < start {
+			continue
+		}
+		if window.PeakSeconds > end || (!includeEnd && window.PeakSeconds == end) {
+			continue
+		}
+		ids = append(ids, window.ID)
+	}
+	return ids
+}
+
+func dominantPhase(phases []domain.PhaseStat) string {
+	if len(phases) == 0 {
+		return "unknown"
+	}
+	best := phases[0]
+	for _, phase := range phases[1:] {
+		if phase.Ratio > best.Ratio {
+			best = phase
+		}
+	}
+	return best.Phase
+}
+
+func assignWindowRoundNumbers(windows []domain.ReviewWindow, segments []domain.RoundSegment) []domain.ReviewWindow {
+	for windowIndex := range windows {
+		for segmentIndex, segment := range segments {
+			includeEnd := segmentIndex == len(segments)-1
+			if windows[windowIndex].PeakSeconds < segment.StartSeconds {
+				continue
+			}
+			if windows[windowIndex].PeakSeconds > segment.EndSeconds || (!includeEnd && windows[windowIndex].PeakSeconds == segment.EndSeconds) {
+				continue
+			}
+			windows[windowIndex].RoundNumber = segment.RoundNumber
+			break
+		}
+	}
+	return windows
+}
+
 func buildReviewWindows(observations []domain.FrameObservation, maxWindows int) []domain.ReviewWindow {
 	maxWindows = min(max(1, maxWindows), MaxReviewWindowsLimit)
 
@@ -615,6 +788,19 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 		})
 	}
 
+	if len(summary.RoundSegments) > 0 {
+		findings = append(findings, domain.Finding{
+			ID:             "gameplay_round_segments_estimated",
+			Severity:       domain.FindingSeverityInfo,
+			Category:       "round_timeline",
+			Title:          "Estimated round segments generated",
+			Detail:         fmt.Sprintf("Built %d estimated round segments from sampled visual activity. These segments are for navigation and review grouping, not OCR-confirmed score or timer state.", len(summary.RoundSegments)),
+			Recommendation: "Use round segments to review the match in order, then validate boundaries manually in the video player. The OCR stage should replace these estimates with timer and scoreboard-confirmed rounds.",
+			Confidence:     roundSegmentConfidence(summary.RoundSegments),
+			Tags:           []string{"rounds", "timeline", "estimated"},
+		})
+	}
+
 	combatWindows := windowsByKind(summary.ReviewWindows, "combat_spike")
 	if len(combatWindows) > 0 {
 		findings = append(findings, domain.Finding{
@@ -828,14 +1014,30 @@ func buildPracticePlan(focus []domain.CoachFocusArea) []domain.PracticeTask {
 	return tasks
 }
 
-func buildGameplayTimeline(windows []domain.ReviewWindow) []domain.TimelineEvent {
-	timeline := make([]domain.TimelineEvent, 0, len(windows))
+func buildGameplayTimeline(windows []domain.ReviewWindow, segments []domain.RoundSegment) []domain.TimelineEvent {
+	timeline := make([]domain.TimelineEvent, 0, len(windows)+len(segments))
+	for _, segment := range segments {
+		detail := fmt.Sprintf("%s / confidence %.0f%%", formatClockRange(segment.StartSeconds, segment.EndSeconds), segment.Confidence*100)
+		if len(segment.ReviewWindowIDs) > 0 {
+			detail = fmt.Sprintf("%s / windows %s", detail, strings.Join(segment.ReviewWindowIDs, ", "))
+		}
+		timeline = append(timeline, domain.TimelineEvent{
+			TimestampSeconds: segment.StartSeconds,
+			Type:             "estimated_round_segment",
+			Title:            fmt.Sprintf("Estimated round %d", segment.RoundNumber),
+			Detail:           detail,
+		})
+	}
 	for _, window := range windows {
+		detail := fmt.Sprintf("%s / score %.2f", formatClockRange(window.StartSeconds, window.EndSeconds), window.Score)
+		if window.RoundNumber > 0 {
+			detail = fmt.Sprintf("round %d / %s", window.RoundNumber, detail)
+		}
 		timeline = append(timeline, domain.TimelineEvent{
 			TimestampSeconds: window.PeakSeconds,
 			Type:             "gameplay_" + window.Kind,
 			Title:            window.Title,
-			Detail:           fmt.Sprintf("%s / score %.2f", formatClockRange(window.StartSeconds, window.EndSeconds), window.Score),
+			Detail:           detail,
 		})
 	}
 	return timeline
@@ -985,6 +1187,17 @@ func windowConfidence(windows []domain.ReviewWindow) float64 {
 	}
 	avgScore = avgScore / float64(len(windows))
 	return round4(clamp01(0.52 + avgScore*0.42))
+}
+
+func roundSegmentConfidence(segments []domain.RoundSegment) float64 {
+	if len(segments) == 0 {
+		return 0
+	}
+	var total float64
+	for _, segment := range segments {
+		total += segment.Confidence
+	}
+	return round4(total / float64(len(segments)))
 }
 
 func maxWindowScore(windows []domain.ReviewWindow) float64 {

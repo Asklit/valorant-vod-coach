@@ -65,6 +65,12 @@ func TestLocalGameplayAnalyzerBuildsReviewWindows(t *testing.T) {
 	if len(result.Gameplay.PhaseProfile) == 0 {
 		t.Fatalf("expected phase profile: %+v", result.Gameplay)
 	}
+	if len(result.Gameplay.RoundSegments) == 0 || result.Gameplay.RoundSegmentCount == 0 {
+		t.Fatalf("expected estimated round segments: %+v", result.Gameplay)
+	}
+	if result.Gameplay.ReviewWindows[0].RoundNumber == 0 {
+		t.Fatalf("expected review window round number: %+v", result.Gameplay.ReviewWindows[0])
+	}
 	if hasFinding(result.Findings, "baseline_ai_not_enabled") {
 		t.Fatalf("baseline AI placeholder finding should be removed")
 	}
@@ -73,6 +79,9 @@ func TestLocalGameplayAnalyzerBuildsReviewWindows(t *testing.T) {
 	}
 	if !hasFinding(result.Findings, "gameplay_review_ready") {
 		t.Fatalf("expected gameplay ready finding: %+v", result.Findings)
+	}
+	if !hasFinding(result.Findings, "gameplay_round_segments_estimated") {
+		t.Fatalf("expected round segment finding: %+v", result.Findings)
 	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Type != "gameplay_review" {
 		t.Fatalf("expected gameplay artifact: %+v", result.Artifacts)
