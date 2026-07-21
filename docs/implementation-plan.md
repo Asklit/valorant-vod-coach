@@ -353,6 +353,13 @@ The first useful version should not analyze every frame. It should sample broadl
 - Add health checks for infra containers.
 - Document local startup and reset commands.
 
+Current status:
+
+- `deployments/compose/docker-compose.yml` defines PostgreSQL, Redis, ClickHouse, Kafka in KRaft mode, MinIO, Temporal, OpenTelemetry Collector, Prometheus, Loki, Tempo, and Grafana.
+- `.env.example` documents local service URLs and credentials.
+- Grafana datasources are provisioned for Prometheus, Loki, and Tempo.
+- Migration roots exist for PostgreSQL and ClickHouse; actual schemas are still pending.
+
 ### Milestone 1: Dataset CLI
 
 - Add Go module.

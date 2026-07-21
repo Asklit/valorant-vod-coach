@@ -37,6 +37,7 @@ __pycache__/
 # Local config, logs, and coverage.
 .env
 .env.*
+!.env.example
 *.log
 *.out
 coverage.*
