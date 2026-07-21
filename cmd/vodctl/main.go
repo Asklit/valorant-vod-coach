@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -75,8 +76,8 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 	ffprobePath := fs.String("ffprobe", "ffprobe", "ffprobe executable path")
 	vodLabel := fs.String("vod", "", "manifest VOD label")
 	printJSON := fs.Bool("print-json", false, "print raw ffprobe JSON to stdout")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	if strings.TrimSpace(*vodLabel) == "" {
@@ -164,8 +165,8 @@ func runVideoSample(args []string, stdout, stderr io.Writer) int {
 	imageQuality := fs.Int("image-quality", 3, "ffmpeg JPEG quality, lower is better")
 	force := fs.Bool("force", false, "overwrite existing sample output")
 	timeoutRaw := fs.String("timeout", "10m", "ffmpeg command timeout")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	if strings.TrimSpace(*vodLabel) == "" {
@@ -287,8 +288,8 @@ func runDatasetValidate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("vodctl dataset validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	manifestPath := fs.String("manifest", defaultManifest, "path to TSV manifest")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	vods, err := dataset.LoadManifest(*manifestPath)
@@ -317,8 +318,8 @@ func runDatasetList(args []string, stdout, stderr io.Writer) int {
 	manifestPath := fs.String("manifest", defaultManifest, "path to TSV manifest")
 	rank := fs.String("rank", "", "rank filter")
 	enabledOnly := fs.Bool("enabled-only", true, "show only enabled VODs")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	vods, err := loadFilteredManifest(*manifestPath, *rank, *enabledOnly)
@@ -343,8 +344,8 @@ func runDatasetStatus(args []string, stdout, stderr io.Writer) int {
 	rawRoot := fs.String("raw-root", defaultRawRoot, "root directory for downloaded videos")
 	rank := fs.String("rank", "", "rank filter")
 	enabledOnly := fs.Bool("enabled-only", true, "show only enabled VODs")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	vods, err := loadFilteredManifest(*manifestPath, *rank, *enabledOnly)
@@ -394,6 +395,16 @@ func loadVODAndVideoPath(manifestPath, rawRoot, label string) (dataset.VOD, stri
 	}
 
 	return vod, videoPath, nil
+}
+
+func parseFlags(fs *flag.FlagSet, args []string) (bool, int) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return false, 0
+		}
+		return false, 2
+	}
+	return true, 0
 }
 
 func parseDurationArg(name, value string) (time.Duration, error) {
