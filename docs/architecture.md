@@ -23,7 +23,7 @@ Go API / Go workers / Python vision-service
       -> Grafana
 ```
 
-Detailed Mermaid diagrams are available in [system-diagrams.md](system-diagrams.md).
+Detailed Mermaid diagrams are available in [system-diagrams.md](system-diagrams.md). The repository layout and testing policy are documented in [project-structure.md](project-structure.md) and [testing-strategy.md](testing-strategy.md).
 
 ## Language Boundaries
 
@@ -66,22 +66,28 @@ The important rule is that external GPU providers must remain implementation det
 
 ## Proposed Layout
 
+The Go code follows a modular monolith with ports/adapters boundaries. See [project-structure.md](project-structure.md) for the full rationale.
+
 ```text
 cmd/
   vodctl/               # Go CLI
   vod-api/              # Go HTTP API
   vod-worker/           # Go Temporal worker
+  vod-outbox-relay/     # Go PostgreSQL outbox to Kafka relay
+  vod-clickhouse-sink/  # Go Kafka consumer for ClickHouse projections
 internal/
-  dataset/              # manifest parsing, local dataset metadata
-  db/                   # Postgres repositories
-  analytics/            # Kafka consumers, ClickHouse writers, analytical queries
-  storage/              # local FS and S3-compatible object storage
-  video/                # ffmpeg probing, frame extraction, clip slicing
-  workflows/            # Temporal workflow definitions
-  events/               # Kafka event publishing, consuming, and outbox relay
-  vision/               # Python vision-service client
-  analysis/             # timeline, mistake taxonomy, report assembly
-  observability/        # logging, metrics, tracing, health checks
+  domain/               # pure product concepts and rules
+  app/                  # application use cases and consumed ports
+  adapters/
+    dataset/            # manifest parsing, local dataset metadata
+    media/              # ffmpeg probing, frame extraction, clip slicing
+    postgres/           # Postgres repositories
+    clickhouse/         # ClickHouse writers and analytical queries
+    kafka/              # event publishing, consuming, outbox relay support
+    temporal/           # Temporal workflow definitions and activities
+    storage/            # local FS and S3-compatible object storage
+    vision/             # Python vision-service client
+  platform/             # config, logging, metrics, tracing, health checks
 ml/
   vision-service/       # Python/FastAPI OCR and VLM service
   prompts/              # prompt/eval fixtures

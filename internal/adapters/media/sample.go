@@ -1,4 +1,4 @@
-package video
+package media
 
 import (
 	"bytes"
@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/asklit/valorant-vod-coach/internal/dataset"
 )
 
 const FramesManifestName = "frames.json"
@@ -131,12 +129,12 @@ func RunSample(ctx context.Context, options SampleOptions) (SampleResult, error)
 	}, nil
 }
 
-func WriteFramesManifest(vod dataset.VOD, sampleName string, result SampleResult) (string, error) {
+func WriteFramesManifest(vod VODInfo, sampleName string, result SampleResult) (string, error) {
 	manifest := FramesManifest{
 		SchemaVersion: 1,
 		VODLabel:      vod.Label,
 		VideoID:       vod.VideoID,
-		Rank:          string(vod.Rank),
+		Rank:          vod.Rank,
 		SourcePath:    result.InputPath,
 		SampleName:    sampleName,
 		FPS:           result.FPS,
@@ -170,8 +168,8 @@ func WriteFramesManifest(vod dataset.VOD, sampleName string, result SampleResult
 	return path, nil
 }
 
-func SampleOutputDir(processedRoot string, vod dataset.VOD, sampleName string) string {
-	return filepath.Join(processedRoot, vod.Label, "frames", SafeArtifactName(sampleName))
+func SampleOutputDir(processedRoot string, vodLabel string, sampleName string) string {
+	return filepath.Join(processedRoot, vodLabel, "frames", SafeArtifactName(sampleName))
 }
 
 func DefaultSampleName(fps string, start, duration time.Duration) string {

@@ -1,4 +1,4 @@
-package video
+package media
 
 import (
 	"context"
