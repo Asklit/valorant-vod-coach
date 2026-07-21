@@ -16,6 +16,7 @@ flowchart LR
   cli[vodctl analyze run]
   ui[React Vite UI]
   api[vod-web Go API]
+  jobs[in-memory analysis jobs]
   runner[app.AnalysisRunner]
   resolver[dataset.LocalVODResolver]
   media[media.LocalProcessor]
@@ -24,6 +25,7 @@ flowchart LR
   sheet[ffmpeg contact sheet]
   vision[vision.LocalGameplayAnalyzer]
   gameplay[gameplay_review.json]
+  coach[coach summary<br/>focus areas / practice plan]
   report[report.LocalStore]
   raw[(data/raw/youtube)]
   processed[(data/processed)]
@@ -31,6 +33,8 @@ flowchart LR
   user --> cli
   user --> ui
   ui --> api
+  api --> jobs
+  jobs --> runner
   api --> raw
   cli --> runner
   api --> runner
@@ -44,7 +48,9 @@ flowchart LR
   media --> processed
   runner --> vision
   vision --> gameplay
+  vision --> coach
   gameplay --> processed
+  coach --> report
   runner --> report
   report --> processed
 ```

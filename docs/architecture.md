@@ -40,6 +40,7 @@ vodctl analyze run
       -> vision.LocalGameplayAnalyzer
           -> visual frame signal extraction
           -> gameplay review window selection
+          -> coach summary, focus areas, phase profile, practice plan
           -> gameplay_review.json
       -> report.LocalStore
           -> report.json
@@ -53,7 +54,7 @@ This local command intentionally uses the same boundaries as the future service 
 - contact sheet generation is part of the media adapter and becomes a first UI evidence artifact;
 - report schema lives in `internal/domain`;
 - orchestration lives in `internal/app`;
-- the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, selects review windows, and emits recommendations, confidence, timeline events, and evidence references;
+- the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
 - AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can replace or enrich this analyzer without changing the CLI/API/UI report contract.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.
@@ -61,6 +62,7 @@ The first UI slice is `web/app` plus `cmd/vod-web`.
 ```text
 React/Vite UI
   -> Go vod-web API
+      -> in-memory async analysis jobs
       -> dataset manifest and local video inventory
       -> local video streaming by VOD label
       -> app.AnalysisRunner

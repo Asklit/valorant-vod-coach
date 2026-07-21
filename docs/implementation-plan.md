@@ -399,6 +399,7 @@ Current status:
 - Extract a configurable low-frequency frame sample.
 - Generate a deterministic visual heuristic gameplay report before using a VLM.
 - Decode sampled frames, compute visual signals, and select gameplay review windows.
+- Build a coach summary with focus areas, phase profile, and practice plan.
 - Save `report.json` and `report.md` under `data/processed/<vod_label>/reports/<run_id>/`.
 - Keep the analyzer behind a port so the Python Qwen/VLM service can replace or augment it.
 
@@ -406,7 +407,8 @@ Current status:
 
 - Implemented in `vodctl analyze run`.
 - Smoke-tested on `iron_spudbud_01` with `--duration 60s --fps 1`; the run decoded 60/60 frames and selected 2 review windows.
-- Current report includes `gameplay`, `review_windows`, `gameplay_review.json`, timeline events, findings, recommendations, confidence, and frame evidence. Qwen/VLM reasoning is still the next adapter stage.
+- Full-VOD smoke-tested on `iron_spudbud_01` with `--duration 0 --fps 0.5`; the run decoded 991/991 frames and selected 18 review windows.
+- Current report schema v3 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `review_windows`, `gameplay_review.json`, timeline events, findings, recommendations, confidence, and frame evidence. Qwen/VLM reasoning is still the next adapter stage.
 
 ### Milestone 2: Frame Extraction
 
@@ -421,9 +423,10 @@ Current status:
 - Add a Go HTTP API server for local MVP interaction.
 - Show VOD library, ranks, local download status, report readiness, and latest report.
 - Run visual gameplay analysis from the UI.
+- Run long analysis through async API jobs and poll job status.
 - List generated report runs for the selected VOD.
 - Switch between existing reports without rerunning analysis.
-- Show gameplay review windows, signal metrics, findings, timeline events, media stats, contact sheet, and sampled frame evidence.
+- Show gameplay review windows, coach priorities, practice plan, phase profile, signal metrics, findings, timeline events, media stats, contact sheet, and sampled frame evidence.
 - Jump from a review window to the matching VOD timestamp.
 
 Current status:

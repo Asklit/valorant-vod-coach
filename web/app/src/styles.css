@@ -647,6 +647,46 @@ button {
   box-shadow: none;
 }
 
+.analysis-job {
+  display: grid;
+  gap: 4px;
+  min-height: 62px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(40, 215, 255, 0.28);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.055);
+}
+
+.analysis-job span,
+.analysis-job small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.analysis-job strong {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 920;
+}
+
+.analysis-job.status-running {
+  border-color: rgba(255, 70, 85, 0.44);
+  background: rgba(255, 70, 85, 0.07);
+}
+
+.analysis-job.status-completed {
+  border-color: rgba(183, 255, 74, 0.36);
+  background: rgba(183, 255, 74, 0.055);
+}
+
+.analysis-job.status-failed {
+  border-color: rgba(255, 200, 87, 0.42);
+  background: rgba(255, 200, 87, 0.07);
+}
+
 .pipeline-track {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -807,6 +847,159 @@ button {
   display: grid;
   gap: 12px;
   margin-top: 14px;
+}
+
+.coach-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 108px;
+  padding: 15px;
+  border: 1px solid rgba(40, 215, 255, 0.3);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.055);
+}
+
+.coach-verdict {
+  min-width: 0;
+}
+
+.coach-verdict span,
+.focus-card span,
+.practice-task span {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.coach-verdict h3,
+.focus-card h3,
+.practice-task h3 {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  font-weight: 920;
+  line-height: 1.18;
+}
+
+.coach-verdict p,
+.focus-card p,
+.practice-task p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.coach-summary > strong {
+  flex: 0 0 auto;
+  color: var(--green);
+  font-size: 22px;
+  font-weight: 950;
+}
+
+.focus-grid,
+.practice-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.focus-card,
+.practice-task {
+  min-height: 128px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.focus-card.priority-high {
+  border-color: rgba(255, 70, 85, 0.48);
+}
+
+.focus-card.priority-medium {
+  border-color: rgba(255, 200, 87, 0.36);
+}
+
+.focus-card small {
+  display: block;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.phase-profile {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.phase-row {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+}
+
+.phase-row span,
+.phase-row strong {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.phase-row strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.phase-row div {
+  overflow: hidden;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.phase-row i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--red), var(--cyan));
+}
+
+.window-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.window-filter button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.window-filter button.active {
+  border-color: rgba(40, 215, 255, 0.66);
+  background: rgba(40, 215, 255, 0.11);
+  color: var(--text);
 }
 
 .signal-grid {
@@ -1236,6 +1429,11 @@ button {
   .frame-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .focus-grid,
+  .practice-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1284,10 +1482,17 @@ button {
   .secondary-grid,
   .vod-intel,
   .report-stats,
+  .focus-grid,
+  .practice-list,
   .signal-grid,
   .pipeline-track,
   .frame-grid {
     grid-template-columns: 1fr;
+  }
+
+  .coach-summary,
+  .review-window-head {
+    flex-direction: column;
   }
 
   .topbar h1 {

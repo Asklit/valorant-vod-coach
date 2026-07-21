@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 2
+const AnalysisReportSchemaVersion = 3
 
 type Rank string
 
@@ -100,9 +100,43 @@ type GameplaySummary struct {
 	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
 	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
 	PeakCombatScore      float64            `json:"peak_combat_score,omitempty"`
+	Coach                *CoachSummary      `json:"coach,omitempty"`
+	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
 	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
 	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
 	Notes                []string           `json:"notes,omitempty"`
+}
+
+type CoachSummary struct {
+	Verdict         string           `json:"verdict"`
+	Confidence      float64          `json:"confidence"`
+	CoverageSeconds float64          `json:"coverage_seconds,omitempty"`
+	FocusAreas      []CoachFocusArea `json:"focus_areas,omitempty"`
+	PracticePlan    []PracticeTask   `json:"practice_plan,omitempty"`
+}
+
+type CoachFocusArea struct {
+	ID        string   `json:"id"`
+	Priority  string   `json:"priority"`
+	Category  string   `json:"category"`
+	Title     string   `json:"title"`
+	Detail    string   `json:"detail"`
+	Score     float64  `json:"score"`
+	WindowIDs []string `json:"window_ids,omitempty"`
+}
+
+type PracticeTask struct {
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	Detail  string   `json:"detail"`
+	Cadence string   `json:"cadence"`
+	Tags    []string `json:"tags,omitempty"`
+}
+
+type PhaseStat struct {
+	Phase string  `json:"phase"`
+	Count int     `json:"count"`
+	Ratio float64 `json:"ratio"`
 }
 
 type FrameObservation struct {

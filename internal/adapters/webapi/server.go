@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
@@ -34,6 +35,7 @@ type Config struct {
 type Server struct {
 	config Config
 	mux    *http.ServeMux
+	jobs   *analysisJobStore
 }
 
 type VODItem struct {
@@ -78,6 +80,7 @@ type AnalyzeRequest struct {
 	DurationSeconds *float64 `json:"duration_seconds"`
 	ImageQuality    int      `json:"image_quality"`
 	Force           bool     `json:"force"`
+	Async           bool     `json:"async,omitempty"`
 }
 
 type AnalyzeResponse struct {
@@ -85,6 +88,31 @@ type AnalyzeResponse struct {
 	ReportJSON   string                `json:"report_json"`
 	ReportMD     string                `json:"report_md"`
 	ArtifactBase string                `json:"artifact_base"`
+}
+
+type AnalysisJobResponse struct {
+	JobID        string                 `json:"job_id"`
+	RunID        string                 `json:"run_id"`
+	VODLabel     string                 `json:"vod_label"`
+	Status       string                 `json:"status"`
+	Message      string                 `json:"message,omitempty"`
+	CreatedAt    time.Time              `json:"created_at"`
+	StartedAt    *time.Time             `json:"started_at,omitempty"`
+	FinishedAt   *time.Time             `json:"finished_at,omitempty"`
+	Error        string                 `json:"error,omitempty"`
+	Report       *domain.AnalysisReport `json:"report,omitempty"`
+	ReportJSON   string                 `json:"report_json,omitempty"`
+	ReportMD     string                 `json:"report_md,omitempty"`
+	ArtifactBase string                 `json:"artifact_base"`
+}
+
+type analysisJob struct {
+	AnalysisJobResponse
+}
+
+type analysisJobStore struct {
+	mu   sync.RWMutex
+	jobs map[string]*analysisJob
 }
 
 type ReportListResponse struct {
@@ -130,7 +158,7 @@ func NewServer(config Config) *Server {
 		config.FFmpegPath = "ffmpeg"
 	}
 
-	server := &Server{config: config, mux: http.NewServeMux()}
+	server := &Server{config: config, mux: http.NewServeMux(), jobs: &analysisJobStore{jobs: map[string]*analysisJob{}}}
 	server.routes()
 	return server
 }
@@ -153,6 +181,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
+	s.mux.HandleFunc("GET /api/analysis-runs/", s.handleAnalysisJob)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
@@ -292,55 +321,37 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
-	if strings.TrimSpace(request.VODLabel) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
+	durationSeconds, err := normalizeAnalyzeRequest(&request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if request.FPS == "" {
-		request.FPS = "1"
-	}
-	durationSeconds := 180.0
-	if request.DurationSeconds != nil {
-		durationSeconds = *request.DurationSeconds
-	}
-	if durationSeconds < 0 {
-		writeError(w, http.StatusBadRequest, errors.New("duration_seconds must be non-negative"))
+
+	if request.Async {
+		now := time.Now().UTC()
+		if strings.TrimSpace(request.RunID) == "" {
+			request.RunID = app.DefaultRunID(now)
+		}
+		jobID := newAnalysisJobID(request.RunID, now)
+		job := &analysisJob{AnalysisJobResponse: AnalysisJobResponse{
+			JobID:        jobID,
+			RunID:        request.RunID,
+			VODLabel:     request.VODLabel,
+			Status:       "queued",
+			Message:      "Analysis job queued",
+			CreatedAt:    now,
+			ArtifactBase: "/artifacts/",
+		}}
+		s.jobs.put(job)
+		go s.runAnalysisJob(jobID, request, durationSeconds)
+		writeJSON(w, http.StatusAccepted, s.jobs.snapshot(jobID))
 		return
-	}
-	if request.ImageQuality <= 0 {
-		request.ImageQuality = 3
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
-	runner := app.AnalysisRunner{
-		Resolver: dataset.LocalVODResolver{
-			ManifestPath: s.config.ManifestPath,
-			RawRoot:      s.config.RawRoot,
-		},
-		Media: media.LocalProcessor{
-			FFprobePath:   s.config.FFprobePath,
-			FFmpegPath:    s.config.FFmpegPath,
-			ProcessedRoot: s.config.ProcessedRoot,
-			ProbeTimeout:  30 * time.Second,
-			SampleTimeout: 10 * time.Minute,
-		},
-		Analyzer: vision.LocalGameplayAnalyzer{},
-		Reports: reportstore.LocalStore{
-			ProcessedRoot: s.config.ProcessedRoot,
-		},
-	}
-
-	result, err := runner.Run(ctx, app.RunAnalysisRequest{
-		VODLabel:     request.VODLabel,
-		RunID:        request.RunID,
-		FPS:          request.FPS,
-		Start:        secondsDuration(request.StartSeconds),
-		Duration:     secondsDuration(durationSeconds),
-		ImageQuality: request.ImageQuality,
-		Overwrite:    request.Force,
-	})
+	result, err := s.runLocalAnalysis(ctx, request, durationSeconds)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -351,6 +362,82 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		ReportJSON:   result.Saved.JSONPath,
 		ReportMD:     result.Saved.MarkdownPath,
 		ArtifactBase: "/artifacts/",
+	})
+}
+
+func (s *Server) handleAnalysisJob(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/analysis-runs/"), "/")
+	if jobID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("job id is required"))
+		return
+	}
+
+	job, ok := s.jobs.get(jobID)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("analysis job not found: %s", jobID))
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) runAnalysisJob(jobID string, request AnalyzeRequest, durationSeconds float64) {
+	startedAt := time.Now().UTC()
+	s.jobs.update(jobID, func(job *analysisJob) {
+		job.Status = "running"
+		job.Message = "Analyzing VOD"
+		job.StartedAt = &startedAt
+	})
+
+	overallTimeout, _ := analysisTimeouts(durationSeconds)
+	ctx, cancel := context.WithTimeout(context.Background(), overallTimeout)
+	defer cancel()
+
+	result, err := s.runLocalAnalysis(ctx, request, durationSeconds)
+	finishedAt := time.Now().UTC()
+	s.jobs.update(jobID, func(job *analysisJob) {
+		job.FinishedAt = &finishedAt
+		if err != nil {
+			job.Status = "failed"
+			job.Message = "Analysis failed"
+			job.Error = err.Error()
+			return
+		}
+		job.Status = "completed"
+		job.Message = "Analysis completed"
+		job.Report = &result.Report
+		job.ReportJSON = result.Saved.JSONPath
+		job.ReportMD = result.Saved.MarkdownPath
+	})
+}
+
+func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, durationSeconds float64) (app.RunAnalysisResult, error) {
+	_, sampleTimeout := analysisTimeouts(durationSeconds)
+	runner := app.AnalysisRunner{
+		Resolver: dataset.LocalVODResolver{
+			ManifestPath: s.config.ManifestPath,
+			RawRoot:      s.config.RawRoot,
+		},
+		Media: media.LocalProcessor{
+			FFprobePath:   s.config.FFprobePath,
+			FFmpegPath:    s.config.FFmpegPath,
+			ProcessedRoot: s.config.ProcessedRoot,
+			ProbeTimeout:  30 * time.Second,
+			SampleTimeout: sampleTimeout,
+		},
+		Analyzer: vision.LocalGameplayAnalyzer{},
+		Reports: reportstore.LocalStore{
+			ProcessedRoot: s.config.ProcessedRoot,
+		},
+	}
+
+	return runner.Run(ctx, app.RunAnalysisRequest{
+		VODLabel:     request.VODLabel,
+		RunID:        request.RunID,
+		FPS:          request.FPS,
+		Start:        secondsDuration(request.StartSeconds),
+		Duration:     secondsDuration(durationSeconds),
+		ImageQuality: request.ImageQuality,
+		Overwrite:    request.Force,
 	})
 }
 
@@ -497,6 +584,83 @@ func readReport(path string) (domain.AnalysisReport, error) {
 		return domain.AnalysisReport{}, err
 	}
 	return report, nil
+}
+
+func normalizeAnalyzeRequest(request *AnalyzeRequest) (float64, error) {
+	if strings.TrimSpace(request.VODLabel) == "" {
+		return 0, errors.New("vod_label is required")
+	}
+	if request.FPS == "" {
+		request.FPS = "1"
+	}
+	durationSeconds := 180.0
+	if request.DurationSeconds != nil {
+		durationSeconds = *request.DurationSeconds
+	}
+	if durationSeconds < 0 {
+		return 0, errors.New("duration_seconds must be non-negative")
+	}
+	if request.ImageQuality <= 0 {
+		request.ImageQuality = 3
+	}
+	return durationSeconds, nil
+}
+
+func analysisTimeouts(durationSeconds float64) (time.Duration, time.Duration) {
+	if durationSeconds == 0 || durationSeconds > 10*60 {
+		return 50 * time.Minute, 45 * time.Minute
+	}
+	return 15 * time.Minute, 10 * time.Minute
+}
+
+func newAnalysisJobID(runID string, now time.Time) string {
+	value := strings.TrimSpace(runID)
+	if value == "" {
+		value = "analysis"
+	}
+	value = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, value)
+	value = strings.Trim(value, "_-")
+	if value == "" {
+		value = "analysis"
+	}
+	return fmt.Sprintf("job_%s_%s", value, strconv.FormatInt(now.UnixNano(), 36))
+}
+
+func (s *analysisJobStore) put(job *analysisJob) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jobs[job.JobID] = job
+}
+
+func (s *analysisJobStore) get(jobID string) (AnalysisJobResponse, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return AnalysisJobResponse{}, false
+	}
+	return job.AnalysisJobResponse, true
+}
+
+func (s *analysisJobStore) snapshot(jobID string) AnalysisJobResponse {
+	job, ok := s.get(jobID)
+	if !ok {
+		return AnalysisJobResponse{}
+	}
+	return job
+}
+
+func (s *analysisJobStore) update(jobID string, mutate func(*analysisJob)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if job, ok := s.jobs[jobID]; ok {
+		mutate(job)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
