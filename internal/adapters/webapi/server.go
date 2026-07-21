@@ -211,11 +211,35 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	configured := strings.TrimSpace(s.config.VisionURL) != ""
+	available := false
+	visionStatus := map[string]any{
+		"configured": configured,
+	}
+	if configured {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		status, err := (visionservice.Client{
+			BaseURL:    s.config.VisionURL,
+			HTTPClient: &http.Client{Timeout: time.Second},
+		}).Health(ctx)
+		if err != nil {
+			visionStatus["error"] = err.Error()
+		} else {
+			available = strings.EqualFold(status.Status, "ok")
+			visionStatus["status"] = status.Status
+			visionStatus["model"] = status.Model
+			visionStatus["mode"] = status.Mode
+			visionStatus["runtime"] = status.Runtime
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":                 "ok",
-		"schema_version":         domain.AnalysisReportSchemaVersion,
-		"analyzer":               "visual-heuristic-gameplay",
-		"model_review_available": strings.TrimSpace(s.config.VisionURL) != "",
+		"status":                  "ok",
+		"schema_version":          domain.AnalysisReportSchemaVersion,
+		"analyzer":                "visual-heuristic-gameplay",
+		"model_review_configured": configured,
+		"model_review_available":  available,
+		"vision_service":          visionStatus,
 	})
 }
 

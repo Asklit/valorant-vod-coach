@@ -67,7 +67,7 @@ This local command intentionally uses the same boundaries as the future service 
 - round segments use `detection_method=estimated_from_visual_timeline`; they are useful for navigation and grouping, but OCR-confirmed timer/score boundaries remain the next detection stage;
 - selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
 - model review tasks are generated after clips exist and include prompt version, model hint, clip path, evidence, context, questions, and expected JSON output shape;
-- model review execution is behind the `ModelReviewer` port; the current Python service is a deterministic contract stub, and Qwen/VLM inference can replace its internals without changing the Go API/UI report contract.
+- model review execution is behind the `ModelReviewer` port; the current Python service is a dependency-free deterministic HTTP contract stub, and Qwen/VLM inference can replace its internals without changing the Go API/UI report contract.
 - coarse visual analysis is still behind `ObservationAnalyzer`, so OCR/timeline detection can enrich or replace the local heuristic analyzer later.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.
@@ -148,10 +148,11 @@ internal/
     kafka/              # event publishing, consuming, outbox relay support
     temporal/           # Temporal workflow definitions and activities
     storage/            # local FS and S3-compatible object storage
-    vision/             # Python vision-service client
+    vision/             # local visual heuristic analyzer
+    visionservice/      # Python vision-service HTTP client
   platform/             # config, logging, metrics, tracing, health checks
 ml/
-  vision-service/       # Python/FastAPI OCR and VLM service
+  vision-service/       # Python OCR and VLM service boundary
   prompts/              # prompt/eval fixtures
 web/
   app/                  # React/TypeScript UI
@@ -164,6 +165,7 @@ data/
   processed/            # ignored local frames, clips, OCR, timelines
 scripts/
   download_vods.sh      # local dataset bootstrap
+  run_vision_service.sh # local dependency-free vision-service stub
 ```
 
 ## Dataset Rules

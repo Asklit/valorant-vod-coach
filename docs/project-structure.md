@@ -60,6 +60,8 @@ internal/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling
     report/                       # local JSON/Markdown report persistence
+    vision/                       # local visual heuristic analyzer
+    visionservice/                # HTTP client for Python model-review service
     webapi/                       # local HTTP API for React UI
   platform/                       # config/logging/observability/runtime helpers
 
@@ -67,6 +69,7 @@ scripts/
   download_vods.sh                # dataset download helper
   benchmark_video.sh              # shell media benchmark helper
   check_git_index.sh              # pre-commit safety check for large/generated files
+  run_vision_service.sh           # dependency-free local Python vision-service stub
 
 docs/                             # architecture and project decisions
 data/
@@ -122,7 +125,7 @@ internal/
     health/
 
 ml/
-  vision-service/                 # Python FastAPI OCR/CV/VLM service
+  vision-service/                 # Python OCR/CV/VLM service boundary
   prompts/
   evals/
 

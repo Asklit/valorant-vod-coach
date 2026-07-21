@@ -183,7 +183,9 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 7`) ||
 		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
-		!strings.Contains(got, `"model_review_available": false`) {
+		!strings.Contains(got, `"model_review_configured": false`) ||
+		!strings.Contains(got, `"model_review_available": false`) ||
+		!strings.Contains(got, `"configured": false`) {
 		t.Fatalf("unexpected health response:\n%s", got)
 	}
 }

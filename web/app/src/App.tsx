@@ -63,7 +63,18 @@ type BackendHealth = {
   status: string;
   schema_version?: number;
   analyzer?: string;
+  model_review_configured?: boolean;
   model_review_available?: boolean;
+  vision_service?: VisionServiceHealth;
+};
+
+type VisionServiceHealth = {
+  configured?: boolean;
+  status?: string;
+  model?: string;
+  mode?: string;
+  runtime?: string;
+  error?: string;
 };
 
 type Finding = {
@@ -526,6 +537,17 @@ export function App() {
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
   const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 7 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
   const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
+  const modelReviewConfigured = Boolean(backendHealth?.model_review_configured);
+  const visionStatusLabel = modelReviewAvailable
+    ? `${backendHealth?.vision_service?.model || "vision-service"} / ${backendHealth?.vision_service?.runtime || backendHealth?.vision_service?.mode || "online"}`
+    : modelReviewConfigured
+      ? "Vision service offline"
+      : "Vision service not configured";
+  const modelReviewTitle = modelReviewAvailable
+    ? "Run model review through vision-service"
+    : modelReviewConfigured
+      ? backendHealth?.vision_service?.error || "Vision service is configured but not reachable"
+      : "Start vod-web with --vision-url or VISION_SERVICE_URL";
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -710,10 +732,14 @@ export function App() {
                 <input checked={fullVod} onChange={(event) => setFullVod(event.target.checked)} type="checkbox" />
                 <span>Full VOD</span>
               </label>
-              <label className={modelReviewAvailable ? "toggle-control" : "toggle-control disabled"} title={modelReviewAvailable ? "Run model review through vision-service" : "Start vod-web with --vision-url or VISION_SERVICE_URL"}>
+              <label className={modelReviewAvailable ? "toggle-control" : "toggle-control disabled"} title={modelReviewTitle}>
                 <input checked={modelReview && modelReviewAvailable} disabled={!modelReviewAvailable} onChange={(event) => setModelReview(event.target.checked)} type="checkbox" />
                 <span>Model review</span>
               </label>
+              <div className={modelReviewAvailable ? "vision-status online" : "vision-status"} title={modelReviewTitle}>
+                <Radar size={14} />
+                <span>{visionStatusLabel}</span>
+              </div>
               <button className="run-button" disabled={!selectedVod || selectedVod.local_status !== "downloaded" || analyzing} onClick={() => void runAnalysis()} type="button">
                 <Play size={18} fill="currentColor" />
                 {analyzing ? "Analyzing" : fullVod ? "Run full VOD" : "Run analysis"}

@@ -83,6 +83,29 @@ func TestClientReviewsModelTasks(t *testing.T) {
 	}
 }
 
+func TestClientChecksHealth(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/health" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		raw := []byte(`{"status":"ok","model":"stub-heuristic-vlm","mode":"stub","runtime":"stdlib-http"}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(raw)),
+		}, nil
+	})}
+
+	status, err := (Client{BaseURL: "http://vision-service.test", HTTPClient: httpClient}).Health(context.Background())
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+
+	if status.Status != "ok" || status.Model != "stub-heuristic-vlm" || status.Runtime != "stdlib-http" {
+		t.Fatalf("unexpected health status: %+v", status)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

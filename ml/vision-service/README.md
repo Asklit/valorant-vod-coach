@@ -1,10 +1,25 @@
 # Vision Service
 
-FastAPI boundary for OCR/CV/VLM work.
+Python boundary for OCR/CV/VLM work.
 
 Current mode is a deterministic stub. It validates the `model_review_tasks` contract and returns structured placeholder findings. Replace `app/reviewer.py` with Qwen/VLM inference while keeping the HTTP contract stable.
 
 ## Run
+
+Dependency-free local MVP server:
+
+```sh
+cd ../..
+./scripts/run_vision_service.sh
+```
+
+Or run the module directly:
+
+```sh
+PYTHONPATH=ml/vision-service python3 -m app.server --host 127.0.0.1 --port 8091
+```
+
+FastAPI entrypoint for the future production-style service:
 
 ```sh
 cd ml/vision-service

@@ -8,5 +8,8 @@ dependencies = [
   "uvicorn[standard]>=0.30.0",
 ]
 
+[project.scripts]
+valorant-vision-service = "app.server:main"
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
