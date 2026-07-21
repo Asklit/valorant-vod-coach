@@ -1,0 +1,37 @@
+# Raw datasets are local-only. Keep only directory placeholders in git.
+data/raw/**
+!data/raw/
+!data/raw/.gitkeep
+!data/raw/youtube/
+!data/raw/youtube/.gitkeep
+
+# Generated pipeline artifacts.
+data/processed/
+data/cache/
+
+# Local build outputs and tool caches.
+.cache/
+bin/
+
+# Large media files should never be committed.
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.flv
+*.ts
+
+# Temporary download files.
+*.part
+*.ytdl
+*.tmp
+
+# Local config, logs, and coverage.
+.env
+.env.*
+*.log
+*.out
+coverage.*
+
+.DS_Store
