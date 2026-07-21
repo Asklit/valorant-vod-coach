@@ -100,7 +100,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 6`) ||
+		!strings.Contains(got, `"schema_version": 7`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
 	}
@@ -154,6 +154,23 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	}
 }
 
+func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"model_review_missing_url","fps":"1","duration_seconds":5,"force":true,"model_review":true}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, "vision service URL is not configured") {
+		t.Fatalf("unexpected response:\n%s", got)
+	}
+}
+
 func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	server := NewServer(Config{})
 
@@ -164,8 +181,9 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 6`) ||
-		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) {
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 7`) ||
+		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
+		!strings.Contains(got, `"model_review_available": false`) {
 		t.Fatalf("unexpected health response:\n%s", got)
 	}
 }

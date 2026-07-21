@@ -48,6 +48,9 @@ vodctl analyze run
           -> review_clips.json
       -> app.BuildModelReviewTasks
           -> Qwen/VLM-ready task and prompt payloads
+      -> visionservice.Client (optional)
+          -> Python vision-service /v1/model-review
+          -> model review results and findings
       -> report.LocalStore
           -> report.json
           -> report.md
@@ -64,7 +67,8 @@ This local command intentionally uses the same boundaries as the future service 
 - round segments use `detection_method=estimated_from_visual_timeline`; they are useful for navigation and grouping, but OCR-confirmed timer/score boundaries remain the next detection stage;
 - selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
 - model review tasks are generated after clips exist and include prompt version, model hint, clip path, evidence, context, questions, and expected JSON output shape;
-- AI analysis is behind `ObservationAnalyzer`, so a Python Qwen/VLM client can replace or enrich this analyzer without changing the CLI/API/UI report contract.
+- model review execution is behind the `ModelReviewer` port; the current Python service is a deterministic contract stub, and Qwen/VLM inference can replace its internals without changing the Go API/UI report contract.
+- coarse visual analysis is still behind `ObservationAnalyzer`, so OCR/timeline detection can enrich or replace the local heuristic analyzer later.
 
 The first UI slice is `web/app` plus `cmd/vod-web`.
 

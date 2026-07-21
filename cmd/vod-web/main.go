@@ -16,6 +16,7 @@ func main() {
 	processedRoot := flag.String("processed-root", "data/processed", "root directory for generated artifacts")
 	ffprobePath := flag.String("ffprobe", "ffprobe", "ffprobe executable path")
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable path")
+	visionURL := flag.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "optional vision-service base URL; can also be set through VISION_SERVICE_URL")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
@@ -26,6 +27,7 @@ func main() {
 		ProcessedRoot: *processedRoot,
 		FFprobePath:   *ffprobePath,
 		FFmpegPath:    *ffmpegPath,
+		VisionURL:     *visionURL,
 		StaticDir:     *staticDir,
 	})
 

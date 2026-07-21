@@ -15,6 +15,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
@@ -87,6 +88,8 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	durationRaw := fs.String("duration", "180s", "sample duration; use 0 for full input")
 	imageQuality := fs.Int("image-quality", 3, "ffmpeg JPEG quality, lower is better")
 	force := fs.Bool("force", false, "overwrite existing sample and report artifacts")
+	modelReview := fs.Bool("model-review", false, "send generated model review tasks to the configured vision service")
+	visionURL := fs.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "vision service base URL; can also be set through VISION_SERVICE_URL")
 	timeoutRaw := fs.String("timeout", "15m", "overall analysis timeout")
 	probeTimeoutRaw := fs.String("probe-timeout", "30s", "ffprobe command timeout")
 	sampleTimeoutRaw := fs.String("sample-timeout", "10m", "ffmpeg sample command timeout")
@@ -148,6 +151,10 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--sample-timeout must be positive")
 		return 2
 	}
+	if *modelReview && strings.TrimSpace(*visionURL) == "" {
+		fmt.Fprintln(stderr, "--vision-url or VISION_SERVICE_URL is required when --model-review is enabled")
+		return 2
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -169,6 +176,9 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 			ProcessedRoot: *outRoot,
 		},
 	}
+	if *modelReview {
+		runner.Reviewer = visionservice.Client{BaseURL: *visionURL}
+	}
 
 	result, err := runner.Run(ctx, app.RunAnalysisRequest{
 		VODLabel:     *vodLabel,
@@ -179,6 +189,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		Duration:     duration,
 		ImageQuality: *imageQuality,
 		Overwrite:    *force,
+		ModelReview:  *modelReview,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
@@ -186,14 +197,15 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tCLIPS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
-	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n",
+	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tCLIPS\tMODEL_RUNS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n",
 		result.Report.VOD.Label,
 		result.Report.RunID,
 		result.Report.Status,
 		result.Report.Sample.FrameCount,
 		reviewWindowCount(result.Report.Gameplay),
 		artifactCount(result.Report.Artifacts, "review_clip"),
+		modelReviewRunCount(result.Report.Gameplay),
 		len(result.Report.Findings),
 		result.Report.Sample.ContactSheetPath,
 		result.Saved.JSONPath,
@@ -208,6 +220,13 @@ func reviewWindowCount(gameplay *domain.GameplaySummary) int {
 		return 0
 	}
 	return gameplay.ReviewWindowCount
+}
+
+func modelReviewRunCount(gameplay *domain.GameplaySummary) int {
+	if gameplay == nil {
+		return 0
+	}
+	return gameplay.ModelReviewRunCount
 }
 
 func artifactCount(artifacts []domain.Artifact, artifactType string) int {
@@ -666,11 +685,12 @@ Commands:
 
 func printAnalyzeUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
-  vodctl analyze run --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffprobe path] [--ffmpeg path] [--run-id id] [--sample-name name] [--fps n] [--start duration] [--duration duration] [--force]
+  vodctl analyze run --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffprobe path] [--ffmpeg path] [--run-id id] [--sample-name name] [--fps n] [--start duration] [--duration duration] [--force] [--model-review] [--vision-url url]
 
 Defaults:
   --duration 180s samples only the beginning of the VOD for fast local MVP iteration.
-  Use --duration 0 for full-input frame extraction.`)
+  Use --duration 0 for full-input frame extraction.
+  --model-review sends generated model_review_tasks to a vision-service compatible endpoint.`)
 }
 
 func printDatasetUsage(w io.Writer) {

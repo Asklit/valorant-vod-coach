@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 6
+const AnalysisReportSchemaVersion = 7
 
 type Rank string
 
@@ -98,6 +98,7 @@ type GameplaySummary struct {
 	ReviewWindowCount    int                `json:"review_window_count"`
 	RoundSegmentCount    int                `json:"round_segment_count,omitempty"`
 	ModelReviewTaskCount int                `json:"model_review_task_count,omitempty"`
+	ModelReviewRunCount  int                `json:"model_review_run_count,omitempty"`
 	AverageMotionScore   float64            `json:"average_motion_score,omitempty"`
 	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
 	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
@@ -106,6 +107,7 @@ type GameplaySummary struct {
 	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
 	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
 	ModelReviewTasks     []ModelReviewTask  `json:"model_review_tasks,omitempty"`
+	ModelReviewRuns      []ModelReviewRun   `json:"model_review_runs,omitempty"`
 	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
 	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
 	Notes                []string           `json:"notes,omitempty"`
@@ -189,6 +191,29 @@ type ModelReviewTask struct {
 	Questions           []string        `json:"questions,omitempty"`
 	ExpectedOutput      string          `json:"expected_output"`
 	Prompt              string          `json:"prompt"`
+}
+
+type ModelReviewRun struct {
+	ID                string               `json:"id"`
+	TaskID            string               `json:"task_id"`
+	WindowID          string               `json:"window_id"`
+	Status            string               `json:"status"`
+	Model             string               `json:"model,omitempty"`
+	PromptVersion     string               `json:"prompt_version"`
+	Verdict           string               `json:"verdict,omitempty"`
+	Practice          string               `json:"practice,omitempty"`
+	NeedsManualReview bool                 `json:"needs_manual_review,omitempty"`
+	Findings          []ModelReviewFinding `json:"findings,omitempty"`
+	Error             string               `json:"error,omitempty"`
+}
+
+type ModelReviewFinding struct {
+	Category         string          `json:"category"`
+	Severity         FindingSeverity `json:"severity"`
+	TimestampSeconds float64         `json:"timestamp_seconds,omitempty"`
+	Evidence         string          `json:"evidence"`
+	Recommendation   string          `json:"recommendation"`
+	Confidence       float64         `json:"confidence,omitempty"`
 }
 
 type ReviewWindow struct {

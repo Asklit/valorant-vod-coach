@@ -7,8 +7,9 @@ Current scope:
 - keep a curated VOD manifest in `data/manifests/vods.tsv`;
 - download only full game VODs, not stream archives;
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
-- store raw videos outside git under `data/raw/youtube/<rank>/`.
+- store raw videos outside git under `data/raw/youtube/<rank>/`;
 - run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
+- expose a Python/FastAPI `vision-service` contract for model review over selected clips.
 
 Planned product stack:
 
@@ -187,11 +188,35 @@ The command writes:
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, builds estimated round segments for navigation, selects gameplay review windows, extracts short mp4 review clips for those windows, builds Qwen/VLM-ready model review tasks, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
+The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, builds estimated round segments for navigation, selects gameplay review windows, extracts short mp4 review clips for those windows, builds Qwen/VLM-ready model review tasks, can call the Python vision-service for model review, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
 
-This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The next ML stage will replace or enrich the same `ObservationAnalyzer` port with OCR, round detection, kill/death windows, and model reasoning over selected clips.
+This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The current Python vision-service is a deterministic contract stub; the next ML stage is replacing its reviewer implementation with OCR, round detection, kill/death windows, and real Qwen/VLM reasoning over selected clips.
 
 After building, the same commands can be run through `bin/vodctl`.
+
+## Vision Service
+
+Run the Python stub service:
+
+```sh
+cd ml/vision-service
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+uvicorn app.main:app --host 127.0.0.1 --port 8091
+```
+
+Run CLI model review:
+
+```sh
+go run ./cmd/vodctl analyze run --vod iron_spudbud_01 --model-review --vision-url http://127.0.0.1:8091 --force
+```
+
+Run the Go API with model review enabled:
+
+```sh
+VISION_SERVICE_URL=http://127.0.0.1:8091 go run ./cmd/vod-web
+```
 
 ## Web UI
 
@@ -224,6 +249,7 @@ The UI can:
 - show downloaded/report-ready status;
 - play downloaded local VOD files through the Go API;
 - run the local heuristic analysis pipeline against a sample window or the full VOD through async analysis jobs;
+- optionally run model review when `vod-web` has `VISION_SERVICE_URL` configured;
 - switch between generated report runs for a selected VOD;
 - render gameplay review windows, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
 - render estimated round segments and attach review windows to those segments;

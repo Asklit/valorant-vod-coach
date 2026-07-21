@@ -63,6 +63,7 @@ type BackendHealth = {
   status: string;
   schema_version?: number;
   analyzer?: string;
+  model_review_available?: boolean;
 };
 
 type Finding = {
@@ -178,6 +179,19 @@ type ModelReviewTask = {
   prompt: string;
 };
 
+type ModelReviewRun = {
+  id: string;
+  task_id: string;
+  window_id: string;
+  status: string;
+  model?: string;
+  prompt_version: string;
+  verdict?: string;
+  practice?: string;
+  needs_manual_review?: boolean;
+  error?: string;
+};
+
 type CoachSummary = {
   verdict: string;
   confidence: number;
@@ -194,6 +208,7 @@ type GameplaySummary = {
   review_window_count: number;
   round_segment_count?: number;
   model_review_task_count?: number;
+  model_review_run_count?: number;
   average_motion_score?: number;
   average_minimap_signal?: number;
   average_hud_signal?: number;
@@ -202,6 +217,7 @@ type GameplaySummary = {
   phase_profile?: PhaseStat[];
   round_segments?: RoundSegment[];
   model_review_tasks?: ModelReviewTask[];
+  model_review_runs?: ModelReviewRun[];
   frame_observations?: FrameObservation[];
   review_windows?: ReviewWindow[];
   notes?: string[];
@@ -285,6 +301,7 @@ type ReportSummary = {
   review_window_count: number;
   round_segment_count: number;
   model_review_task_count: number;
+  model_review_run_count: number;
   analyzer?: string;
   sample_name: string;
   sample_fps: string;
@@ -320,6 +337,7 @@ export function App() {
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
+  const [modelReview, setModelReview] = useState(false);
   const [evidencePage, setEvidencePage] = useState(0);
   const [windowKind, setWindowKind] = useState("all");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -450,6 +468,7 @@ export function App() {
           image_quality: 3,
           duration_seconds: fullVod ? 0 : runDuration,
           force: true,
+          model_review: modelReview && modelReviewAvailable,
           async: true
         })
       });
@@ -501,10 +520,12 @@ export function App() {
   const reviewWindows = report?.gameplay?.review_windows ?? [];
   const roundSegments = report?.gameplay?.round_segments ?? [];
   const modelReviewTasks = report?.gameplay?.model_review_tasks ?? [];
+  const modelReviewRuns = report?.gameplay?.model_review_runs ?? [];
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 6 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 7 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
+  const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -689,6 +710,10 @@ export function App() {
                 <input checked={fullVod} onChange={(event) => setFullVod(event.target.checked)} type="checkbox" />
                 <span>Full VOD</span>
               </label>
+              <label className={modelReviewAvailable ? "toggle-control" : "toggle-control disabled"} title={modelReviewAvailable ? "Run model review through vision-service" : "Start vod-web with --vision-url or VISION_SERVICE_URL"}>
+                <input checked={modelReview && modelReviewAvailable} disabled={!modelReviewAvailable} onChange={(event) => setModelReview(event.target.checked)} type="checkbox" />
+                <span>Model review</span>
+              </label>
               <button className="run-button" disabled={!selectedVod || selectedVod.local_status !== "downloaded" || analyzing} onClick={() => void runAnalysis()} type="button">
                 <Play size={18} fill="currentColor" />
                 {analyzing ? "Analyzing" : fullVod ? "Run full VOD" : "Run analysis"}
@@ -704,7 +729,7 @@ export function App() {
             )}
 
             <div className="pipeline-track">
-              {["Manifest", "Probe", "Frames", "Sheet", "Report"].map((step, index) => (
+              {["Manifest", "Probe", "Frames", "Clips", "Model", "Report"].map((step, index) => (
                 <div className={report || analyzing ? "pipeline-step lit" : "pipeline-step"} key={step}>
                   <span>{index + 1}</span>
                   {step}
@@ -744,7 +769,7 @@ export function App() {
                     >
                       <span>{item.run_id}</span>
                       <small>
-                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.model_review_task_count || 0} tasks
+                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.model_review_run_count || 0}/{item.model_review_task_count || 0} model
                       </small>
                       <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
                     </button>
@@ -854,10 +879,14 @@ export function App() {
                       <div className="model-task-list">
                         {modelReviewTasks.map((task) => (
                           <article className={`model-task priority-${task.priority}`} key={task.id}>
+                            {(() => {
+                              const run = modelReviewRuns.find((item) => item.task_id === task.id);
+                              return (
+                                <>
                             <div className="model-task-head">
                               <div>
                                 <span>
-                                  {task.status} / {task.priority} / {task.prompt_version}
+                                  {run?.status ?? task.status} / {task.priority} / {run?.model ?? task.model_hint ?? task.prompt_version}
                                 </span>
                                 <h3>
                                   {task.round_number ? `R${task.round_number} / ` : ""}
@@ -869,7 +898,8 @@ export function App() {
                                 {copiedTaskID === task.id ? "Copied" : "Prompt"}
                               </button>
                             </div>
-                            <p>{task.questions?.[0] ?? "Review this selected gameplay window with the configured model prompt."}</p>
+                            <p>{run?.verdict ?? task.questions?.[0] ?? "Review this selected gameplay window with the configured model prompt."}</p>
+                            {run?.practice ? <small className="model-practice">{run.practice}</small> : null}
                             <div className="evidence-links">
                               {task.clip_path ? (
                                 <a href={artifactURL(task.clip_path)} target="_blank" rel="noreferrer">
@@ -884,6 +914,9 @@ export function App() {
                                 </a>
                               ))}
                             </div>
+                                </>
+                              );
+                            })()}
                           </article>
                         ))}
                       </div>

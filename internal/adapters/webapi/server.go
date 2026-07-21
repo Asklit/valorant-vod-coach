@@ -19,6 +19,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
@@ -29,6 +30,7 @@ type Config struct {
 	ProcessedRoot string
 	FFprobePath   string
 	FFmpegPath    string
+	VisionURL     string
 	StaticDir     string
 }
 
@@ -81,6 +83,7 @@ type AnalyzeRequest struct {
 	ImageQuality    int      `json:"image_quality"`
 	Force           bool     `json:"force"`
 	Async           bool     `json:"async,omitempty"`
+	ModelReview     bool     `json:"model_review,omitempty"`
 }
 
 type AnalyzeResponse struct {
@@ -130,6 +133,7 @@ type ReportSummary struct {
 	ReviewWindowCount int       `json:"review_window_count"`
 	RoundSegmentCount int       `json:"round_segment_count"`
 	ModelTaskCount    int       `json:"model_review_task_count"`
+	ModelRunCount     int       `json:"model_review_run_count"`
 	Analyzer          string    `json:"analyzer,omitempty"`
 	SampleName        string    `json:"sample_name"`
 	SampleFPS         string    `json:"sample_fps"`
@@ -208,9 +212,10 @@ func (s *Server) routes() {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "ok",
-		"schema_version": domain.AnalysisReportSchemaVersion,
-		"analyzer":       "visual-heuristic-gameplay",
+		"status":                 "ok",
+		"schema_version":         domain.AnalysisReportSchemaVersion,
+		"analyzer":               "visual-heuristic-gameplay",
+		"model_review_available": strings.TrimSpace(s.config.VisionURL) != "",
 	})
 }
 
@@ -431,6 +436,12 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 			ProcessedRoot: s.config.ProcessedRoot,
 		},
 	}
+	if request.ModelReview {
+		if strings.TrimSpace(s.config.VisionURL) == "" {
+			return app.RunAnalysisResult{}, errors.New("model_review requested but vision service URL is not configured")
+		}
+		runner.Reviewer = visionservice.Client{BaseURL: s.config.VisionURL}
+	}
 
 	return runner.Run(ctx, app.RunAnalysisRequest{
 		VODLabel:     request.VODLabel,
@@ -440,6 +451,7 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 		Duration:     secondsDuration(durationSeconds),
 		ImageQuality: request.ImageQuality,
 		Overwrite:    request.Force,
+		ModelReview:  request.ModelReview,
 	})
 }
 
@@ -554,6 +566,7 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 				ReviewWindowCount: reviewWindowCount(report.Gameplay),
 				RoundSegmentCount: roundSegmentCount(report.Gameplay),
 				ModelTaskCount:    modelReviewTaskCount(report.Gameplay),
+				ModelRunCount:     modelReviewRunCount(report.Gameplay),
 				Analyzer:          report.Metadata.Analyzer,
 				SampleName:        report.Sample.Name,
 				SampleFPS:         report.Sample.FPS,
@@ -596,6 +609,16 @@ func modelReviewTaskCount(gameplay *domain.GameplaySummary) int {
 		return len(gameplay.ModelReviewTasks)
 	}
 	return gameplay.ModelReviewTaskCount
+}
+
+func modelReviewRunCount(gameplay *domain.GameplaySummary) int {
+	if gameplay == nil {
+		return 0
+	}
+	if gameplay.ModelReviewRunCount == 0 && len(gameplay.ModelReviewRuns) > 0 {
+		return len(gameplay.ModelReviewRuns)
+	}
+	return gameplay.ModelReviewRunCount
 }
 
 func readReport(path string) (domain.AnalysisReport, error) {
