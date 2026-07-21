@@ -9,7 +9,7 @@ Current scope:
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
 - store raw videos outside git under `data/raw/youtube/<rank>/`;
 - run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
-- expose a Python/FastAPI `vision-service` contract for model review over selected clips.
+- expose a Python `vision-service` contract for model review over selected clips.
 
 Planned product stack:
 
@@ -196,7 +196,15 @@ After building, the same commands can be run through `bin/vodctl`.
 
 ## Vision Service
 
-Run the Python stub service:
+Run the dependency-free Python stub service:
+
+```sh
+./scripts/run_vision_service.sh
+```
+
+The stub exposes `/health` and `/v1/model-review`, returns deterministic structured review results, and lets the Go API/UI exercise the full model-review contract before Qwen/VLM inference is added.
+
+Optional FastAPI entrypoint:
 
 ```sh
 cd ml/vision-service
@@ -225,7 +233,7 @@ The local MVP UI is a React/TypeScript/Vite app backed by a Go API server.
 Start the Go API:
 
 ```sh
-go run ./cmd/vod-web
+VISION_SERVICE_URL=http://127.0.0.1:8091 go run ./cmd/vod-web
 ```
 
 Start the React dev server in another terminal:
@@ -242,6 +250,8 @@ Open:
 http://127.0.0.1:5173
 ```
 
+If `5173` is occupied, Vite will print the fallback port, for example `http://127.0.0.1:5174`.
+
 The UI can:
 
 - browse the curated VOD library;
@@ -249,7 +259,7 @@ The UI can:
 - show downloaded/report-ready status;
 - play downloaded local VOD files through the Go API;
 - run the local heuristic analysis pipeline against a sample window or the full VOD through async analysis jobs;
-- optionally run model review when `vod-web` has `VISION_SERVICE_URL` configured;
+- optionally run model review when `vod-web` has a configured and healthy `VISION_SERVICE_URL`;
 - switch between generated report runs for a selected VOD;
 - render gameplay review windows, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
 - render estimated round segments and attach review windows to those segments;

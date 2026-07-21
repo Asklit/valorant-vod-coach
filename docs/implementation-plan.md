@@ -131,14 +131,15 @@ internal/
     storage/            # local FS, later S3-compatible storage
     kafka/              # event publishing, consuming, and outbox relay support
     temporal/           # Temporal workflow definitions and activities
-    vision/             # OCR and ML service clients
+    vision/             # local visual heuristic analyzer
+    visionservice/      # Python vision-service HTTP client
   platform/             # config, logging, metrics, tracing, health checks
 
 tests/
   integration/          # slow tests requiring real tools or services
 
 ml/
-  vision-service/       # Python FastAPI service for OCR/VLM inference
+  vision-service/       # Python OCR/VLM service boundary
   prompts/              # prompt templates and expected outputs
   evals/                # small golden-set evaluation cases
 
@@ -337,7 +338,7 @@ The first useful version should not analyze every frame. It should sample broadl
 - Cache/locks/rate limits: Redis.
 - Storage: local filesystem through an object-store interface first, MinIO/S3-compatible storage for local infra and hosted use.
 - Video tools: `ffmpeg` and `ffprobe` through thin Go wrappers.
-- ML boundary: Python FastAPI service, called from Go.
+- ML boundary: Python HTTP service, called from Go. The local MVP includes a dependency-free stdlib stub; FastAPI can remain the production-style wrapper when the real model service is added.
 - Observability: OpenTelemetry, Prometheus, Grafana, Loki, Tempo.
 - Report format: JSON first, Markdown/HTML later.
 
@@ -414,7 +415,7 @@ Current status:
 - Implemented in `vodctl analyze run`.
 - Smoke-tested on `iron_spudbud_01` with `--duration 60s --fps 1`; the run decoded 60/60 frames and selected 2 review windows.
 - Full-VOD smoke-tested on `iron_spudbud_01` with `--duration 0 --fps 0.5`; the run decoded 991/991 frames and selected 18 review windows.
-- Current report schema v3 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `review_windows`, `gameplay_review.json`, timeline events, findings, recommendations, confidence, and frame evidence. Qwen/VLM reasoning is still the next adapter stage.
+- Current report schema v7 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `round_segments`, `review_windows`, `model_review_tasks`, optional `model_review_runs`, `gameplay_review.json`, review clips, timeline events, findings, recommendations, confidence, and frame evidence. Real Qwen/VLM reasoning is still the next adapter stage.
 
 ### Milestone 2: Frame Extraction
 
@@ -459,7 +460,7 @@ Current status:
 
 - Extract candidate clips around deaths and round ends.
 - Generate prompt/eval fixtures for selected windows. Current local MVP writes `model_review_tasks` into report schema.
-- Send selected windows to the Python ML service. Current local MVP has a `vision-service` contract stub at `ml/vision-service`.
+- Send selected windows to the Python ML service. Current local MVP has a runnable dependency-free `vision-service` contract stub at `ml/vision-service` and `scripts/run_vision_service.sh`.
 - Merge VLM observations into the report schema. Current local MVP writes `model_review_runs` and merges model findings when `model_review` is enabled.
 - Replace the deterministic stub with real Qwen/VLM inference and add golden eval fixtures.
 

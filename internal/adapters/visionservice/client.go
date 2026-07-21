@@ -29,6 +29,50 @@ type modelReviewResponse struct {
 	Runs []domain.ModelReviewRun `json:"runs"`
 }
 
+type HealthStatus struct {
+	Status  string `json:"status"`
+	Model   string `json:"model,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
+}
+
+func (c Client) Health(ctx context.Context) (HealthStatus, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	if baseURL == "" {
+		return HealthStatus{}, fmt.Errorf("vision service base URL is required")
+	}
+
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 5 * time.Second}
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
+	if err != nil {
+		return HealthStatus{}, err
+	}
+
+	response, err := httpClient.Do(httpRequest)
+	if err != nil {
+		return HealthStatus{}, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return HealthStatus{}, fmt.Errorf("vision service health failed: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var status HealthStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		return HealthStatus{}, err
+	}
+	if strings.TrimSpace(status.Status) == "" {
+		return HealthStatus{}, fmt.Errorf("vision service health response missing status")
+	}
+	return status, nil
+}
+
 func (c Client) ReviewModelTasks(ctx context.Context, request app.ModelReviewRequest) (app.ModelReviewResult, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if baseURL == "" {
