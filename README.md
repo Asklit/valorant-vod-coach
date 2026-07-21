@@ -155,4 +155,10 @@ Probe one downloaded VOD with `ffprobe`:
 go run ./cmd/vodctl video probe --vod diamond_crazies_01
 ```
 
+Extract a short frame sample:
+
+```sh
+go run ./cmd/vodctl video sample --vod diamond_crazies_01 --duration 30s --fps 1
+```
+
 After building, the same commands can be run through `bin/vodctl`.

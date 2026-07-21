@@ -54,6 +54,8 @@ func runVideo(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "probe":
 		return runVideoProbe(args[1:], stdout, stderr)
+	case "sample":
+		return runVideoSample(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printVideoUsage(stdout)
 		return 0
@@ -82,21 +84,9 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	vods, err := dataset.LoadManifest(*manifestPath)
+	vod, videoPath, err := loadVODAndVideoPath(*manifestPath, *rawRoot, *vodLabel)
 	if err != nil {
-		fmt.Fprintf(stderr, "load manifest: %v\n", err)
-		return 1
-	}
-
-	vod, ok := dataset.FindByLabel(vods, strings.TrimSpace(*vodLabel))
-	if !ok {
-		fmt.Fprintf(stderr, "unknown VOD label %q\n", *vodLabel)
-		return 1
-	}
-
-	videoPath, _, ok := dataset.FindLocalVideo(*rawRoot, vod)
-	if !ok {
-		fmt.Fprintf(stderr, "video file not found: %s\n", videoPath)
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -154,6 +144,117 @@ func runVideoProbe(args []string, stdout, stderr io.Writer) int {
 		audioCodec,
 		sizeText,
 		artifactPath,
+	)
+	table.Flush()
+	return 0
+}
+
+func runVideoSample(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("vodctl video sample", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	manifestPath := fs.String("manifest", defaultManifest, "path to TSV manifest")
+	rawRoot := fs.String("raw-root", defaultRawRoot, "root directory for downloaded videos")
+	outRoot := fs.String("out-root", defaultOutRoot, "root directory for processed artifacts")
+	ffmpegPath := fs.String("ffmpeg", "ffmpeg", "ffmpeg executable path")
+	vodLabel := fs.String("vod", "", "manifest VOD label")
+	fps := fs.String("fps", "1", "frame sampling FPS")
+	startRaw := fs.String("start", "0s", "start offset, for example 30s or 2m")
+	durationRaw := fs.String("duration", "60s", "sample duration; use 0 for full input")
+	sampleName := fs.String("name", "", "sample artifact name")
+	imageQuality := fs.Int("image-quality", 3, "ffmpeg JPEG quality, lower is better")
+	force := fs.Bool("force", false, "overwrite existing sample output")
+	timeoutRaw := fs.String("timeout", "10m", "ffmpeg command timeout")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if strings.TrimSpace(*vodLabel) == "" {
+		fmt.Fprintln(stderr, "--vod is required")
+		return 2
+	}
+
+	start, err := parseDurationArg("--start", *startRaw)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if start < 0 {
+		fmt.Fprintln(stderr, "--start must be non-negative")
+		return 2
+	}
+
+	duration, err := parseDurationArg("--duration", *durationRaw)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if duration < 0 {
+		fmt.Fprintln(stderr, "--duration must be non-negative")
+		return 2
+	}
+
+	timeout, err := parseDurationArg("--timeout", *timeoutRaw)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if timeout <= 0 {
+		fmt.Fprintln(stderr, "--timeout must be positive")
+		return 2
+	}
+
+	vod, videoPath, err := loadVODAndVideoPath(*manifestPath, *rawRoot, *vodLabel)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	name := strings.TrimSpace(*sampleName)
+	if name == "" {
+		name = video.DefaultSampleName(*fps, start, duration)
+	}
+	name = video.SafeArtifactName(name)
+
+	outputDir := video.SampleOutputDir(*outRoot, vod, name)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	result, err := video.RunSample(ctx, video.SampleOptions{
+		FFmpegPath:   *ffmpegPath,
+		InputPath:    videoPath,
+		OutputDir:    outputDir,
+		FPS:          *fps,
+		Start:        start,
+		Duration:     duration,
+		ImageQuality: *imageQuality,
+		Overwrite:    *force,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 1
+	}
+
+	manifest, err := video.WriteFramesManifest(vod, name, result)
+	if err != nil {
+		fmt.Fprintf(stderr, "write frames manifest: %v\n", err)
+		return 1
+	}
+
+	durationText := duration.String()
+	if duration == 0 {
+		durationText = "full"
+	}
+
+	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, "LABEL\tSAMPLE\tFPS\tSTART\tDURATION\tFRAMES\tFRAMES_JSON")
+	fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+		vod.Label,
+		name,
+		*fps,
+		start.String(),
+		durationText,
+		result.FrameCount,
+		manifest,
 	)
 	table.Flush()
 	return 0
@@ -276,6 +377,53 @@ func loadFilteredManifest(path, rankRaw string, enabledOnly bool) ([]dataset.VOD
 	return dataset.Filter(vods, rank, enabledOnly), nil
 }
 
+func loadVODAndVideoPath(manifestPath, rawRoot, label string) (dataset.VOD, string, error) {
+	vods, err := dataset.LoadManifest(manifestPath)
+	if err != nil {
+		return dataset.VOD{}, "", fmt.Errorf("load manifest: %w", err)
+	}
+
+	vod, ok := dataset.FindByLabel(vods, strings.TrimSpace(label))
+	if !ok {
+		return dataset.VOD{}, "", fmt.Errorf("unknown VOD label %q", label)
+	}
+
+	videoPath, _, ok := dataset.FindLocalVideo(rawRoot, vod)
+	if !ok {
+		return dataset.VOD{}, "", fmt.Errorf("video file not found: %s", videoPath)
+	}
+
+	return vod, videoPath, nil
+}
+
+func parseDurationArg(name, value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("%s is required", name)
+	}
+	if isDigits(value) {
+		value += "s"
+	}
+
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", name, value, err)
+	}
+	return duration, nil
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -302,7 +450,8 @@ Commands:
   dataset validate   Validate manifest structure and metadata
   dataset list       List VODs from the manifest
   dataset status     Show local download status
-  video probe        Probe a downloaded video through ffprobe`)
+  video probe        Probe a downloaded video through ffprobe
+  video sample       Extract sampled frames through ffmpeg`)
 }
 
 func printDatasetUsage(w io.Writer) {
@@ -314,5 +463,6 @@ func printDatasetUsage(w io.Writer) {
 
 func printVideoUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
-  vodctl video probe --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffprobe path] [--print-json]`)
+  vodctl video probe --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffprobe path] [--print-json]
+  vodctl video sample --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffmpeg path] [--fps n] [--start duration] [--duration duration] [--name name] [--force]`)
 }
