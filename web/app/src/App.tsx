@@ -58,6 +58,12 @@ type VODListResponse = {
   vods: VODItem[];
 };
 
+type BackendHealth = {
+  status: string;
+  schema_version?: number;
+  analyzer?: string;
+};
+
 type Finding = {
   id: string;
   severity: string;
@@ -110,6 +116,38 @@ type ReviewWindow = {
   tags?: string[];
 };
 
+type CoachFocusArea = {
+  id: string;
+  priority: string;
+  category: string;
+  title: string;
+  detail: string;
+  score: number;
+  window_ids?: string[];
+};
+
+type PracticeTask = {
+  id: string;
+  title: string;
+  detail: string;
+  cadence: string;
+  tags?: string[];
+};
+
+type PhaseStat = {
+  phase: string;
+  count: number;
+  ratio: number;
+};
+
+type CoachSummary = {
+  verdict: string;
+  confidence: number;
+  coverage_seconds?: number;
+  focus_areas?: CoachFocusArea[];
+  practice_plan?: PracticeTask[];
+};
+
 type GameplaySummary = {
   analyzer?: string;
   sampled_frames: number;
@@ -120,6 +158,8 @@ type GameplaySummary = {
   average_minimap_signal?: number;
   average_hud_signal?: number;
   peak_combat_score?: number;
+  coach?: CoachSummary;
+  phase_profile?: PhaseStat[];
   frame_observations?: FrameObservation[];
   review_windows?: ReviewWindow[];
   notes?: string[];
@@ -178,10 +218,19 @@ type Report = {
   };
 };
 
-type AnalyzeResponse = {
-  report: Report;
-  report_json: string;
-  report_md: string;
+type AnalysisJobResponse = {
+  job_id: string;
+  run_id: string;
+  vod_label: string;
+  status: "queued" | "running" | "completed" | "failed";
+  message?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+  report?: Report;
+  report_json?: string;
+  report_md?: string;
 };
 
 type ReportSummary = {
@@ -212,11 +261,13 @@ const evidencePageSize = 24;
 export function App() {
   const [vods, setVods] = useState<VODItem[]>([]);
   const [counts, setCounts] = useState<VODListResponse["counts"] | null>(null);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
   const [selectedLabel, setSelectedLabel] = useState("");
   const [rank, setRank] = useState("all");
   const [query, setQuery] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -225,6 +276,7 @@ export function App() {
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
   const [evidencePage, setEvidencePage] = useState(0);
+  const [windowKind, setWindowKind] = useState("all");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
@@ -238,6 +290,7 @@ export function App() {
   }, [query, rank, vods]);
 
   useEffect(() => {
+    void loadBackendHealth();
     void loadVods();
   }, []);
 
@@ -253,6 +306,22 @@ export function App() {
   useEffect(() => {
     setEvidencePage(0);
   }, [report?.run_id]);
+
+  useEffect(() => {
+    setWindowKind("all");
+  }, [report?.run_id]);
+
+  async function loadBackendHealth() {
+    try {
+      const response = await fetch(apiURL("/api/health"));
+      if (!response.ok) {
+        return;
+      }
+      setBackendHealth((await response.json()) as BackendHealth);
+    } catch {
+      setBackendHealth(null);
+    }
+  }
 
   async function loadVods() {
     setLoading(true);
@@ -323,6 +392,7 @@ export function App() {
       return;
     }
     setAnalyzing(true);
+    setAnalysisJob(null);
     setError("");
     try {
       const response = await fetch(apiURL("/api/analysis-runs"), {
@@ -334,22 +404,45 @@ export function App() {
           fps: runFps,
           image_quality: 3,
           duration_seconds: fullVod ? 0 : runDuration,
-          force: true
+          force: true,
+          async: true
         })
       });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
-      const payload = (await response.json()) as AnalyzeResponse;
+      const payload = (await response.json()) as AnalysisJobResponse;
       const analyzedLabel = selectedVod.label;
-      setReport(payload.report);
-      await loadVods();
-      await loadReports(analyzedLabel, { preferredRunID: payload.report.run_id });
+      setAnalysisJob(payload);
+      await pollAnalysisJob(payload.job_id, analyzedLabel);
       setSelectedLabel(analyzedLabel);
     } catch (err) {
       setError(messageFromError(err));
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  async function pollAnalysisJob(jobID: string, analyzedLabel: string) {
+    for (;;) {
+      await sleep(1800);
+      const response = await fetch(apiURL(`/api/analysis-runs/${encodeURIComponent(jobID)}`));
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const job = (await response.json()) as AnalysisJobResponse;
+      setAnalysisJob(job);
+      if (job.status === "completed") {
+        if (job.report) {
+          setReport(job.report);
+        }
+        await loadVods();
+        await loadReports(analyzedLabel, { preferredRunID: job.run_id });
+        return;
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error || "Analysis failed");
+      }
     }
   }
 
@@ -361,7 +454,10 @@ export function App() {
   const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
   const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
   const reviewWindows = report?.gameplay?.review_windows ?? [];
+  const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
+  const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
+  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 3 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -453,6 +549,16 @@ export function App() {
           </div>
         )}
 
+        {backendMismatch && (
+          <div className="compat-banner backend-warning">
+            <AlertTriangle size={17} />
+            <div>
+              <strong>Backend contract mismatch</strong>
+              <span>schema {backendHealth?.schema_version ?? 1} / {backendHealth?.analyzer ?? "unknown analyzer"}</span>
+            </div>
+          </div>
+        )}
+
         <div className="hud-grid">
           <Metric icon={<Database size={18} />} label="Dataset" value={counts ? `${counts.downloaded}/${counts.enabled}` : "..."} detail="downloaded" />
           <Metric icon={<FileJson2 size={18} />} label="Reports" value={counts ? String(counts.reported) : "..."} detail="VODs ready" />
@@ -531,6 +637,14 @@ export function App() {
                 {analyzing ? "Analyzing" : fullVod ? "Run full VOD" : "Run analysis"}
               </button>
             </div>
+
+            {analysisJob && (
+              <div className={`analysis-job status-${analysisJob.status}`}>
+                <span>{analysisJob.status}</span>
+                <strong>{analysisJob.run_id}</strong>
+                <small>{analysisJob.message ?? analysisJob.job_id}</small>
+              </div>
+            )}
 
             <div className="pipeline-track">
               {["Manifest", "Probe", "Frames", "Sheet", "Report"].map((step, index) => (
@@ -613,6 +727,32 @@ export function App() {
 
                 {report.gameplay && (
                   <section className="gameplay-review">
+                    {report.gameplay.coach && (
+                      <div className="coach-summary">
+                        <div className="coach-verdict">
+                          <span>Coach</span>
+                          <h3>{primaryFocusTitle(report.gameplay.coach)}</h3>
+                          <p>{report.gameplay.coach.verdict}</p>
+                        </div>
+                        <strong>{Math.round(clamp01(report.gameplay.coach.confidence) * 100)}%</strong>
+                      </div>
+                    )}
+
+                    {report.gameplay.coach?.focus_areas?.length ? (
+                      <div className="focus-grid">
+                        {report.gameplay.coach.focus_areas.slice(0, 4).map((area) => (
+                          <article className={`focus-card priority-${area.priority}`} key={area.id}>
+                            <span>
+                              {area.priority} / {area.category}
+                            </span>
+                            <h3>{area.title}</h3>
+                            <p>{area.detail}</p>
+                            {area.window_ids?.length ? <small>{area.window_ids.join(" / ")}</small> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+
                     <div className="signal-grid">
                       <SignalMeter label="Motion" value={report.gameplay.average_motion_score ?? 0} />
                       <SignalMeter label="Minimap" value={report.gameplay.average_minimap_signal ?? 0} />
@@ -620,8 +760,44 @@ export function App() {
                       <SignalMeter label="Combat peak" value={report.gameplay.peak_combat_score ?? 0} />
                     </div>
 
+                    {report.gameplay.phase_profile?.length ? (
+                      <div className="phase-profile">
+                        {report.gameplay.phase_profile.map((phase) => (
+                          <div className="phase-row" key={phase.phase}>
+                            <span>{phase.phase}</span>
+                            <div>
+                              <i style={{ width: `${Math.round(clamp01(phase.ratio) * 100)}%` }} />
+                            </div>
+                            <strong>{Math.round(clamp01(phase.ratio) * 100)}%</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {report.gameplay.coach?.practice_plan?.length ? (
+                      <div className="practice-list">
+                        {report.gameplay.coach.practice_plan.map((task) => (
+                          <article className="practice-task" key={task.id}>
+                            <span>{task.cadence}</span>
+                            <h3>{task.title}</h3>
+                            <p>{task.detail}</p>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {reviewWindows.length > 0 && (
+                      <div className="window-filter">
+                        {["all", ...reviewWindowKinds].map((kind) => (
+                          <button className={windowKind === kind ? "active" : ""} key={kind} onClick={() => setWindowKind(kind)} type="button">
+                            {kindLabel(kind)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="review-window-list">
-                      {reviewWindows.map((window) => (
+                      {visibleReviewWindows.map((window) => (
                         <article className={`review-window severity-${window.severity}`} key={window.id}>
                           <div className="review-window-head">
                             <div>
@@ -652,7 +828,7 @@ export function App() {
                           ) : null}
                         </article>
                       ))}
-                      {!reviewWindows.length && <div className="muted-line">No gameplay windows selected.</div>}
+                      {!visibleReviewWindows.length && <div className="muted-line">No gameplay windows selected.</div>}
                     </div>
                   </section>
                 )}
@@ -824,6 +1000,10 @@ function messageFromError(error: unknown) {
   return "Unknown error";
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function compactTimestamp(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
@@ -845,6 +1025,10 @@ function coverageLabel(report: Report) {
 
 function hasGameplayReview(report: Report) {
   return Boolean(report.gameplay && report.metadata.analyzer === "visual-heuristic-gameplay");
+}
+
+function primaryFocusTitle(coach: CoachSummary) {
+  return coach.focus_areas?.[0]?.title ?? "Full VOD coach summary";
 }
 
 function displayLocalStatus(vod: VODItem | null) {
@@ -870,6 +1054,17 @@ function evidenceRangeLabel(start: number, count: number, total: number) {
     return "0 / 0";
   }
   return `${start + 1}-${start + count} / ${total}`;
+}
+
+function uniqueWindowKinds(windows: ReviewWindow[]) {
+  return Array.from(new Set(windows.map((window) => window.kind))).sort();
+}
+
+function kindLabel(kind: string) {
+  if (kind === "all") {
+    return "all";
+  }
+  return kind.replaceAll("_", " ");
 }
 
 function clamp01(value: number) {

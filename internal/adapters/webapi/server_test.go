@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServerListsVODs(t *testing.T) {
@@ -99,9 +100,57 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 2`) ||
+		!strings.Contains(got, `"schema_version": 3`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
+	}
+}
+
+func TestServerRunsAsyncAnalysisJob(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"async_test","fps":"1","duration_seconds":5,"force":true,"async":true}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var job AnalysisJobResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode job response: %v", err)
+	}
+	if job.JobID == "" || job.RunID != "async_test" || job.Status == "" {
+		t.Fatalf("unexpected initial job: %+v", job)
+	}
+
+	for attempts := 0; attempts < 40; attempts++ {
+		request = httptest.NewRequest(http.MethodGet, "/api/analysis-runs/"+job.JobID, nil)
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+			t.Fatalf("decode polled job: %v", err)
+		}
+		if job.Status == "completed" {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	if job.Status != "completed" {
+		t.Fatalf("expected completed job, got %+v", job)
+	}
+	if job.Report == nil || job.Report.RunID != "async_test" || job.Report.Gameplay == nil {
+		t.Fatalf("expected completed gameplay report: %+v", job)
+	}
+	if job.ReportJSON == "" || job.ReportMD == "" {
+		t.Fatalf("expected report paths: %+v", job)
 	}
 }
 
@@ -115,7 +164,7 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 2`) ||
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 3`) ||
 		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) {
 		t.Fatalf("unexpected health response:\n%s", got)
 	}

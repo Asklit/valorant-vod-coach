@@ -59,8 +59,17 @@ func TestLocalGameplayAnalyzerBuildsReviewWindows(t *testing.T) {
 	if result.Gameplay.ReviewWindowCount == 0 {
 		t.Fatalf("expected review windows: %+v", result.Gameplay)
 	}
+	if result.Gameplay.Coach == nil || len(result.Gameplay.Coach.FocusAreas) == 0 || len(result.Gameplay.Coach.PracticePlan) == 0 {
+		t.Fatalf("expected coach summary with focus areas and practice plan: %+v", result.Gameplay.Coach)
+	}
+	if len(result.Gameplay.PhaseProfile) == 0 {
+		t.Fatalf("expected phase profile: %+v", result.Gameplay)
+	}
 	if hasFinding(result.Findings, "baseline_ai_not_enabled") {
 		t.Fatalf("baseline AI placeholder finding should be removed")
+	}
+	if !hasFinding(result.Findings, "gameplay_coach_priorities_ready") {
+		t.Fatalf("expected coach priorities finding: %+v", result.Findings)
 	}
 	if !hasFinding(result.Findings, "gameplay_review_ready") {
 		t.Fatalf("expected gameplay ready finding: %+v", result.Findings)

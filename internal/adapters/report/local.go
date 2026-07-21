@@ -115,6 +115,40 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 		fmt.Fprintf(&buf, "- Average HUD signal: %.2f\n", report.Gameplay.AverageHUDSignal)
 		fmt.Fprintf(&buf, "- Peak combat signal: %.2f\n\n", report.Gameplay.PeakCombatScore)
 
+		if report.Gameplay.Coach != nil {
+			fmt.Fprintf(&buf, "### Coach Summary\n\n")
+			fmt.Fprintf(&buf, "- Verdict: %s\n", report.Gameplay.Coach.Verdict)
+			fmt.Fprintf(&buf, "- Confidence: %.2f\n", report.Gameplay.Coach.Confidence)
+			if report.Gameplay.Coach.CoverageSeconds > 0 {
+				fmt.Fprintf(&buf, "- Coverage: %.3fs\n", report.Gameplay.Coach.CoverageSeconds)
+			}
+			if len(report.Gameplay.Coach.FocusAreas) > 0 {
+				fmt.Fprintf(&buf, "\n#### Focus Areas\n\n")
+				for _, area := range report.Gameplay.Coach.FocusAreas {
+					fmt.Fprintf(&buf, "- `%s` `%s`: %s - %s", area.Priority, area.Category, area.Title, area.Detail)
+					if len(area.WindowIDs) > 0 {
+						fmt.Fprintf(&buf, " Windows: `%s`", strings.Join(area.WindowIDs, "`, `"))
+					}
+					fmt.Fprintf(&buf, "\n")
+				}
+			}
+			if len(report.Gameplay.Coach.PracticePlan) > 0 {
+				fmt.Fprintf(&buf, "\n#### Practice Plan\n\n")
+				for _, task := range report.Gameplay.Coach.PracticePlan {
+					fmt.Fprintf(&buf, "- %s (`%s`): %s\n", task.Title, task.Cadence, task.Detail)
+				}
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
+		if len(report.Gameplay.PhaseProfile) > 0 {
+			fmt.Fprintf(&buf, "### Phase Profile\n\n")
+			for _, phase := range report.Gameplay.PhaseProfile {
+				fmt.Fprintf(&buf, "- `%s`: %d frames (%.0f%%)\n", phase.Phase, phase.Count, phase.Ratio*100)
+			}
+			fmt.Fprintf(&buf, "\n")
+		}
+
 		if len(report.Gameplay.ReviewWindows) > 0 {
 			for _, window := range report.Gameplay.ReviewWindows {
 				fmt.Fprintf(&buf, "### %s: %s\n\n", strings.ToUpper(string(window.Severity)), window.Title)
