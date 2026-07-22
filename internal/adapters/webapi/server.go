@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +24,9 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Config struct {
@@ -34,6 +39,8 @@ type Config struct {
 	VisionURL                 string
 	StaticDir                 string
 	Catalog                   app.AnalysisCatalog
+	Logger                    *slog.Logger
+	Tracer                    trace.Tracer
 }
 
 type Server struct {
@@ -41,6 +48,8 @@ type Server struct {
 	mux     *http.ServeMux
 	jobs    *analysisJobStore
 	metrics *serverMetrics
+	logger  *slog.Logger
+	tracer  trace.Tracer
 }
 
 type VODItem struct {
@@ -227,6 +236,14 @@ func NewServer(config Config) *Server {
 		mux:     http.NewServeMux(),
 		jobs:    &analysisJobStore{jobs: map[string]*analysisJob{}},
 		metrics: newServerMetrics(time.Now().UTC()),
+		logger:  config.Logger,
+		tracer:  config.Tracer,
+	}
+	if server.logger == nil {
+		server.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if server.tracer == nil {
+		server.tracer = trace.NewNoopTracerProvider().Tracer("vod-web")
 	}
 	server.routes()
 	return server
@@ -234,6 +251,16 @@ func NewServer(config Config) *Server {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
+	route := metricRoute(r.URL.Path)
+	ctx, span := s.tracer.Start(r.Context(), "http "+r.Method+" "+route)
+	span.SetAttributes(
+		attribute.String("http.request.method", r.Method),
+		attribute.String("url.path", r.URL.Path),
+		attribute.String("http.route", route),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	recorder := &statusRecorder{ResponseWriter: w}
 	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
 		recorder.Header().Set("Access-Control-Allow-Origin", origin)
@@ -242,11 +269,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodOptions {
 		recorder.WriteHeader(http.StatusNoContent)
-		s.metrics.record(r.Method, r.URL.Path, recorder.statusCode(), time.Since(started))
+		status := recorder.statusCode()
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+		s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
+		s.logRequest(ctx, r, route, status, time.Since(started))
 		return
 	}
 	s.mux.ServeHTTP(recorder, r)
-	s.metrics.record(r.Method, r.URL.Path, recorder.statusCode(), time.Since(started))
+	status := recorder.statusCode()
+	span.SetAttributes(attribute.Int("http.response.status_code", status))
+	if status >= http.StatusInternalServerError {
+		span.SetStatus(codes.Error, http.StatusText(status))
+	}
+	s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
+	s.logRequest(ctx, r, route, status, time.Since(started))
+}
+
+func (s *Server) logRequest(ctx context.Context, r *http.Request, route string, status int, duration time.Duration) {
+	if s.logger == nil {
+		return
+	}
+	level := slog.LevelInfo
+	if status >= http.StatusInternalServerError {
+		level = slog.LevelError
+	} else if status >= http.StatusBadRequest {
+		level = slog.LevelWarn
+	}
+	s.logger.LogAttrs(ctx, level, "http request completed",
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.String("route", route),
+		slog.Int("status", status),
+		slog.Float64("duration_ms", float64(duration.Microseconds())/1000),
+	)
 }
 
 func (s *Server) routes() {
@@ -1263,6 +1318,12 @@ func metricRoute(path string) string {
 		return "/api/analysis-runs"
 	case strings.HasPrefix(path, "/api/analysis-runs/"):
 		return "/api/analysis-runs/{job_id}"
+	case path == "/api/evaluation-annotations":
+		return "/api/evaluation-annotations"
+	case path == "/api/evaluation-runs":
+		return "/api/evaluation-runs"
+	case path == "/api/evaluations":
+		return "/api/evaluations"
 	case path == "/api/reports":
 		return "/api/reports"
 	case path == "/api/reports/latest":

@@ -19,6 +19,9 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
+	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const (
@@ -165,6 +168,32 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	obs, err := observability.Setup(ctx, observability.Config{ServiceName: "vodctl"}, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "setup observability: %v\n", err)
+		return 1
+	}
+	defer observability.Shutdown(context.Background(), obs.Shutdown, obs.Logger)
+
+	ctx, span := obs.Tracer.Start(ctx, "vodctl.analyze.run")
+	span.SetAttributes(
+		attribute.String("vod.label", *vodLabel),
+		attribute.String("analysis.fps", *fps),
+		attribute.Float64("analysis.start_seconds", start.Seconds()),
+		attribute.Float64("analysis.duration_seconds", duration.Seconds()),
+		attribute.Bool("analysis.model_review", *modelReview),
+		attribute.Bool("analysis.database_enabled", strings.TrimSpace(*databaseURL) != ""),
+	)
+	defer span.End()
+	obs.Logger.InfoContext(ctx, "analysis started",
+		"vod_label", *vodLabel,
+		"run_id", *runID,
+		"fps", *fps,
+		"duration_seconds", duration.Seconds(),
+		"model_review", *modelReview,
+		"database_enabled", strings.TrimSpace(*databaseURL) != "",
+	)
+
 	runner := app.AnalysisRunner{
 		Resolver: dataset.LocalVODResolver{
 			ManifestPath: *manifestPath,
@@ -207,9 +236,26 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		ModelReview:  *modelReview,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		obs.Logger.ErrorContext(ctx, "analysis failed", "vod_label", *vodLabel, "error", err)
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
 	}
+	span.SetAttributes(
+		attribute.String("analysis.run_id", result.Report.RunID),
+		attribute.Int("analysis.frame_count", result.Report.Sample.FrameCount),
+		attribute.Int("analysis.finding_count", len(result.Report.Findings)),
+		attribute.String("analysis.report_json", result.Saved.JSONPath),
+	)
+	obs.Logger.InfoContext(ctx, "analysis completed",
+		"vod_label", result.Report.VOD.Label,
+		"run_id", result.Report.RunID,
+		"frames", result.Report.Sample.FrameCount,
+		"review_windows", reviewWindowCount(result.Report.Gameplay),
+		"findings", len(result.Report.Findings),
+		"report_json", result.Saved.JSONPath,
+	)
 
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "LABEL\tRUN_ID\tSTATUS\tFRAMES\tWINDOWS\tCLIPS\tMODEL_RUNS\tFINDINGS\tCONTACT_SHEET\tREPORT_JSON\tREPORT_MD")

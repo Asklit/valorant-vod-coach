@@ -129,6 +129,16 @@ Useful local consoles:
 
 The Go API exposes Prometheus metrics at `http://localhost:8090/metrics`.
 
+Structured logs and traces:
+
+```sh
+LOG_LEVEL=info LOG_FORMAT=json \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+go run ./cmd/vod-web
+```
+
+The same `LOG_LEVEL`, `LOG_FORMAT`, and `OTEL_EXPORTER_OTLP_ENDPOINT` variables are honored by `vodctl analyze run`.
+
 Apply PostgreSQL migrations:
 
 ```sh
