@@ -18,8 +18,10 @@ import (
 func TestServerListsVODs(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/vods", nil)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -43,6 +45,27 @@ func TestServerListsVODs(t *testing.T) {
 	}
 }
 
+func TestServerRequiresAuthForProductAPI(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/vods", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/vods/diamond_example/video", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected public video 200, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestServerServesLocalVODVideo(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -62,9 +85,11 @@ func TestServerServesLocalVODVideo(t *testing.T) {
 func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"api_test","fps":"1","duration_seconds":5,"force":true}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -84,6 +109,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/reports/latest?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -95,6 +121,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/reports?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -154,8 +181,10 @@ func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
 	}}}
 	fixture.config.ReportCatalog = catalog
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/reports?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -171,6 +200,7 @@ func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/vods", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -184,6 +214,7 @@ func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/reports/latest?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -203,9 +234,11 @@ func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
 func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"async_test","fps":"1","duration_seconds":5,"force":true,"async":true}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -223,6 +256,7 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 
 	for attempts := 0; attempts < 40; attempts++ {
 		request = httptest.NewRequest(http.MethodGet, "/api/analysis-runs/"+job.JobID, nil)
+		authorize(request, token)
 		response = httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		if response.Code != http.StatusOK {
@@ -251,6 +285,7 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 func TestServerListsEvaluations(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 	evaluationDir := filepath.Join(fixture.outRoot, "evaluations", "eval_01")
 	if err := os.MkdirAll(evaluationDir, 0o755); err != nil {
 		t.Fatalf("mkdir evaluation dir: %v", err)
@@ -279,6 +314,7 @@ func TestServerListsEvaluations(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/evaluations?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -296,6 +332,7 @@ func TestServerListsEvaluations(t *testing.T) {
 func TestServerListsEvaluationAnnotations(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 	annotationsPath := filepath.Join(fixture.config.EvaluationAnnotationsRoot, "diamond_example.json")
 	if err := os.WriteFile(annotationsPath, []byte(`{
   "schema_version": 1,
@@ -310,6 +347,7 @@ func TestServerListsEvaluationAnnotations(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/evaluation-annotations?vod_label=diamond_example", nil)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -327,6 +365,7 @@ func TestServerListsEvaluationAnnotations(t *testing.T) {
 func TestServerRunsEvaluation(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 	reportDir := filepath.Join(fixture.outRoot, "diamond_example", "reports", "api_test")
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		t.Fatalf("mkdir report dir: %v", err)
@@ -367,6 +406,7 @@ func TestServerRunsEvaluation(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"vod_label":"diamond_example","report_run_id":"api_test","annotations_path":"` + annotationsPath + `","run_id":"eval_api","force":true}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/evaluation-runs", body)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -391,6 +431,7 @@ func TestServerRunsEvaluation(t *testing.T) {
 func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	body := bytes.NewBufferString(`{
   "vod_label": "diamond_example",
@@ -401,6 +442,7 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
   "timestamp_seconds": 42.5
 }`)
 	request := httptest.NewRequest(http.MethodPost, "/api/corrections", body)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -420,6 +462,7 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/corrections?vod_label=diamond_example&report_run_id=api_test", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -486,9 +529,11 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"model_review_missing_url","fps":"1","duration_seconds":5,"force":true,"model_review":true}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -712,4 +757,29 @@ type fakeReportCatalog struct {
 func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, vodLabel string) ([]app.ReportCatalogSummary, error) {
 	c.labels = append(c.labels, vodLabel)
 	return c.summaries, nil
+}
+
+func registerTestAdmin(t *testing.T, server *Server) string {
+	t.Helper()
+
+	body := bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass","display_name":"Coach"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected auth register 201, got %d: %s", response.Code, response.Body.String())
+	}
+	var auth AuthResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &auth); err != nil {
+		t.Fatalf("decode auth response: %v", err)
+	}
+	if auth.Token == "" {
+		t.Fatalf("expected auth token: %+v", auth)
+	}
+	return auth.Token
+}
+
+func authorize(request *http.Request, token string) {
+	request.Header.Set("Authorization", "Bearer "+token)
 }

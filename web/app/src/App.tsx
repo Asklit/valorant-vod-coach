@@ -410,6 +410,9 @@ type RequestLog = {
   route: string;
   status: number;
   duration_ms: number;
+  user_id?: string;
+  user_email?: string;
+  user_role?: string;
 };
 
 type AdminMetricsResponse = {
@@ -484,6 +487,7 @@ export function App() {
     headers.Authorization = `Bearer ${token}`;
     return headers;
   }, [token]);
+  const jsonHeaders = useMemo<Record<string, string>>(() => ({ ...authHeaders, "Content-Type": "application/json" }), [authHeaders]);
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
   const filteredVods = useMemo(() => {
     return vods.filter((vod) => {
@@ -615,7 +619,7 @@ export function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(apiURL("/api/vods"));
+      const response = await fetch(apiURL("/api/vods"), { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -633,7 +637,7 @@ export function App() {
   async function loadReports(label: string, options: { preferredRunID?: string; preferGameplay?: boolean } = {}) {
     setLoadingReport(true);
     try {
-      const response = await fetch(apiURL(`/api/reports?vod_label=${encodeURIComponent(label)}`));
+      const response = await fetch(apiURL(`/api/reports?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -660,7 +664,7 @@ export function App() {
   async function loadReport(label: string, runID: string) {
     setLoadingReport(true);
     try {
-      const response = await fetch(apiURL(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`));
+      const response = await fetch(apiURL(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`), { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -675,7 +679,7 @@ export function App() {
 
   async function loadEvaluations(label: string) {
     try {
-      const response = await fetch(apiURL(`/api/evaluations?vod_label=${encodeURIComponent(label)}`));
+      const response = await fetch(apiURL(`/api/evaluations?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
       if (response.ok) {
         setEvaluationHistory(((await response.json()) as EvaluationListResponse).evaluations);
       }
@@ -686,7 +690,7 @@ export function App() {
 
   async function loadEvaluationAnnotations(label: string) {
     try {
-      const response = await fetch(apiURL(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`));
+      const response = await fetch(apiURL(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
       if (response.ok) {
         setEvaluationAnnotations(((await response.json()) as EvaluationAnnotationListResponse).annotations);
       }
@@ -697,7 +701,7 @@ export function App() {
 
   async function loadManualCorrections(label: string, runID: string) {
     try {
-      const response = await fetch(apiURL(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`));
+      const response = await fetch(apiURL(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`), { headers: authHeaders });
       if (response.ok) {
         const payload = (await response.json()) as ManualCorrectionResponse;
         setManualCorrections(payload.corrections);
@@ -744,7 +748,7 @@ export function App() {
     try {
       const response = await fetch(apiURL("/api/analysis-runs"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders,
         body: JSON.stringify({
           vod_label: selectedVod.label,
           run_id: `ui_${compactTimestamp(new Date())}`,
@@ -772,7 +776,7 @@ export function App() {
   async function pollAnalysisJob(jobID: string, analyzedLabel: string) {
     for (;;) {
       await sleep(1600);
-      const response = await fetch(apiURL(`/api/analysis-runs/${encodeURIComponent(jobID)}`));
+      const response = await fetch(apiURL(`/api/analysis-runs/${encodeURIComponent(jobID)}`), { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -801,7 +805,7 @@ export function App() {
     try {
       const response = await fetch(apiURL("/api/evaluation-runs"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders,
         body: JSON.stringify({
           vod_label: selectedVod.label,
           report_run_id: report.run_id,
@@ -836,7 +840,7 @@ export function App() {
       const currentTime = videoRef.current?.currentTime;
       const response = await fetch(apiURL("/api/corrections"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jsonHeaders,
         body: JSON.stringify({
           vod_label: selectedVod.label,
           report_run_id: report.run_id,
@@ -1580,7 +1584,7 @@ function AdminPage(props: {
                 <span className={log.status >= 500 ? "bad" : log.status >= 400 ? "warn" : "ok"}>{log.status}</span>
                 <div>
                   <strong>{log.method} {log.route}</strong>
-                  <small>{log.path} / {log.duration_ms.toFixed(1)}ms / {new Date(log.time).toLocaleTimeString()}</small>
+                  <small>{log.path} / {log.duration_ms.toFixed(1)}ms / {new Date(log.time).toLocaleTimeString()} / {log.user_email ?? "anonymous"}</small>
                 </div>
               </article>
             ))}
