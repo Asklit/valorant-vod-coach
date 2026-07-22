@@ -39,6 +39,8 @@ type Config struct {
 	FFmpegPath                string
 	VisionURL                 string
 	StaticDir                 string
+	AuthStorePath             string
+	AuthHashIterations        int
 	Catalog                   app.AnalysisCatalog
 	ReportCatalog             app.ReportCatalog
 	Locks                     app.LockManager
@@ -51,6 +53,9 @@ type Server struct {
 	mux     *http.ServeMux
 	jobs    *analysisJobStore
 	metrics *serverMetrics
+	auth    *authSessionStore
+	users   *app.AuthStore
+	logs    *requestLogStore
 	logger  *slog.Logger
 	tracer  trace.Tracer
 }
@@ -164,6 +169,75 @@ type EvaluationAnnotationListResponse struct {
 	Annotations []EvaluationAnnotationSummary `json:"annotations"`
 }
 
+type AuthRegisterRequest struct {
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+type AuthLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type AuthResponse struct {
+	User  app.PublicAuthUser `json:"user"`
+	Token string             `json:"token"`
+}
+
+type AuthSessionResponse struct {
+	Authenticated bool                `json:"authenticated"`
+	User          *app.PublicAuthUser `json:"user,omitempty"`
+}
+
+type AdminOverviewResponse struct {
+	GeneratedAt time.Time          `json:"generated_at"`
+	User        app.PublicAuthUser `json:"user"`
+	System      AdminSystemStatus  `json:"system"`
+	Dataset     Counts             `json:"dataset"`
+	Jobs        map[string]int     `json:"jobs"`
+	Auth        AdminAuthStatus    `json:"auth"`
+}
+
+type AdminSystemStatus struct {
+	SchemaVersion       int    `json:"schema_version"`
+	Analyzer            string `json:"analyzer"`
+	ModelReviewEnabled  bool   `json:"model_review_enabled"`
+	ManifestPath        string `json:"manifest_path"`
+	RawRoot             string `json:"raw_root"`
+	ProcessedRoot       string `json:"processed_root"`
+	EvaluationLabelRoot string `json:"evaluation_label_root"`
+}
+
+type AdminAuthStatus struct {
+	UserCount int `json:"user_count"`
+}
+
+type AdminUsersResponse struct {
+	Users []app.PublicAuthUser `json:"users"`
+}
+
+type AdminMetricsResponse struct {
+	StartedAt time.Time            `json:"started_at"`
+	Requests  []AdminRequestMetric `json:"requests"`
+	Jobs      map[string]int       `json:"jobs"`
+	Logs      []requestLogEntry    `json:"logs"`
+	Routes    []string             `json:"routes"`
+	User      app.PublicAuthUser   `json:"user"`
+}
+
+type AdminRequestMetric struct {
+	Method          string  `json:"method"`
+	Route           string  `json:"route"`
+	Status          int     `json:"status"`
+	Count           int64   `json:"count"`
+	DurationSeconds float64 `json:"duration_seconds"`
+}
+
+type AdminLogsResponse struct {
+	Logs []requestLogEntry `json:"logs"`
+}
+
 type ManualCorrectionRequest struct {
 	VODLabel         string   `json:"vod_label"`
 	ReportRunID      string   `json:"report_run_id"`
@@ -251,12 +325,18 @@ func NewServer(config Config) *Server {
 	if config.FFmpegPath == "" {
 		config.FFmpegPath = "ffmpeg"
 	}
+	if config.AuthStorePath == "" {
+		config.AuthStorePath = filepath.Join(config.ProcessedRoot, "auth", "users.json")
+	}
 
 	server := &Server{
 		config:  config,
 		mux:     http.NewServeMux(),
 		jobs:    &analysisJobStore{jobs: map[string]*analysisJob{}},
 		metrics: newServerMetrics(time.Now().UTC()),
+		auth:    newAuthSessionStore(24 * time.Hour),
+		users:   &app.AuthStore{Path: config.AuthStorePath, Iterations: config.AuthHashIterations},
+		logs:    newRequestLogStore(200),
 		logger:  config.Logger,
 		tracer:  config.Tracer,
 	}
@@ -286,7 +366,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
 		recorder.Header().Set("Access-Control-Allow-Origin", origin)
 		recorder.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	}
 	if r.Method == http.MethodOptions {
 		recorder.WriteHeader(http.StatusNoContent)
@@ -307,6 +387,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logRequest(ctx context.Context, r *http.Request, route string, status int, duration time.Duration) {
+	if s.logs != nil {
+		s.logs.append(requestLogEntry{
+			Time:       time.Now().UTC(),
+			Method:     r.Method,
+			Path:       r.URL.Path,
+			Route:      route,
+			Status:     status,
+			DurationMS: float64(duration.Microseconds()) / 1000,
+		})
+	}
 	if s.logger == nil {
 		return
 	}
@@ -330,6 +420,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.handleReadiness)
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.registerPprofRoutes()
+	s.mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
+	s.mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	s.mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+	s.mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
+	s.mux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
+	s.mux.HandleFunc("GET /api/admin/metrics", s.handleAdminMetrics)
+	s.mux.HandleFunc("GET /api/admin/logs", s.handleAdminLogs)
+	s.mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
@@ -534,6 +632,198 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"model_review_available":  available,
 		"vision_service":          visionStatus,
 	})
+}
+
+func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var request AuthRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	user, err := s.authStore().Register(r.Context(), app.AuthRegisterRequest{
+		Email:       request.Email,
+		Password:    request.Password,
+		DisplayName: request.DisplayName,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	token, err := s.auth.create(user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, AuthResponse{User: user, Token: token})
+}
+
+func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var request AuthLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	user, err := s.authStore().Authenticate(r.Context(), app.AuthLoginRequest{
+		Email:    request.Email,
+		Password: request.Password,
+	})
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	token, err := s.auth.create(user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, AuthResponse{User: user, Token: token})
+}
+
+func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if token := bearerToken(r); token != "" {
+		s.auth.delete(token)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.currentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: true, User: &user})
+}
+
+func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	vods, err := dataset.LoadManifest(s.config.ManifestPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("load manifest: %w", err))
+		return
+	}
+	assets := dataset.ScanLocalAssets(s.config.RawRoot, dataset.Filter(vods, "", true))
+	counts := Counts{Total: len(vods), Enabled: dataset.CountEnabled(vods)}
+	for _, asset := range assets {
+		if asset.Status == dataset.LocalStatusDownloaded {
+			counts.Downloaded++
+		}
+		reports, err := s.listReportSummaries(r.Context(), asset.VOD.Label)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if len(reports) > 0 {
+			counts.Reported++
+		}
+	}
+	userCount, _ := s.authStore().UserCount(r.Context())
+	writeJSON(w, http.StatusOK, AdminOverviewResponse{
+		GeneratedAt: time.Now().UTC(),
+		User:        user,
+		System: AdminSystemStatus{
+			SchemaVersion:       domain.AnalysisReportSchemaVersion,
+			Analyzer:            "visual-heuristic-gameplay",
+			ModelReviewEnabled:  strings.TrimSpace(s.config.VisionURL) != "",
+			ManifestPath:        s.config.ManifestPath,
+			RawRoot:             s.config.RawRoot,
+			ProcessedRoot:       s.config.ProcessedRoot,
+			EvaluationLabelRoot: s.config.EvaluationAnnotationsRoot,
+		},
+		Dataset: counts,
+		Jobs:    s.jobs.countByStatus(),
+		Auth:    AdminAuthStatus{UserCount: userCount},
+	})
+}
+
+func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	startedAt, requestMetrics := s.metrics.snapshot()
+	metrics := make([]AdminRequestMetric, 0, len(requestMetrics))
+	for _, item := range requestMetrics {
+		metrics = append(metrics, AdminRequestMetric{
+			Method:          item.key.Method,
+			Route:           item.key.Route,
+			Status:          item.key.Status,
+			Count:           item.value.Count,
+			DurationSeconds: item.value.DurationSeconds,
+		})
+	}
+	writeJSON(w, http.StatusOK, AdminMetricsResponse{
+		StartedAt: startedAt,
+		Requests:  metrics,
+		Jobs:      s.jobs.countByStatus(),
+		Logs:      s.logs.snapshot(20),
+		Routes:    adminRouteList(),
+		User:      user,
+	})
+}
+
+func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, AdminLogsResponse{Logs: s.logs.snapshot(100)})
+}
+
+func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	users, err := s.authStore().ListUsers(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, AdminUsersResponse{Users: users})
+}
+
+func (s *Server) authStore() *app.AuthStore {
+	if s.users == nil {
+		s.users = &app.AuthStore{Path: s.config.AuthStorePath, Iterations: s.config.AuthHashIterations}
+	}
+	return s.users
+}
+
+func (s *Server) currentUser(r *http.Request) (app.PublicAuthUser, bool) {
+	token := bearerToken(r)
+	if token == "" || s.auth == nil {
+		return app.PublicAuthUser{}, false
+	}
+	return s.auth.get(token)
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (app.PublicAuthUser, bool) {
+	user, ok := s.currentUser(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return app.PublicAuthUser{}, false
+	}
+	if user.Role != app.AuthRoleAdmin {
+		writeError(w, http.StatusForbidden, errors.New("admin role required"))
+		return app.PublicAuthUser{}, false
+	}
+	return user, true
+}
+
+func bearerToken(r *http.Request) string {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if header == "" {
+		return ""
+	}
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1531,6 +1821,101 @@ type serverMetrics struct {
 	requests  map[requestMetricKey]requestMetricValue
 }
 
+type authSession struct {
+	Token     string
+	User      app.PublicAuthUser
+	ExpiresAt time.Time
+}
+
+type authSessionStore struct {
+	mu       sync.Mutex
+	ttl      time.Duration
+	sessions map[string]authSession
+}
+
+type requestLogEntry struct {
+	Time       time.Time `json:"time"`
+	Method     string    `json:"method"`
+	Path       string    `json:"path"`
+	Route      string    `json:"route"`
+	Status     int       `json:"status"`
+	DurationMS float64   `json:"duration_ms"`
+}
+
+type requestLogStore struct {
+	mu      sync.Mutex
+	limit   int
+	entries []requestLogEntry
+}
+
+func newAuthSessionStore(ttl time.Duration) *authSessionStore {
+	return &authSessionStore{ttl: ttl, sessions: map[string]authSession{}}
+}
+
+func (s *authSessionStore) create(user app.PublicAuthUser) (string, error) {
+	token, err := app.NewAuthToken()
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[token] = authSession{
+		Token:     token,
+		User:      user,
+		ExpiresAt: time.Now().UTC().Add(s.ttl),
+	}
+	return token, nil
+}
+
+func (s *authSessionStore) get(token string) (app.PublicAuthUser, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[token]
+	if !ok {
+		return app.PublicAuthUser{}, false
+	}
+	if time.Now().UTC().After(session.ExpiresAt) {
+		delete(s.sessions, token)
+		return app.PublicAuthUser{}, false
+	}
+	return session.User, true
+}
+
+func (s *authSessionStore) delete(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, token)
+}
+
+func newRequestLogStore(limit int) *requestLogStore {
+	if limit <= 0 {
+		limit = 100
+	}
+	return &requestLogStore{limit: limit}
+}
+
+func (s *requestLogStore) append(entry requestLogEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = append(s.entries, entry)
+	if len(s.entries) > s.limit {
+		s.entries = append([]requestLogEntry(nil), s.entries[len(s.entries)-s.limit:]...)
+	}
+}
+
+func (s *requestLogStore) snapshot(limit int) []requestLogEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 || limit > len(s.entries) {
+		limit = len(s.entries)
+	}
+	out := make([]requestLogEntry, 0, limit)
+	for i := len(s.entries) - 1; i >= len(s.entries)-limit; i-- {
+		out = append(out, s.entries[i])
+	}
+	return out
+}
+
 type requestMetricKey struct {
 	Method string
 	Route  string
@@ -1605,6 +1990,10 @@ func metricRoute(path string) string {
 		return "/metrics"
 	case strings.HasPrefix(path, "/debug/pprof/"):
 		return "/debug/pprof/*"
+	case strings.HasPrefix(path, "/api/auth/"):
+		return "/api/auth/*"
+	case strings.HasPrefix(path, "/api/admin/"):
+		return "/api/admin/*"
 	case path == "/api/health":
 		return "/api/health"
 	case path == "/api/vods":
@@ -1635,6 +2024,23 @@ func metricRoute(path string) string {
 		return "/api/unknown"
 	default:
 		return "static"
+	}
+}
+
+func adminRouteList() []string {
+	return []string{
+		"/healthz",
+		"/readyz",
+		"/metrics",
+		"/api/auth/*",
+		"/api/admin/*",
+		"/api/health",
+		"/api/vods",
+		"/api/analysis-runs",
+		"/api/reports",
+		"/api/evaluations",
+		"/api/corrections",
+		"/artifacts/*",
 	}
 }
 

@@ -11,6 +11,7 @@ Current scope:
 - run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
 - expose a Python `vision-service` contract for model review over selected clips.
 - capture manual corrections from the web UI into reproducible local JSON artifacts.
+- use a page-based React UI with local registration/login and an admin console for metrics, logs, users, and service links.
 
 Planned product stack:
 
@@ -134,6 +135,24 @@ The Go API exposes diagnostics endpoints:
 - `http://localhost:8090/readyz` for manifest/storage/vision readiness;
 - `http://localhost:8090/metrics` for Prometheus metrics;
 - `http://localhost:8090/debug/pprof/` for local Go profiling.
+
+The local web UI includes:
+
+- Dashboard, Library, Review, Reports, and Admin pages;
+- local registration/login through `POST /api/auth/register` and `POST /api/auth/login`;
+- Admin page backed by `GET /api/admin/overview`, `GET /api/admin/metrics`, `GET /api/admin/logs`, and `GET /api/admin/users`.
+
+## Current Analysis Model
+
+The local MVP analysis is a deterministic gameplay-review pipeline:
+
+- sample frames from the selected VOD with ffmpeg;
+- extract visual signals from frames, including motion, brightness, sharpness, HUD-like regions, and frame quality;
+- group timestamps into review windows that are likely to contain useful gameplay decisions;
+- create timeline events, round estimates, coach findings, and report artifacts;
+- optionally send selected windows to the Python `vision-service` contract for model-backed review prompts and responses.
+
+This means the current review is useful for building the product loop, report format, evidence browser, manual corrections, and benchmarks. It is not yet a production-grade Valorant coach. The next quality step is to benchmark the generated findings against manually labeled VOD windows and then replace weaker heuristics with OCR/CV/VLM tasks.
 
 Structured logs and traces:
 

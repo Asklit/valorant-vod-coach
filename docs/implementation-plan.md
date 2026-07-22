@@ -88,6 +88,8 @@ Implemented local UI slice:
 - jump from a review window to the matching timestamp in the local video player;
 - open generated mp4 clips for selected gameplay windows.
 - create manual corrections for false detections, map/agent/rank/round metadata, findings, and events; corrections are saved as local JSON artifacts under `data/processed/corrections/`.
+- separate player-facing flows into Dashboard, Library, Review, and Reports pages, with developer/operations data moved into an Admin page.
+- provide local registration/login and bearer-token sessions. The first registered user becomes `admin`; later users become `user`.
 
 ## Mistake Taxonomy
 
@@ -538,3 +540,4 @@ Completed local MVP infrastructure:
 - PostgreSQL-backed report history reads in `vod-web` as an alternative to filesystem scans.
 - Service diagnostics for `vod-web`: liveness, readiness, metrics, and pprof.
 - Manual correction capture in the Go API and React UI, saved as reproducible local JSON artifacts.
+- Page-based React product UI, local auth endpoints, and admin console for request metrics, logs, users, and service diagnostics.
