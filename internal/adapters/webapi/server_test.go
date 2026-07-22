@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/asklit/valorant-vod-coach/internal/app"
 )
 
 func TestServerListsVODs(t *testing.T) {
@@ -103,6 +106,97 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 		!strings.Contains(got, `"schema_version": 8`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
+	}
+}
+
+func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
+	fixture := newFixture(t)
+	reportDir := filepath.Join(fixture.outRoot, "diamond_example", "reports", "db_run")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("mkdir report dir: %v", err)
+	}
+	reportPath := filepath.Join(reportDir, "report.json")
+	if err := os.WriteFile(reportPath, []byte(`{
+  "schema_version": 8,
+  "run_id": "db_run",
+  "status": "completed",
+  "generated_at": "2026-07-22T12:30:00Z",
+  "vod": {"label": "diamond_example"},
+  "sample": {"name": "db_sample", "fps": "0.5", "frame_count": 12},
+  "findings": [],
+  "timeline": [],
+  "artifacts": [],
+  "metadata": {"analyzer": "db-backed"}
+}`), 0o644); err != nil {
+		t.Fatalf("write report json: %v", err)
+	}
+
+	generatedAt := time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC)
+	catalog := &fakeReportCatalog{summaries: []app.ReportCatalogSummary{{
+		SchemaVersion:        8,
+		VODLabel:             "diamond_example",
+		RunID:                "db_run",
+		Status:               "completed",
+		GeneratedAt:          generatedAt,
+		FindingCount:         3,
+		FrameCount:           12,
+		ReviewWindowCount:    2,
+		RoundSegmentCount:    1,
+		ModelReviewTaskCount: 2,
+		ModelReviewRunCount:  1,
+		Analyzer:             "db-backed",
+		SampleName:           "db_sample",
+		SampleFPS:            "0.5",
+		SampleDuration:       60,
+		ContactSheetPath:     filepath.Join(fixture.outRoot, "diamond_example", "frames", "sheet.jpg"),
+		JSONPath:             reportPath,
+		MarkdownPath:         filepath.Join(reportDir, "report.md"),
+	}}}
+	fixture.config.ReportCatalog = catalog
+	server := NewServer(fixture.config)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/reports?vod_label=diamond_example", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"run_id": "db_run"`) ||
+		!strings.Contains(got, `"finding_count": 3`) ||
+		!strings.Contains(got, `"model_review_task_count": 2`) ||
+		!strings.Contains(got, reportPath) {
+		t.Fatalf("unexpected report list response:\n%s", got)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/vods", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got = response.Body.String()
+	if !strings.Contains(got, `"latest_report_id": "db_run"`) ||
+		!strings.Contains(got, `"report_count": 1`) {
+		t.Fatalf("unexpected VOD list response:\n%s", got)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/reports/latest?vod_label=diamond_example", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"run_id": "db_run"`) ||
+		!strings.Contains(got, `"analyzer": "db-backed"`) {
+		t.Fatalf("unexpected latest report response:\n%s", got)
+	}
+
+	if len(catalog.labels) < 3 {
+		t.Fatalf("expected catalog to be used by reports, VOD list, and latest report; labels=%v", catalog.labels)
 	}
 }
 
@@ -470,4 +564,14 @@ esac
 		},
 		outRoot: outRoot,
 	}
+}
+
+type fakeReportCatalog struct {
+	labels    []string
+	summaries []app.ReportCatalogSummary
+}
+
+func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, vodLabel string) ([]app.ReportCatalogSummary, error) {
+	c.labels = append(c.labels, vodLabel)
+	return c.summaries, nil
 }

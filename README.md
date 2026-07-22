@@ -155,6 +155,8 @@ go run ./cmd/vodctl analyze run \
   --force
 ```
 
+When `DATABASE_URL` is configured for `vod-web`, report history and latest-report metadata are read from PostgreSQL. Full report JSON/Markdown artifacts are still served from the saved artifact paths.
+
 When `REDIS_URL` is configured, CLI and web analysis runs acquire a Redis-backed VOD lock before starting ffprobe/ffmpeg work. This prevents duplicate concurrent analysis jobs for the same VOD.
 
 Publish pending outbox events to Kafka:

@@ -39,6 +39,7 @@ type Config struct {
 	VisionURL                 string
 	StaticDir                 string
 	Catalog                   app.AnalysisCatalog
+	ReportCatalog             app.ReportCatalog
 	Locks                     app.LockManager
 	Logger                    *slog.Logger
 	Tracer                    trace.Tracer
@@ -432,7 +433,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		reports, err := s.listReports(asset.VOD.Label)
+		reports, err := s.listReportSummaries(r.Context(), asset.VOD.Label)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -463,7 +464,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 			latest := reports[0]
 			item.LatestReportID = latest.RunID
 			item.LatestGenerated = latest.GeneratedAt.Format(time.RFC3339)
-			item.LatestReportPath = latest.Path
+			item.LatestReportPath = latest.JSONPath
 		}
 		items = append(items, item)
 	}
@@ -654,17 +655,17 @@ func (s *Server) handleLatestReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reports, err := s.listReports(label)
+	reportPath, err := s.resolveReportPath(r.Context(), label, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(reports) == 0 {
+	if reportPath == "" {
 		writeError(w, http.StatusNotFound, fmt.Errorf("no reports for %s", label))
 		return
 	}
 
-	report, err := readReport(reports[0].Path)
+	report, err := readReport(reportPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -679,15 +680,10 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reports, err := s.listReports(label)
+	summaries, err := s.listReportSummaries(r.Context(), label)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
-	}
-
-	summaries := make([]ReportSummary, 0, len(reports))
-	for _, report := range reports {
-		summaries = append(summaries, report.Summary)
 	}
 
 	writeJSON(w, http.StatusOK, ReportListResponse{
@@ -761,7 +757,15 @@ func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reportPath := filepath.Join(s.config.ProcessedRoot, parts[0], "reports", parts[1], reportstore.JSONReportName)
+	reportPath, err := s.resolveReportPath(r.Context(), parts[0], parts[1])
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if reportPath == "" {
+		writeError(w, http.StatusNotFound, fmt.Errorf("no report %s for %s", parts[1], parts[0]))
+		return
+	}
 	report, err := readReport(reportPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -792,6 +796,70 @@ type annotationIndexItem struct {
 	Path        string
 	Annotations domain.EvaluationAnnotationSet
 	Summary     EvaluationAnnotationSummary
+}
+
+func (s *Server) listReportSummaries(ctx context.Context, vodLabel string) ([]ReportSummary, error) {
+	if s.config.ReportCatalog != nil {
+		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, vodLabel)
+		if err != nil {
+			return nil, err
+		}
+		summaries := make([]ReportSummary, 0, len(catalogSummaries))
+		for _, summary := range catalogSummaries {
+			summaries = append(summaries, reportCatalogSummaryToAPI(summary))
+		}
+		return summaries, nil
+	}
+
+	reports, err := s.listReports(vodLabel)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]ReportSummary, 0, len(reports))
+	for _, report := range reports {
+		summaries = append(summaries, report.Summary)
+	}
+	return summaries, nil
+}
+
+func (s *Server) resolveReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
+	reportRunID = strings.TrimSpace(reportRunID)
+	if reportRunID != "" && s.config.ReportCatalog == nil {
+		return filepath.Join(s.config.ProcessedRoot, vodLabel, "reports", reportRunID, reportstore.JSONReportName), nil
+	}
+
+	summaries, err := s.listReportSummaries(ctx, vodLabel)
+	if err != nil {
+		return "", err
+	}
+	for _, summary := range summaries {
+		if reportRunID == "" || summary.RunID == reportRunID {
+			return summary.JSONPath, nil
+		}
+	}
+	return "", nil
+}
+
+func reportCatalogSummaryToAPI(summary app.ReportCatalogSummary) ReportSummary {
+	return ReportSummary{
+		SchemaVersion:     summary.SchemaVersion,
+		RunID:             summary.RunID,
+		Status:            summary.Status,
+		GeneratedAt:       summary.GeneratedAt,
+		FindingCount:      summary.FindingCount,
+		FrameCount:        summary.FrameCount,
+		ReviewWindowCount: summary.ReviewWindowCount,
+		RoundSegmentCount: summary.RoundSegmentCount,
+		ModelTaskCount:    summary.ModelReviewTaskCount,
+		ModelRunCount:     summary.ModelReviewRunCount,
+		Analyzer:          summary.Analyzer,
+		SampleName:        summary.SampleName,
+		SampleFPS:         summary.SampleFPS,
+		SampleDuration:    summary.SampleDuration,
+		ContactSheet:      summary.ContactSheetPath,
+		JSONPath:          summary.JSONPath,
+		MarkdownPath:      summary.MarkdownPath,
+	}
 }
 
 func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
@@ -950,7 +1018,7 @@ func (s *Server) runEvaluation(ctx context.Context, request EvaluationRunRequest
 		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, errors.New("vod_label is required")
 	}
 
-	reportPath, err := s.resolveEvaluationReportPath(vodLabel, request.ReportRunID)
+	reportPath, err := s.resolveEvaluationReportPath(ctx, vodLabel, request.ReportRunID)
 	if err != nil {
 		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, err
 	}
@@ -990,20 +1058,18 @@ func (s *Server) runEvaluation(ctx context.Context, request EvaluationRunRequest
 	return evaluation, saved, nil
 }
 
-func (s *Server) resolveEvaluationReportPath(vodLabel string, reportRunID string) (string, error) {
-	reportRunID = strings.TrimSpace(reportRunID)
-	if reportRunID != "" {
-		return filepath.Join(s.config.ProcessedRoot, vodLabel, "reports", reportRunID, reportstore.JSONReportName), nil
-	}
-
-	reports, err := s.listReports(vodLabel)
+func (s *Server) resolveEvaluationReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
+	reportPath, err := s.resolveReportPath(ctx, vodLabel, reportRunID)
 	if err != nil {
 		return "", err
 	}
-	if len(reports) == 0 {
+	if reportPath == "" {
+		if strings.TrimSpace(reportRunID) != "" {
+			return "", fmt.Errorf("no report %s for %s", reportRunID, vodLabel)
+		}
 		return "", fmt.Errorf("no reports for %s", vodLabel)
 	}
-	return reports[0].Path, nil
+	return reportPath, nil
 }
 
 func (s *Server) resolveEvaluationAnnotationsPath(rawPath string, vodLabel string, reportRunID string) (string, error) {
