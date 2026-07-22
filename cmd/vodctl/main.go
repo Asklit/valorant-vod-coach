@@ -41,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runAnalyze(args[1:], stdout, stderr)
 	case "dataset":
 		return runDataset(args[1:], stdout, stderr)
+	case "eval":
+		return runEval(args[1:], stdout, stderr)
 	case "video":
 		return runVideo(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -672,6 +674,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   vodctl analyze <command> [options]
   vodctl dataset <command> [options]
+  vodctl eval <command> [options]
   vodctl video <command> [options]
 
 Commands:
@@ -679,6 +682,7 @@ Commands:
   dataset validate   Validate manifest structure and metadata
   dataset list       List VODs from the manifest
   dataset status     Show local download status
+  eval run           Evaluate gameplay events against manual labels
   video probe        Probe a downloaded video through ffprobe
   video sample       Extract sampled frames through ffmpeg`)
 }

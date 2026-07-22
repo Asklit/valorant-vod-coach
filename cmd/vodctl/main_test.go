@@ -297,12 +297,99 @@ esac
 	}
 }
 
+func TestRunEvalRunWritesEvaluation(t *testing.T) {
+	root := t.TempDir()
+	reportPath := filepath.Join(root, "report.json")
+	annotationsPath := filepath.Join(root, "annotations.json")
+	outRoot := filepath.Join(root, "evaluations")
+
+	report := `{
+  "schema_version": 8,
+  "run_id": "analysis_01",
+  "status": "completed",
+  "vod": {"label": "iron_example", "rank": "iron"},
+  "media": {"has_duration": false, "has_size": false, "has_audio": false},
+  "sample": {"name": "sample", "manifest_path": "frames.json", "fps": "1", "frame_count": 2},
+  "gameplay": {
+    "sampled_frames": 2,
+    "analyzed_frames": 2,
+    "review_window_count": 2,
+    "gameplay_events": [
+      {"id": "event_combat_001", "type": "combat_candidate", "category": "fight_selection", "severity": "medium", "title": "Combat", "detail": "Candidate", "timestamp_seconds": 10},
+      {"id": "event_combat_002", "type": "combat_candidate", "category": "fight_selection", "severity": "medium", "title": "Combat", "detail": "Candidate", "timestamp_seconds": 35},
+      {"id": "event_rotation_001", "type": "rotation_candidate", "category": "rotation_timing", "severity": "low", "title": "Rotation", "detail": "Candidate", "timestamp_seconds": 50}
+    ]
+  },
+  "findings": [],
+  "timeline": [],
+  "artifacts": [],
+  "metadata": {"analyzer": "visual-heuristic-gameplay", "mode": "local"}
+}`
+	annotations := `{
+  "schema_version": 1,
+  "vod_label": "iron_example",
+  "tolerance_seconds": 6,
+  "labels": [
+    {"id": "label_fight_001", "type": "death", "timestamp_seconds": 12, "description": "Bad duel"},
+    {"id": "label_tempo_001", "type": "tempo", "timestamp_seconds": 90, "description": "Lost tempo"}
+  ]
+}`
+	if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	if err := os.WriteFile(annotationsPath, []byte(annotations), 0o644); err != nil {
+		t.Fatalf("write annotations: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{
+		"eval", "run",
+		"--report", reportPath,
+		"--annotations", annotationsPath,
+		"--out-root", outRoot,
+		"--run-id", "eval_test",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "eval_test") ||
+		!strings.Contains(got, "PRECISION") ||
+		!strings.Contains(got, "0.50") {
+		t.Fatalf("unexpected stdout:\n%s", got)
+	}
+
+	evaluationPath := filepath.Join(outRoot, "eval_test", evaluationJSONName)
+	rawEvaluation, err := os.ReadFile(evaluationPath)
+	if err != nil {
+		t.Fatalf("expected evaluation JSON: %v", err)
+	}
+	if got := string(rawEvaluation); !strings.Contains(got, `"match_count": 1`) ||
+		!strings.Contains(got, `"missed_labels"`) ||
+		!strings.Contains(got, `"false_positives"`) {
+		t.Fatalf("unexpected evaluation JSON:\n%s", got)
+	}
+
+	markdownPath := filepath.Join(outRoot, "eval_test", evaluationMarkdownName)
+	rawMarkdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("expected evaluation markdown: %v", err)
+	}
+	if got := string(rawMarkdown); !strings.Contains(got, "Gameplay Event Evaluation") ||
+		!strings.Contains(got, "Missed Labels") ||
+		!strings.Contains(got, "False Positives") {
+		t.Fatalf("unexpected evaluation markdown:\n%s", got)
+	}
+}
+
 func TestFlagHelpReturnsSuccess(t *testing.T) {
 	tests := [][]string{
 		{"analyze", "run", "--help"},
 		{"dataset", "validate", "--help"},
 		{"dataset", "list", "--help"},
 		{"dataset", "status", "--help"},
+		{"eval", "run", "--help"},
 		{"video", "probe", "--help"},
 		{"video", "sample", "--help"},
 	}

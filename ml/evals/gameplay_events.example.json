@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "vod_label": "iron_spudbud_01",
+  "report_run_id": "gameplay_events_smoke",
+  "tolerance_seconds": 6,
+  "labels": [
+    {
+      "id": "label_round_001",
+      "type": "round",
+      "timestamp_seconds": 0,
+      "description": "Visible start of the sampled round window."
+    },
+    {
+      "id": "label_combat_001",
+      "type": "combat",
+      "timestamp_seconds": 2,
+      "description": "Manual review says this is a fight/death candidate."
+    },
+    {
+      "id": "label_rotation_001",
+      "type": "rotation",
+      "timestamp_seconds": 24,
+      "description": "Manual review says this is a rotation or reposition candidate."
+    }
+  ]
+}
