@@ -3,29 +3,47 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Clock3,
-  Copy,
   Crosshair,
   Database,
-  FileText,
   FileJson2,
+  FileText,
   Gauge,
   History,
   Lightbulb,
   Link2,
+  LogOut,
   Play,
   Radar,
   RefreshCw,
   Search,
   Shield,
-  Swords,
   Timer,
   Video
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+
+type PageID = "dashboard" | "library" | "review" | "reports" | "admin";
+
+type AuthUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  role: "admin" | "user";
+  created_at: string;
+  last_login_at?: string;
+};
+
+type AuthResponse = {
+  user: AuthUser;
+  token: string;
+};
+
+type AuthSessionResponse = {
+  authenticated: boolean;
+  user?: AuthUser;
+};
 
 type VODItem = {
   label: string;
@@ -65,16 +83,14 @@ type BackendHealth = {
   analyzer?: string;
   model_review_configured?: boolean;
   model_review_available?: boolean;
-  vision_service?: VisionServiceHealth;
-};
-
-type VisionServiceHealth = {
-  configured?: boolean;
-  status?: string;
-  model?: string;
-  mode?: string;
-  runtime?: string;
-  error?: string;
+  vision_service?: {
+    configured?: boolean;
+    status?: string;
+    model?: string;
+    mode?: string;
+    runtime?: string;
+    error?: string;
+  };
 };
 
 type Finding = {
@@ -91,27 +107,12 @@ type Finding = {
     timestamp_seconds?: number;
     frame_index?: number;
   }>;
-  tags?: string[];
 };
 
 type Frame = {
   index: number;
   timestamp_seconds: number;
   path: string;
-};
-
-type FrameObservation = {
-  index: number;
-  timestamp_seconds: number;
-  path: string;
-  brightness: number;
-  contrast: number;
-  motion_score: number;
-  center_activity: number;
-  minimap_signal: number;
-  hud_signal: number;
-  combat_signal: number;
-  phase: string;
 };
 
 type ReviewWindow = {
@@ -129,25 +130,27 @@ type ReviewWindow = {
   clip_path?: string;
   clip_duration_seconds?: number;
   evidence?: Finding["evidence"];
-  tags?: string[];
 };
 
-type CoachFocusArea = {
-  id: string;
-  priority: string;
-  category: string;
-  title: string;
-  detail: string;
-  score: number;
-  window_ids?: string[];
-};
-
-type PracticeTask = {
-  id: string;
-  title: string;
-  detail: string;
-  cadence: string;
-  tags?: string[];
+type CoachSummary = {
+  verdict: string;
+  confidence: number;
+  coverage_seconds?: number;
+  focus_areas?: Array<{
+    id: string;
+    priority: string;
+    category: string;
+    title: string;
+    detail: string;
+    score: number;
+    window_ids?: string[];
+  }>;
+  practice_plan?: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    cadence: string;
+  }>;
 };
 
 type PhaseStat = {
@@ -184,7 +187,6 @@ type GameplayEvent = {
   confidence?: number;
   evidence?: Finding["evidence"];
   window_id?: string;
-  tags?: string[];
 };
 
 type ModelReviewTask = {
@@ -202,32 +204,7 @@ type ModelReviewTask = {
   start_seconds: number;
   end_seconds: number;
   peak_seconds: number;
-  evidence?: Finding["evidence"];
-  context?: string[];
-  questions?: string[];
-  expected_output: string;
   prompt: string;
-};
-
-type ModelReviewRun = {
-  id: string;
-  task_id: string;
-  window_id: string;
-  status: string;
-  model?: string;
-  prompt_version: string;
-  verdict?: string;
-  practice?: string;
-  needs_manual_review?: boolean;
-  error?: string;
-};
-
-type CoachSummary = {
-  verdict: string;
-  confidence: number;
-  coverage_seconds?: number;
-  focus_areas?: CoachFocusArea[];
-  practice_plan?: PracticeTask[];
 };
 
 type GameplaySummary = {
@@ -248,10 +225,7 @@ type GameplaySummary = {
   round_segments?: RoundSegment[];
   gameplay_events?: GameplayEvent[];
   model_review_tasks?: ModelReviewTask[];
-  model_review_runs?: ModelReviewRun[];
-  frame_observations?: FrameObservation[];
   review_windows?: ReviewWindow[];
-  notes?: string[];
 };
 
 type Report = {
@@ -402,11 +376,72 @@ type ManualCorrectionResponse = {
   json_path: string;
 };
 
+type AdminOverview = {
+  generated_at: string;
+  user: AuthUser;
+  system: {
+    schema_version: number;
+    analyzer: string;
+    model_review_enabled: boolean;
+    manifest_path: string;
+    raw_root: string;
+    processed_root: string;
+    evaluation_label_root: string;
+  };
+  dataset: VODListResponse["counts"];
+  jobs: Record<string, number>;
+  auth: {
+    user_count: number;
+  };
+};
+
+type AdminMetric = {
+  method: string;
+  route: string;
+  status: number;
+  count: number;
+  duration_seconds: number;
+};
+
+type RequestLog = {
+  time: string;
+  method: string;
+  path: string;
+  route: string;
+  status: number;
+  duration_ms: number;
+};
+
+type AdminMetricsResponse = {
+  started_at: string;
+  requests: AdminMetric[];
+  jobs: Record<string, number>;
+  logs: RequestLog[];
+  routes: string[];
+  user: AuthUser;
+};
+
+type AdminLogsResponse = {
+  logs: RequestLog[];
+};
+
+type AdminUsersResponse = {
+  users: AuthUser[];
+};
+
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
-const evidencePageSize = 24;
 const correctionTypes = ["false_detection", "map", "agent", "rank", "round_boundary", "finding_note", "event_note"];
+const authStorageKey = "vodcoach.auth";
 
 export function App() {
+  const [page, setPage] = useState<PageID>("dashboard");
+  const [token, setToken] = useState(() => readStoredAuth()?.token ?? "");
+  const [user, setUser] = useState<AuthUser | null>(() => readStoredAuth()?.user ?? null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+
   const [vods, setVods] = useState<VODItem[]>([]);
   const [counts, setCounts] = useState<VODListResponse["counts"] | null>(null);
   const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
@@ -420,13 +455,17 @@ export function App() {
   const [manualCorrections, setManualCorrections] = useState<ManualCorrection[]>([]);
   const [manualCorrectionsPath, setManualCorrectionsPath] = useState("");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [adminMetrics, setAdminMetrics] = useState<AdminMetricsResponse | null>(null);
+  const [adminLogs, setAdminLogs] = useState<RequestLog[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [savingCorrection, setSavingCorrection] = useState(false);
   const [error, setError] = useState("");
-  const [copiedTaskID, setCopiedTaskID] = useState("");
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
@@ -435,10 +474,16 @@ export function App() {
   const [correctionTargetID, setCorrectionTargetID] = useState("");
   const [correctionValue, setCorrectionValue] = useState("");
   const [correctionComment, setCorrectionComment] = useState("");
-  const [evidencePage, setEvidencePage] = useState(0);
-  const [windowKind, setWindowKind] = useState("all");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  const authHeaders = useMemo<Record<string, string>>(() => {
+    const headers: Record<string, string> = {};
+    if (!token) {
+      return headers;
+    }
+    headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }, [token]);
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
   const filteredVods = useMemo(() => {
     return vods.filter((vod) => {
@@ -448,11 +493,24 @@ export function App() {
       return rankOk && queryOk;
     });
   }, [query, rank, vods]);
+  const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
+  const latestReportSummary = reportHistory.find((item) => item.run_id === report?.run_id) ?? reportHistory[0] ?? null;
+  const correctionTargets = useMemo(() => buildCorrectionTargets(report), [report]);
 
   useEffect(() => {
-    void loadBackendHealth();
-    void loadVods();
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    void loadSession();
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    void loadBootstrap();
+  }, [user?.id]);
 
   useEffect(() => {
     if (!selectedLabel) {
@@ -468,17 +526,9 @@ export function App() {
   }, [selectedLabel]);
 
   useEffect(() => {
-    setEvidencePage(0);
-  }, [report?.run_id]);
-
-  useEffect(() => {
-    setWindowKind("all");
     setCorrectionTargetID("");
     setCorrectionValue("");
     setCorrectionComment("");
-  }, [report?.run_id]);
-
-  useEffect(() => {
     if (!selectedLabel || !report?.run_id) {
       setManualCorrections([]);
       setManualCorrectionsPath("");
@@ -487,13 +537,75 @@ export function App() {
     void loadManualCorrections(selectedLabel, report.run_id);
   }, [selectedLabel, report?.run_id]);
 
+  useEffect(() => {
+    if (page === "admin" && user?.role === "admin") {
+      void loadAdmin();
+    }
+  }, [page, user?.role]);
+
+  async function loadSession() {
+    try {
+      const response = await fetch(apiURL("/api/auth/session"), { headers: authHeaders });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const payload = (await response.json()) as AuthSessionResponse;
+      if (!payload.authenticated || !payload.user) {
+        clearAuth();
+        return;
+      }
+      setUser(payload.user);
+    } catch {
+      clearAuth();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitAuth() {
+    setError("");
+    try {
+      const path = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+      const response = await fetch(apiURL(path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPassword, display_name: authName })
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const payload = (await response.json()) as AuthResponse;
+      setToken(payload.token);
+      setUser(payload.user);
+      window.localStorage.setItem(authStorageKey, JSON.stringify(payload));
+    } catch (err) {
+      setError(messageFromError(err));
+    }
+  }
+
+  async function logout() {
+    if (token) {
+      await fetch(apiURL("/api/auth/logout"), { method: "POST", headers: authHeaders }).catch(() => undefined);
+    }
+    clearAuth();
+  }
+
+  function clearAuth() {
+    setToken("");
+    setUser(null);
+    window.localStorage.removeItem(authStorageKey);
+  }
+
+  async function loadBootstrap() {
+    await Promise.all([loadBackendHealth(), loadVods()]);
+  }
+
   async function loadBackendHealth() {
     try {
       const response = await fetch(apiURL("/api/health"));
-      if (!response.ok) {
-        return;
+      if (response.ok) {
+        setBackendHealth((await response.json()) as BackendHealth);
       }
-      setBackendHealth((await response.json()) as BackendHealth);
     } catch {
       setBackendHealth(null);
     }
@@ -520,7 +632,6 @@ export function App() {
 
   async function loadReports(label: string, options: { preferredRunID?: string; preferGameplay?: boolean } = {}) {
     setLoadingReport(true);
-    setError("");
     try {
       const response = await fetch(apiURL(`/api/reports?vod_label=${encodeURIComponent(label)}`));
       if (!response.ok) {
@@ -532,11 +643,11 @@ export function App() {
         setReport(null);
         return;
       }
-      const preferredReport =
+      const preferred =
         payload.reports.find((item) => item.run_id === options.preferredRunID) ??
-        (options.preferGameplay ? payload.reports.find((item) => item.review_window_count > 0 || item.analyzer === "visual-heuristic-gameplay") : undefined) ??
+        (options.preferGameplay ? payload.reports.find((item) => item.review_window_count > 0) : undefined) ??
         payload.reports[0];
-      await loadReport(label, preferredReport.run_id);
+      await loadReport(label, preferred.run_id);
     } catch (err) {
       setError(messageFromError(err));
       setReport(null);
@@ -548,7 +659,6 @@ export function App() {
 
   async function loadReport(label: string, runID: string) {
     setLoadingReport(true);
-    setError("");
     try {
       const response = await fetch(apiURL(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`));
       if (!response.ok) {
@@ -566,11 +676,9 @@ export function App() {
   async function loadEvaluations(label: string) {
     try {
       const response = await fetch(apiURL(`/api/evaluations?vod_label=${encodeURIComponent(label)}`));
-      if (!response.ok) {
-        return;
+      if (response.ok) {
+        setEvaluationHistory(((await response.json()) as EvaluationListResponse).evaluations);
       }
-      const payload = (await response.json()) as EvaluationListResponse;
-      setEvaluationHistory(payload.evaluations);
     } catch {
       setEvaluationHistory([]);
     }
@@ -579,11 +687,9 @@ export function App() {
   async function loadEvaluationAnnotations(label: string) {
     try {
       const response = await fetch(apiURL(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`));
-      if (!response.ok) {
-        return;
+      if (response.ok) {
+        setEvaluationAnnotations(((await response.json()) as EvaluationAnnotationListResponse).annotations);
       }
-      const payload = (await response.json()) as EvaluationAnnotationListResponse;
-      setEvaluationAnnotations(payload.annotations);
     } catch {
       setEvaluationAnnotations([]);
     }
@@ -592,88 +698,40 @@ export function App() {
   async function loadManualCorrections(label: string, runID: string) {
     try {
       const response = await fetch(apiURL(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`));
-      if (!response.ok) {
-        return;
+      if (response.ok) {
+        const payload = (await response.json()) as ManualCorrectionResponse;
+        setManualCorrections(payload.corrections);
+        setManualCorrectionsPath(payload.json_path);
       }
-      const payload = (await response.json()) as ManualCorrectionResponse;
-      setManualCorrections(payload.corrections);
-      setManualCorrectionsPath(payload.json_path);
     } catch {
       setManualCorrections([]);
       setManualCorrectionsPath("");
     }
   }
 
-  async function saveManualCorrection() {
-    if (!selectedVod || !report || savingCorrection) {
-      return;
-    }
-    if (!correctionValue.trim() && !correctionComment.trim()) {
-      setError("Correction value or comment is required.");
-      return;
-    }
-
-    const currentTime = videoRef.current?.currentTime;
-    setSavingCorrection(true);
-    setError("");
+  async function loadAdmin() {
     try {
-      const response = await fetch(apiURL("/api/corrections"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vod_label: selectedVod.label,
-          report_run_id: report.run_id,
-          type: correctionType,
-          target_id: correctionTargetID,
-          corrected_value: correctionValue,
-          comment: correctionComment,
-          timestamp_seconds: Number.isFinite(currentTime) ? currentTime : undefined
-        })
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-      const payload = (await response.json()) as ManualCorrectionResponse;
-      setManualCorrections(payload.corrections);
-      setManualCorrectionsPath(payload.json_path);
-      setCorrectionValue("");
-      setCorrectionComment("");
+      const [overview, metrics, logs, users] = await Promise.all([
+        fetchJSON<AdminOverview>("/api/admin/overview"),
+        fetchJSON<AdminMetricsResponse>("/api/admin/metrics"),
+        fetchJSON<AdminLogsResponse>("/api/admin/logs"),
+        fetchJSON<AdminUsersResponse>("/api/admin/users")
+      ]);
+      setAdminOverview(overview);
+      setAdminMetrics(metrics);
+      setAdminLogs(logs.logs);
+      setAdminUsers(users.users);
     } catch (err) {
       setError(messageFromError(err));
-    } finally {
-      setSavingCorrection(false);
     }
   }
 
-  async function runEvaluation() {
-    if (!selectedVod || !report || evaluating || evaluationAnnotations.length === 0) {
-      return;
+  async function fetchJSON<T>(path: string): Promise<T> {
+    const response = await fetch(apiURL(path), { headers: authHeaders });
+    if (!response.ok) {
+      throw new Error(await readError(response));
     }
-    const annotation = evaluationAnnotations.find((item) => item.report_run_id && item.report_run_id === report.run_id) ?? evaluationAnnotations[0];
-    setEvaluating(true);
-    setError("");
-    try {
-      const response = await fetch(apiURL("/api/evaluation-runs"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vod_label: selectedVod.label,
-          report_run_id: report.run_id,
-          annotations_path: annotation.path,
-          run_id: `ui_eval_${compactTimestamp(new Date())}`,
-          tolerance_seconds: annotation.tolerance_seconds ?? 0,
-          force: true
-        })
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-      await loadEvaluations(selectedVod.label);
-    } catch (err) {
-      setError(messageFromError(err));
-    } finally {
-      setEvaluating(false);
-    }
+    return (await response.json()) as T;
   }
 
   async function runAnalysis() {
@@ -702,10 +760,8 @@ export function App() {
         throw new Error(await readError(response));
       }
       const payload = (await response.json()) as AnalysisJobResponse;
-      const analyzedLabel = selectedVod.label;
       setAnalysisJob(payload);
-      await pollAnalysisJob(payload.job_id, analyzedLabel);
-      setSelectedLabel(analyzedLabel);
+      await pollAnalysisJob(payload.job_id, selectedVod.label);
     } catch (err) {
       setError(messageFromError(err));
     } finally {
@@ -715,7 +771,7 @@ export function App() {
 
   async function pollAnalysisJob(jobID: string, analyzedLabel: string) {
     for (;;) {
-      await sleep(1800);
+      await sleep(1600);
       const response = await fetch(apiURL(`/api/analysis-runs/${encodeURIComponent(jobID)}`));
       if (!response.ok) {
         throw new Error(await readError(response));
@@ -723,13 +779,10 @@ export function App() {
       const job = (await response.json()) as AnalysisJobResponse;
       setAnalysisJob(job);
       if (job.status === "completed") {
-        if (job.report) {
-          setReport(job.report);
-        }
         await loadVods();
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
         await loadEvaluations(analyzedLabel);
-        await loadEvaluationAnnotations(analyzedLabel);
+        setPage("review");
         return;
       }
       if (job.status === "failed") {
@@ -738,36 +791,81 @@ export function App() {
     }
   }
 
-  const allSampleFrames = report?.sample.frames ?? [];
-  const evidencePageCount = Math.max(1, Math.ceil(allSampleFrames.length / evidencePageSize));
-  const safeEvidencePage = Math.min(evidencePage, evidencePageCount - 1);
-  const evidenceStart = safeEvidencePage * evidencePageSize;
-  const evidenceFrames = allSampleFrames.slice(evidenceStart, evidenceStart + evidencePageSize);
-  const selectedReportSummary = reportHistory.find((item) => item.run_id === report?.run_id);
-  const contactSheetPath = report?.sample.contact_sheet_path || selectedReportSummary?.contact_sheet || "";
-  const reviewWindows = report?.gameplay?.review_windows ?? [];
-  const roundSegments = report?.gameplay?.round_segments ?? [];
-  const gameplayEvents = report?.gameplay?.gameplay_events ?? [];
-  const modelReviewTasks = report?.gameplay?.model_review_tasks ?? [];
-  const modelReviewRuns = report?.gameplay?.model_review_runs ?? [];
-  const selectedEvaluationAnnotation = evaluationAnnotations.find((item) => item.report_run_id && item.report_run_id === report?.run_id) ?? evaluationAnnotations[0] ?? null;
-  const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
-  const correctionTargets = useMemo(() => buildCorrectionTargets(report), [report]);
-  const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
-  const reportHasGameplay = report ? hasGameplayReview(report) : false;
-  const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 8 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
-  const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
-  const modelReviewConfigured = Boolean(backendHealth?.model_review_configured);
-  const visionStatusLabel = modelReviewAvailable
-    ? `${backendHealth?.vision_service?.model || "vision-service"} / ${backendHealth?.vision_service?.runtime || backendHealth?.vision_service?.mode || "online"}`
-    : modelReviewConfigured
-      ? "Vision service offline"
-      : "Vision service not configured";
-  const modelReviewTitle = modelReviewAvailable
-    ? "Run model review through vision-service"
-    : modelReviewConfigured
-      ? backendHealth?.vision_service?.error || "Vision service is configured but not reachable"
-      : "Start vod-web with --vision-url or VISION_SERVICE_URL";
+  async function runEvaluation() {
+    if (!selectedVod || !report || evaluating || evaluationAnnotations.length === 0) {
+      return;
+    }
+    const annotation = evaluationAnnotations.find((item) => item.report_run_id === report.run_id) ?? evaluationAnnotations[0];
+    setEvaluating(true);
+    setError("");
+    try {
+      const response = await fetch(apiURL("/api/evaluation-runs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vod_label: selectedVod.label,
+          report_run_id: report.run_id,
+          annotations_path: annotation.path,
+          run_id: `ui_eval_${compactTimestamp(new Date())}`,
+          tolerance_seconds: annotation.tolerance_seconds ?? 0,
+          force: true
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      await loadEvaluations(selectedVod.label);
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      setEvaluating(false);
+    }
+  }
+
+  async function saveManualCorrection() {
+    if (!selectedVod || !report || savingCorrection) {
+      return;
+    }
+    if (!correctionValue.trim() && !correctionComment.trim()) {
+      setError("Correction value or comment is required.");
+      return;
+    }
+    setSavingCorrection(true);
+    setError("");
+    try {
+      const currentTime = videoRef.current?.currentTime;
+      const response = await fetch(apiURL("/api/corrections"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vod_label: selectedVod.label,
+          report_run_id: report.run_id,
+          type: correctionType,
+          target_id: correctionTargetID,
+          corrected_value: correctionValue,
+          comment: correctionComment,
+          timestamp_seconds: Number.isFinite(currentTime) ? currentTime : undefined
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const payload = (await response.json()) as ManualCorrectionResponse;
+      setManualCorrections(payload.corrections);
+      setManualCorrectionsPath(payload.json_path);
+      setCorrectionValue("");
+      setCorrectionComment("");
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      setSavingCorrection(false);
+    }
+  }
+
+  function selectVOD(label: string) {
+    setSelectedLabel(label);
+    setPage("review");
+  }
 
   function seekVideo(seconds: number) {
     const player = videoRef.current;
@@ -778,21 +876,30 @@ export function App() {
     void player.play().catch(() => undefined);
   }
 
-  async function copyTaskPrompt(task: ModelReviewTask) {
-    try {
-      await navigator.clipboard.writeText(task.prompt);
-      setCopiedTaskID(task.id);
-      window.setTimeout(() => setCopiedTaskID((current) => (current === task.id ? "" : current)), 1600);
-    } catch {
-      setError("Clipboard is unavailable in this browser context.");
-    }
+  if (loading && !user) {
+    return <LoadingScreen />;
+  }
+  if (!user) {
+    return (
+      <AuthScreen
+        authEmail={authEmail}
+        authMode={authMode}
+        authName={authName}
+        authPassword={authPassword}
+        error={error}
+        setAuthEmail={setAuthEmail}
+        setAuthMode={setAuthMode}
+        setAuthName={setAuthName}
+        setAuthPassword={setAuthPassword}
+        submitAuth={submitAuth}
+      />
+    );
   }
 
   return (
-    <main className="app-shell">
-      <div className="ambient-grid" />
-      <aside className="sidebar">
-        <div className="brand-lockup">
+    <main className="product-shell">
+      <aside className="app-nav">
+        <div className="brand-lockup product-brand">
           <div className="brand-mark">
             <Crosshair size={22} />
           </div>
@@ -802,725 +909,757 @@ export function App() {
           </div>
         </div>
 
-        <div className="search-box">
-          <Search size={16} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search VOD, rank, channel" />
-        </div>
+        <nav className="nav-stack" aria-label="Primary">
+          <NavButton active={page === "dashboard"} icon={<Gauge size={18} />} label="Dashboard" onClick={() => setPage("dashboard")} />
+          <NavButton active={page === "library"} icon={<Database size={18} />} label="Library" onClick={() => setPage("library")} />
+          <NavButton active={page === "review"} icon={<Play size={18} />} label="Review" onClick={() => setPage("review")} />
+          <NavButton active={page === "reports"} icon={<FileText size={18} />} label="Reports" onClick={() => setPage("reports")} />
+          {user.role === "admin" && <NavButton active={page === "admin"} icon={<Shield size={18} />} label="Admin" onClick={() => setPage("admin")} />}
+        </nav>
 
-        <div className="rank-strip" aria-label="Rank filter">
-          {ranks.map((rankOption) => (
-            <button
-              className={rank === rankOption ? "rank-pill active" : "rank-pill"}
-              key={rankOption}
-              onClick={() => setRank(rankOption)}
-              type="button"
-            >
-              {rankOption}
-            </button>
-          ))}
-        </div>
-
-        <div className="vod-list" aria-label="VOD library">
-          {loading ? (
-            <SkeletonList />
-          ) : (
-            filteredVods.map((vod) => (
-              <button
-                className={vod.label === selectedLabel ? "vod-row active" : "vod-row"}
-                key={vod.label}
-                onClick={() => setSelectedLabel(vod.label)}
-                type="button"
-              >
-                <span className={`rank-sigil rank-${vod.rank}`}>{vod.rank.slice(0, 3)}</span>
-                <span className="vod-row-main">
-                  <span className="vod-row-title">{vod.title}</span>
-                  <span className="vod-row-meta">
-                    {vod.rank} / {vod.duration_text} / {vod.channel}
-                  </span>
-                </span>
-                <span className={vod.local_status === "downloaded" ? "status-dot online" : "status-dot"} />
-              </button>
-            ))
-          )}
+        <div className="nav-user">
+          <span>{user.role}</span>
+          <strong>{user.display_name}</strong>
+          <small>{user.email}</small>
+          <button onClick={() => void logout()} type="button">
+            <LogOut size={15} />
+            Sign out
+          </button>
         </div>
       </aside>
 
-      <section className="workspace">
-        <header className="topbar">
-          <div className="topbar-copy">
-            <p className="eyebrow">LOCAL MVP</p>
-            <h1>{selectedVod?.title ?? "Valorant VOD Coach"}</h1>
-          </div>
-          <div className="topbar-actions">
-            <button className="icon-button" onClick={() => void loadVods()} title="Refresh dataset" type="button">
-              <RefreshCw size={18} />
-            </button>
-            <a className="source-link" href={selectedVod?.source_url ?? "#"} target="_blank" rel="noreferrer">
-              <Video size={17} />
-              Source
-            </a>
-          </div>
-        </header>
-
+      <section className="product-main">
         {error && (
-          <div className="error-banner">
+          <div className="error-banner product-error">
             <AlertTriangle size={18} />
             {error}
           </div>
         )}
 
-        {backendMismatch && (
-          <div className="compat-banner backend-warning">
-            <AlertTriangle size={17} />
-            <div>
-              <strong>Backend contract mismatch</strong>
-              <span>schema {backendHealth?.schema_version ?? 1} / {backendHealth?.analyzer ?? "unknown analyzer"}</span>
-            </div>
-          </div>
+        {page === "dashboard" && (
+          <DashboardPage
+            backendHealth={backendHealth}
+            counts={counts}
+            latestReportSummary={latestReportSummary}
+            report={report}
+            selectedVod={selectedVod}
+            setPage={setPage}
+          />
         )}
-
-        <div className="hud-grid">
-          <Metric icon={<Database size={18} />} label="Dataset" value={counts ? `${counts.downloaded}/${counts.enabled}` : "..."} detail="downloaded" />
-          <Metric icon={<FileJson2 size={18} />} label="Reports" value={counts ? String(counts.reported) : "..."} detail="VODs ready" />
-          <Metric icon={<Gauge size={18} />} label="Analyzer" value={report?.metadata.analyzer ?? "baseline"} detail={report?.metadata.mode ?? "local"} />
-          <Metric icon={<Timer size={18} />} label="Sample" value={report ? `${report.sample.frame_count}` : "0"} detail="frames" />
-        </div>
-
-        <div className="primary-grid">
-          <section className="control-deck">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">RUN CONTROL</p>
-                <h2>Analysis pipeline</h2>
-              </div>
-              <span className={analyzing ? "live-chip active" : "live-chip"}>
-                <Activity size={14} />
-                {analyzing ? "running" : "ready"}
-              </span>
-            </div>
-
-            <div className="vod-intel">
-              <div className="intel-card">
-                <span>Rank</span>
-                <strong>{selectedVod?.rank ?? "select"}</strong>
-              </div>
-              <div className="intel-card">
-                <span>Duration</span>
-                <strong>{selectedVod?.duration_text ?? "--"}</strong>
-              </div>
-              <div className="intel-card">
-                <span>Status</span>
-                <strong>{displayLocalStatus(selectedVod)}</strong>
-              </div>
-            </div>
-
-            <div className="video-stage">
-              {loading ? (
-                <div className="video-placeholder loading" />
-              ) : selectedVod?.video_url ? (
-                <video controls preload="metadata" ref={videoRef} src={apiURL(selectedVod.video_url)} />
-              ) : (
-                <div className="video-placeholder">
-                  <Video size={30} />
-                  <span>{selectedVod ? "Not downloaded" : "Select VOD"}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="run-controls">
-              <label>
-                <span>Sample seconds</span>
-                <input
-                  disabled={fullVod}
-                  min={30}
-                  max={600}
-                  step={30}
-                  type="number"
-                  value={runDuration}
-                  onChange={(event) => setRunDuration(Number(event.target.value))}
-                />
-              </label>
-              <label>
-                <span>FPS</span>
-                <select value={runFps} onChange={(event) => setRunFps(event.target.value)}>
-                  <option value="0.5">0.5</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                </select>
-              </label>
-              <label className="toggle-control">
-                <input checked={fullVod} onChange={(event) => setFullVod(event.target.checked)} type="checkbox" />
-                <span>Full VOD</span>
-              </label>
-              <label className={modelReviewAvailable ? "toggle-control" : "toggle-control disabled"} title={modelReviewTitle}>
-                <input checked={modelReview && modelReviewAvailable} disabled={!modelReviewAvailable} onChange={(event) => setModelReview(event.target.checked)} type="checkbox" />
-                <span>Model review</span>
-              </label>
-              <div className={modelReviewAvailable ? "vision-status online" : "vision-status"} title={modelReviewTitle}>
-                <Radar size={14} />
-                <span>{visionStatusLabel}</span>
-              </div>
-              <button className="run-button" disabled={!selectedVod || selectedVod.local_status !== "downloaded" || analyzing} onClick={() => void runAnalysis()} type="button">
-                <Play size={18} fill="currentColor" />
-                {analyzing ? "Analyzing" : fullVod ? "Run full VOD" : "Run analysis"}
-              </button>
-            </div>
-
-            {analysisJob && (
-              <div className={`analysis-job status-${analysisJob.status}`}>
-                <span>{analysisJob.status}</span>
-                <strong>{analysisJob.run_id}</strong>
-                <small>{analysisJob.message ?? analysisJob.job_id}</small>
-              </div>
-            )}
-
-            <div className="pipeline-track">
-              {["Manifest", "Probe", "Frames", "Clips", "Model", "Report"].map((step, index) => (
-                <div className={report || analyzing ? "pipeline-step lit" : "pipeline-step"} key={step}>
-                  <span>{index + 1}</span>
-                  {step}
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="report-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">REPORT</p>
-                <h2>{report ? (reportHasGameplay ? "Gameplay review" : "Legacy report") : loadingReport ? "Loading report" : "No report selected"}</h2>
-                {report && <small className="panel-subline">Run {report.run_id}</small>}
-              </div>
-              {report && (
-                <span className="success-chip">
-                  <CheckCircle2 size={14} />
-                  {report.status}
-                </span>
-              )}
-            </div>
-
-            {reportHistory.length > 0 && (
-              <div className="report-history">
-                <div className="history-title">
-                  <History size={15} />
-                  Report history
-                </div>
-                <div className="history-list">
-                  {reportHistory.map((item) => (
-                    <button
-                      className={report?.run_id === item.run_id ? "history-run active" : "history-run"}
-                      key={item.run_id}
-                      onClick={() => selectedVod && void loadReport(selectedVod.label, item.run_id)}
-                      type="button"
-                    >
-                      <span>{item.run_id}</span>
-                      <small>
-                        {item.frame_count} frames / {item.review_window_count} windows / {item.round_segment_count || 0} rounds / {item.model_review_run_count || 0}/{item.model_review_task_count || 0} model
-                      </small>
-                      <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {(evaluationHistory.length > 0 || evaluationAnnotations.length > 0) && (
-              <div className="quality-panel">
-                <div className="history-title">
-                  <BarChart3 size={15} />
-                  Quality benchmarks
-                </div>
-                {selectedEvaluationAnnotation && (
-                  <div className="quality-actions">
-                    <div>
-                      <span>{selectedEvaluationAnnotation.label_count} manual labels</span>
-                      <small>
-                        {selectedEvaluationAnnotation.report_run_id ? `fixture ${selectedEvaluationAnnotation.report_run_id}` : selectedEvaluationAnnotation.path} / tolerance{" "}
-                        {formatSeconds(selectedEvaluationAnnotation.tolerance_seconds ?? 6)}
-                      </small>
-                    </div>
-                    <button disabled={!report || evaluating} onClick={() => void runEvaluation()} type="button">
-                      <BarChart3 size={14} />
-                      {evaluating ? "Running eval" : "Run benchmark"}
-                    </button>
-                  </div>
-                )}
-                {evaluationHistory.length > 0 ? (
-                  <div className="quality-list">
-                    {evaluationHistory.slice(0, 4).map((item) => (
-                      <article className="quality-card" key={item.run_id}>
-                        <div>
-                          <span>{item.run_id}</span>
-                          <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
-                        </div>
-                        <div className="quality-metrics">
-                          <small>{Math.round(clamp01(item.precision) * 100)}% precision</small>
-                          <small>{Math.round(clamp01(item.recall) * 100)}% recall</small>
-                          <small>{item.match_count}/{item.label_count} labels</small>
-                        </div>
-                        <p>
-                          {item.prediction_count} predictions / tolerance {formatSeconds(item.tolerance_seconds)} / report {item.report_run_id}
-                        </p>
-                        <div className="artifact-actions compact">
-                          <a href={artifactURL(item.json_path)} target="_blank" rel="noreferrer">
-                            <FileJson2 size={13} />
-                            JSON
-                          </a>
-                          <a href={artifactURL(item.markdown_path)} target="_blank" rel="noreferrer">
-                            <FileText size={13} />
-                            Markdown
-                          </a>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="quality-empty">No benchmark runs for this VOD yet.</p>
-                )}
-              </div>
-            )}
-
-            {report ? (
-              <>
-                <div className="report-stats">
-                  <Metric icon={<Shield size={18} />} label="Media" value={formatResolution(report)} detail={report.media.frame_rate ?? "unknown"} compact />
-                  <Metric icon={<Swords size={18} />} label="Windows" value={String(report.gameplay?.review_window_count ?? 0)} detail={report.metadata.analyzer} compact />
-                  <Metric icon={<Timer size={18} />} label="Rounds" value={String(report.gameplay?.round_segment_count ?? 0)} detail="estimated" compact />
-                  <Metric icon={<Clock3 size={18} />} label="Coverage" value={coverageLabel(report)} detail={`${report.sample.fps} fps`} compact />
-                </div>
-
-                {!reportHasGameplay && (
-                  <div className="compat-banner">
-                    <AlertTriangle size={17} />
-                    <div>
-                      <strong>Legacy baseline report</strong>
-                      <span>schema {report.schema_version || 1} / {report.metadata.analyzer || "unknown analyzer"}</span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="artifact-actions">
-                  <a href={artifactURL(reportPath(reportHistory, report.run_id, "json"))} target="_blank" rel="noreferrer">
-                    <FileJson2 size={15} />
-                    JSON
-                  </a>
-                  <a href={artifactURL(reportPath(reportHistory, report.run_id, "markdown"))} target="_blank" rel="noreferrer">
-                    <FileText size={15} />
-                    Markdown
-                  </a>
-                </div>
-
-                <div className="corrections-panel">
-                  <div className="history-title">
-                    <CheckCircle2 size={15} />
-                    Manual corrections
-                  </div>
-                  <div className="correction-form">
-                    <label>
-                      <span>Type</span>
-                      <select value={correctionType} onChange={(event) => setCorrectionType(event.target.value)}>
-                        {correctionTypes.map((type) => (
-                          <option key={type} value={type}>
-                            {type.replaceAll("_", " ")}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Target</span>
-                      <select value={correctionTargetID} onChange={(event) => setCorrectionTargetID(event.target.value)}>
-                        <option value="">report / general</option>
-                        {correctionTargets.map((target) => (
-                          <option key={target.id} value={target.id}>
-                            {target.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Value</span>
-                      <input value={correctionValue} onChange={(event) => setCorrectionValue(event.target.value)} placeholder="Correct value" />
-                    </label>
-                    <label className="correction-comment">
-                      <span>Comment</span>
-                      <textarea value={correctionComment} onChange={(event) => setCorrectionComment(event.target.value)} placeholder="Why this should change" rows={3} />
-                    </label>
-                    <button disabled={savingCorrection || (!correctionValue.trim() && !correctionComment.trim())} onClick={() => void saveManualCorrection()} type="button">
-                      <CheckCircle2 size={15} />
-                      {savingCorrection ? "Saving" : "Add correction"}
-                    </button>
-                  </div>
-                  {manualCorrections.length ? (
-                    <div className="correction-list">
-                      {manualCorrections.slice(-5).reverse().map((correction) => (
-                        <article className="correction-card" key={correction.id}>
-                          <div>
-                            <span>{correction.type.replaceAll("_", " ")}</span>
-                            <strong>{correction.target_id || "report"}</strong>
-                          </div>
-                          {correction.corrected_value ? <p>{correction.corrected_value}</p> : null}
-                          {correction.comment ? <small>{correction.comment}</small> : null}
-                          <em>
-                            {correction.status}
-                            {typeof correction.timestamp_seconds === "number" ? ` / ${formatSeconds(correction.timestamp_seconds)}` : ""}
-                          </em>
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="quality-empty">No corrections for this report.</p>
-                  )}
-                  {manualCorrectionsPath && (
-                    <div className="artifact-actions compact">
-                      <a href={artifactURL(manualCorrectionsPath)} target="_blank" rel="noreferrer">
-                        <FileJson2 size={13} />
-                        Corrections JSON
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                {report.gameplay && (
-                  <section className="gameplay-review">
-                    {report.gameplay.coach && (
-                      <div className="coach-summary">
-                        <div className="coach-verdict">
-                          <span>Coach</span>
-                          <h3>{primaryFocusTitle(report.gameplay.coach)}</h3>
-                          <p>{report.gameplay.coach.verdict}</p>
-                        </div>
-                        <strong>{Math.round(clamp01(report.gameplay.coach.confidence) * 100)}%</strong>
-                      </div>
-                    )}
-
-                    {report.gameplay.coach?.focus_areas?.length ? (
-                      <div className="focus-grid">
-                        {report.gameplay.coach.focus_areas.slice(0, 4).map((area) => (
-                          <article className={`focus-card priority-${area.priority}`} key={area.id}>
-                            <span>
-                              {area.priority} / {area.category}
-                            </span>
-                            <h3>{area.title}</h3>
-                            <p>{area.detail}</p>
-                            {area.window_ids?.length ? <small>{area.window_ids.join(" / ")}</small> : null}
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <div className="signal-grid">
-                      <SignalMeter label="Motion" value={report.gameplay.average_motion_score ?? 0} />
-                      <SignalMeter label="Minimap" value={report.gameplay.average_minimap_signal ?? 0} />
-                      <SignalMeter label="HUD" value={report.gameplay.average_hud_signal ?? 0} />
-                      <SignalMeter label="Combat peak" value={report.gameplay.peak_combat_score ?? 0} />
-                    </div>
-
-                    {report.gameplay.phase_profile?.length ? (
-                      <div className="phase-profile">
-                        {report.gameplay.phase_profile.map((phase) => (
-                          <div className="phase-row" key={phase.phase}>
-                            <span>{phase.phase}</span>
-                            <div>
-                              <i style={{ width: `${Math.round(clamp01(phase.ratio) * 100)}%` }} />
-                            </div>
-                            <strong>{Math.round(clamp01(phase.ratio) * 100)}%</strong>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {roundSegments.length ? (
-                      <div className="round-segments">
-                        {roundSegments.map((segment) => (
-                          <article className="round-segment" key={segment.round_number}>
-                            <div>
-                              <span>R{segment.round_number}</span>
-                              <strong>{roundRange(segment)}</strong>
-                            </div>
-                            <p>{segment.summary || "Estimated visual timeline segment."}</p>
-                            <small>
-                              {Math.round(clamp01(segment.confidence) * 100)}% / {segment.detection_method.replaceAll("_", " ")}
-                            </small>
-                            {segment.review_window_ids?.length ? <em>{segment.review_window_ids.join(" / ")}</em> : null}
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {gameplayEvents.length ? (
-                      <div className="gameplay-event-list">
-                        {gameplayEvents.slice(0, 28).map((event) => (
-                          <article className={`gameplay-event severity-${event.severity}`} key={event.id}>
-                            <div className="gameplay-event-time">
-                              <button onClick={() => seekVideo(event.timestamp_seconds)} title="Jump to event" type="button">
-                                <Play size={13} fill="currentColor" />
-                                {formatSeconds(event.timestamp_seconds)}
-                              </button>
-                              {event.round_number ? <span>R{event.round_number}</span> : null}
-                            </div>
-                            <div className="gameplay-event-body">
-                              <div>
-                                <span>
-                                  {event.type.replaceAll("_", " ")} / {event.category}
-                                </span>
-                                <h3>{event.title}</h3>
-                              </div>
-                              <p>{event.detail}</p>
-                              {event.recommendation ? (
-                                <div className="finding-recommendation compact">
-                                  <Lightbulb size={14} />
-                                  <p>{event.recommendation}</p>
-                                </div>
-                              ) : null}
-                              <div className="gameplay-event-meta">
-                                {typeof event.score === "number" ? <strong>{Math.round(clamp01(event.score) * 100)} score</strong> : null}
-                                {typeof event.confidence === "number" ? <small>{Math.round(clamp01(event.confidence) * 100)}% confidence</small> : null}
-                                {event.window_id ? <small>{event.window_id}</small> : null}
-                                {event.start_seconds !== undefined && event.end_seconds !== undefined ? <small>{eventRange(event)}</small> : null}
-                              </div>
-                              {event.evidence?.length ? (
-                                <div className="evidence-links">
-                                  {event.evidence.slice(0, 2).map((evidence) => (
-                                    <a href={artifactURL(evidence.path)} key={`${event.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
-                                      <Link2 size={13} />
-                                      {evidenceLabel(evidence)}
-                                    </a>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {modelReviewTasks.length ? (
-                      <div className="model-task-list">
-                        {modelReviewTasks.map((task) => (
-                          <article className={`model-task priority-${task.priority}`} key={task.id}>
-                            {(() => {
-                              const run = modelReviewRuns.find((item) => item.task_id === task.id);
-                              return (
-                                <>
-                            <div className="model-task-head">
-                              <div>
-                                <span>
-                                  {run?.status ?? task.status} / {task.priority} / {run?.model ?? task.model_hint ?? task.prompt_version}
-                                </span>
-                                <h3>
-                                  {task.round_number ? `R${task.round_number} / ` : ""}
-                                  {task.window_id}
-                                </h3>
-                              </div>
-                              <button onClick={() => void copyTaskPrompt(task)} title="Copy model prompt" type="button">
-                                <Copy size={14} />
-                                {copiedTaskID === task.id ? "Copied" : "Prompt"}
-                              </button>
-                            </div>
-                            <p>{run?.verdict ?? task.questions?.[0] ?? "Review this selected gameplay window with the configured model prompt."}</p>
-                            {run?.practice ? <small className="model-practice">{run.practice}</small> : null}
-                            <div className="evidence-links">
-                              {task.clip_path ? (
-                                <a href={artifactURL(task.clip_path)} target="_blank" rel="noreferrer">
-                                  <Video size={13} />
-                                  Clip
-                                </a>
-                              ) : null}
-                              {task.evidence?.slice(0, 2).map((evidence) => (
-                                <a href={artifactURL(evidence.path)} key={`${task.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
-                                  <Link2 size={13} />
-                                  {evidenceLabel(evidence)}
-                                </a>
-                              ))}
-                            </div>
-                                </>
-                              );
-                            })()}
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {report.gameplay.coach?.practice_plan?.length ? (
-                      <div className="practice-list">
-                        {report.gameplay.coach.practice_plan.map((task) => (
-                          <article className="practice-task" key={task.id}>
-                            <span>{task.cadence}</span>
-                            <h3>{task.title}</h3>
-                            <p>{task.detail}</p>
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {reviewWindows.length > 0 && (
-                      <div className="window-filter">
-                        {["all", ...reviewWindowKinds].map((kind) => (
-                          <button className={windowKind === kind ? "active" : ""} key={kind} onClick={() => setWindowKind(kind)} type="button">
-                            {kindLabel(kind)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="review-window-list">
-                      {visibleReviewWindows.map((window) => (
-                        <article className={`review-window severity-${window.severity}`} key={window.id}>
-                          <div className="review-window-head">
-                            <div>
-                              <span>
-                                {window.round_number ? `R${window.round_number} / ` : ""}
-                                {window.kind.replaceAll("_", " ")} / {windowRange(window)}
-                              </span>
-                              <h3>{window.title}</h3>
-                            </div>
-                            <div className="window-actions">
-                              {window.clip_path ? (
-                                <a className="clip-button" href={artifactURL(window.clip_path)} target="_blank" rel="noreferrer" title="Open review clip">
-                                  <Video size={14} />
-                                  {window.clip_duration_seconds ? formatSeconds(window.clip_duration_seconds) : "Clip"}
-                                </a>
-                              ) : null}
-                              <button className="seek-button" onClick={() => seekVideo(window.peak_seconds)} type="button" title="Jump to peak">
-                                <Play size={14} fill="currentColor" />
-                                {formatSeconds(window.peak_seconds)}
-                              </button>
-                            </div>
-                          </div>
-                          <p>{window.summary}</p>
-                          <div className="finding-recommendation">
-                            <Lightbulb size={15} />
-                            <p>{window.recommendation}</p>
-                          </div>
-                          {window.evidence?.length ? (
-                            <div className="evidence-links">
-                              {window.evidence.map((evidence) => (
-                                <a href={artifactURL(evidence.path)} key={`${window.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
-                                  <Link2 size={13} />
-                                  {evidenceLabel(evidence)}
-                                </a>
-                              ))}
-                            </div>
-                          ) : null}
-                        </article>
-                      ))}
-                      {!visibleReviewWindows.length && <div className="muted-line">No gameplay windows selected.</div>}
-                    </div>
-                  </section>
-                )}
-
-                <div className="finding-list">
-                  {report.findings.map((finding) => (
-                    <article className={`finding severity-${finding.severity}`} key={finding.id}>
-                      <div className="finding-head">
-                        <div>
-                          <span>
-                            {finding.severity} / {finding.category}
-                          </span>
-                          <h3>{finding.title}</h3>
-                        </div>
-                        {finding.confidence ? <strong>{Math.round(finding.confidence * 100)}%</strong> : null}
-                      </div>
-                      <p>{finding.detail}</p>
-                      {finding.recommendation && (
-                        <div className="finding-recommendation">
-                          <Lightbulb size={15} />
-                          <p>{finding.recommendation}</p>
-                        </div>
-                      )}
-                      {finding.evidence?.length ? (
-                        <div className="evidence-links">
-                          {finding.evidence.map((evidence) => (
-                            <a href={artifactURL(evidence.path)} key={`${finding.id}-${evidence.path}-${evidence.frame_index ?? 0}`} target="_blank" rel="noreferrer">
-                              <Link2 size={13} />
-                              {evidenceLabel(evidence)}
-                            </a>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="empty-state">
-                <Radar size={34} />
-                <h3>No generated report</h3>
-                <p>{selectedVod?.local_status === "downloaded" ? "Run baseline analysis for this VOD." : "This VOD is not downloaded locally."}</p>
-              </div>
-            )}
-          </section>
-        </div>
-
-        <div className="secondary-grid">
-          <section className="timeline-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">TIMELINE</p>
-                <h2>Events</h2>
-              </div>
-              <BarChart3 size={19} />
-            </div>
-            <div className="timeline">
-              {(report?.timeline ?? []).map((event) => (
-                <div className="timeline-event" key={`${event.type}-${event.timestamp_seconds}`}>
-                  <span>{formatSeconds(event.timestamp_seconds)}</span>
-                  <div>
-                    <strong>{event.title}</strong>
-                    <small>{event.type}</small>
-                    {event.detail ? <p>{event.detail}</p> : null}
-                  </div>
-                </div>
-              ))}
-              {!report?.timeline?.length && <div className="muted-line">No timeline events.</div>}
-            </div>
-          </section>
-
-          <section className="frames-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">EVIDENCE</p>
-                <h2>Sample frames</h2>
-              </div>
-              <div className="evidence-controls">
-                <button
-                  disabled={safeEvidencePage === 0 || allSampleFrames.length === 0}
-                  onClick={() => setEvidencePage((page) => Math.max(0, page - 1))}
-                  title="Previous frames"
-                  type="button"
-                >
-                  <ChevronLeft size={17} />
-                </button>
-                <span>{evidenceRangeLabel(evidenceStart, evidenceFrames.length, allSampleFrames.length)}</span>
-                <button
-                  disabled={safeEvidencePage >= evidencePageCount - 1 || allSampleFrames.length === 0}
-                  onClick={() => setEvidencePage((page) => Math.min(evidencePageCount - 1, page + 1))}
-                  title="Next frames"
-                  type="button"
-                >
-                  <ChevronRight size={17} />
-                </button>
-              </div>
-            </div>
-            <div className="frame-grid">
-              {contactSheetPath && (
-                <figure className="contact-sheet-tile">
-                  <img src={artifactURL(contactSheetPath)} alt="Contact sheet overview" loading="lazy" />
-                  <figcaption>contact sheet</figcaption>
-                </figure>
-              )}
-              {evidenceFrames.map((frame) => (
-                <figure className="frame-tile" key={frame.path}>
-                  <img src={artifactURL(frame.path)} alt={`Frame ${frame.index}`} loading="lazy" />
-                  <figcaption>#{frame.index} / {formatSeconds(frame.timestamp_seconds)}</figcaption>
-                </figure>
-              ))}
-              {!evidenceFrames.length && !contactSheetPath && <div className="muted-line">No frames loaded.</div>}
-            </div>
-          </section>
-        </div>
+        {page === "library" && (
+          <LibraryPage
+            filteredVods={filteredVods}
+            loading={loading}
+            query={query}
+            rank={rank}
+            refresh={() => void loadVods()}
+            selectedLabel={selectedLabel}
+            selectVOD={selectVOD}
+            setQuery={setQuery}
+            setRank={setRank}
+          />
+        )}
+        {page === "review" && (
+          <ReviewPage
+            analysisJob={analysisJob}
+            analyzing={analyzing}
+            backendHealth={backendHealth}
+            fullVod={fullVod}
+            modelReview={modelReview}
+            modelReviewAvailable={modelReviewAvailable}
+            report={report}
+            runAnalysis={() => void runAnalysis()}
+            runDuration={runDuration}
+            runFps={runFps}
+            selectedVod={selectedVod}
+            setFullVod={setFullVod}
+            setModelReview={setModelReview}
+            setRunDuration={setRunDuration}
+            setRunFps={setRunFps}
+            setPage={setPage}
+            videoRef={videoRef}
+            seekVideo={seekVideo}
+          />
+        )}
+        {page === "reports" && (
+          <ReportsPage
+            correctionComment={correctionComment}
+            correctionTargetID={correctionTargetID}
+            correctionTargets={correctionTargets}
+            correctionType={correctionType}
+            correctionValue={correctionValue}
+            evaluating={evaluating}
+            evaluationAnnotations={evaluationAnnotations}
+            evaluationHistory={evaluationHistory}
+            latestReportSummary={latestReportSummary}
+            loadReport={loadReport}
+            manualCorrections={manualCorrections}
+            manualCorrectionsPath={manualCorrectionsPath}
+            report={report}
+            reportHistory={reportHistory}
+            runEvaluation={() => void runEvaluation()}
+            saveManualCorrection={() => void saveManualCorrection()}
+            savingCorrection={savingCorrection}
+            selectedVod={selectedVod}
+            setCorrectionComment={setCorrectionComment}
+            setCorrectionTargetID={setCorrectionTargetID}
+            setCorrectionType={setCorrectionType}
+            setCorrectionValue={setCorrectionValue}
+            seekVideo={seekVideo}
+          />
+        )}
+        {page === "admin" && user.role === "admin" && (
+          <AdminPage
+            adminLogs={adminLogs}
+            adminMetrics={adminMetrics}
+            adminOverview={adminOverview}
+            adminUsers={adminUsers}
+            refresh={() => void loadAdmin()}
+          />
+        )}
       </section>
     </main>
+  );
+}
+
+function AuthScreen(props: {
+  authEmail: string;
+  authMode: "login" | "register";
+  authName: string;
+  authPassword: string;
+  error: string;
+  setAuthEmail: (value: string) => void;
+  setAuthMode: (value: "login" | "register") => void;
+  setAuthName: (value: string) => void;
+  setAuthPassword: (value: string) => void;
+  submitAuth: () => void;
+}) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <div className="brand-lockup">
+          <div className="brand-mark">
+            <Crosshair size={24} />
+          </div>
+          <div>
+            <div className="brand-title">VOD COACH</div>
+            <div className="brand-subtitle">LOCAL MVP</div>
+          </div>
+        </div>
+        <div className="auth-mode">
+          <button className={props.authMode === "login" ? "active" : ""} onClick={() => props.setAuthMode("login")} type="button">
+            Sign in
+          </button>
+          <button className={props.authMode === "register" ? "active" : ""} onClick={() => props.setAuthMode("register")} type="button">
+            Register
+          </button>
+        </div>
+        {props.authMode === "register" && (
+          <label>
+            <span>Name</span>
+            <input value={props.authName} onChange={(event) => props.setAuthName(event.target.value)} placeholder="Coach" />
+          </label>
+        )}
+        <label>
+          <span>Email</span>
+          <input value={props.authEmail} onChange={(event) => props.setAuthEmail(event.target.value)} placeholder="coach@example.com" type="email" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input value={props.authPassword} onChange={(event) => props.setAuthPassword(event.target.value)} placeholder="minimum 8 chars" type="password" />
+        </label>
+        {props.error && (
+          <div className="auth-error">
+            <AlertTriangle size={16} />
+            {props.error}
+          </div>
+        )}
+        <button className="auth-submit" onClick={props.submitAuth} type="button">
+          <Shield size={17} />
+          {props.authMode === "login" ? "Sign in" : "Create account"}
+        </button>
+      </section>
+    </main>
+  );
+}
+
+function DashboardPage(props: {
+  backendHealth: BackendHealth | null;
+  counts: VODListResponse["counts"] | null;
+  latestReportSummary: ReportSummary | null;
+  report: Report | null;
+  selectedVod: VODItem | null;
+  setPage: (page: PageID) => void;
+}) {
+  const coach = props.report?.gameplay?.coach;
+  return (
+    <>
+      <PageHeader eyebrow="Overview" title="Your VOD review workspace" detail="Player workflow first, developer details in Admin." />
+      <div className="stat-grid">
+        <Metric icon={<Database size={18} />} label="Downloaded" value={props.counts ? `${props.counts.downloaded}/${props.counts.enabled}` : "..."} detail="local VODs" />
+        <Metric icon={<FileText size={18} />} label="Reports" value={String(props.counts?.reported ?? 0)} detail="VODs reviewed" />
+        <Metric icon={<Radar size={18} />} label="Model review" value={props.backendHealth?.model_review_available ? "online" : "offline"} detail={props.backendHealth?.vision_service?.model ?? "vision-service"} />
+        <Metric icon={<Gauge size={18} />} label="Schema" value={String(props.backendHealth?.schema_version ?? 0)} detail={props.backendHealth?.analyzer ?? "unknown"} />
+      </div>
+
+      <div className="page-grid two">
+        <section className="surface hero-surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Current analysis</p>
+              <h2>{props.selectedVod?.title ?? "Select a VOD"}</h2>
+            </div>
+            <span className={props.backendHealth?.status === "ok" ? "success-chip" : "live-chip"}>
+              <Activity size={14} />
+              {props.backendHealth?.status ?? "unknown"}
+            </span>
+          </div>
+          <div className="analysis-explainer">
+            <StepPill index="1" title="Sample" detail="ffprobe and frames" />
+            <StepPill index="2" title="Signals" detail="motion, HUD, minimap" />
+            <StepPill index="3" title="Windows" detail="review clips" />
+            <StepPill index="4" title="Report" detail="coach schema" />
+          </div>
+          <p className="plain-copy">
+            The current engine is a deterministic visual baseline. It finds review moments from sampled frames and generates coach-ready evidence. Real VLM reasoning is optional through the vision service and is used only on selected clips.
+          </p>
+          <div className="hero-actions">
+            <button onClick={() => props.setPage("library")} type="button">
+              <Database size={16} />
+              Open library
+            </button>
+            <button onClick={() => props.setPage("review")} type="button">
+              <Play size={16} fill="currentColor" />
+              Review VOD
+            </button>
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Latest report</p>
+              <h2>{props.latestReportSummary?.run_id ?? "No report loaded"}</h2>
+            </div>
+            <History size={19} />
+          </div>
+          {coach ? (
+            <div className="coach-card">
+              <strong>{coach.focus_areas?.[0]?.title ?? "Coach summary"}</strong>
+              <p>{coach.verdict}</p>
+              <span>{Math.round(clamp01(coach.confidence) * 100)}% confidence</span>
+            </div>
+          ) : (
+            <EmptyState title="No gameplay summary" detail="Run analysis or select a report from the Reports page." />
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+function LibraryPage(props: {
+  filteredVods: VODItem[];
+  loading: boolean;
+  query: string;
+  rank: string;
+  refresh: () => void;
+  selectedLabel: string;
+  selectVOD: (label: string) => void;
+  setQuery: (value: string) => void;
+  setRank: (value: string) => void;
+}) {
+  return (
+    <>
+      <PageHeader eyebrow="Library" title="VOD library" detail="Pick a downloaded match and move into review." action={<IconButton icon={<RefreshCw size={17} />} onClick={props.refresh} title="Refresh" />} />
+      <section className="surface">
+        <div className="library-toolbar">
+          <div className="search-box product-search">
+            <Search size={16} />
+            <input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="Search VOD, rank, channel" />
+          </div>
+          <div className="rank-strip">
+            {ranks.map((rankOption) => (
+              <button className={props.rank === rankOption ? "rank-pill active" : "rank-pill"} key={rankOption} onClick={() => props.setRank(rankOption)} type="button">
+                {rankOption}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="vod-table">
+          {props.loading ? (
+            <EmptyState title="Loading VODs" detail="Dataset scan is running." />
+          ) : (
+            props.filteredVods.map((vod) => (
+              <button className={props.selectedLabel === vod.label ? "vod-card active" : "vod-card"} key={vod.label} onClick={() => props.selectVOD(vod.label)} type="button">
+                <span className={`rank-sigil rank-${vod.rank}`}>{vod.rank.slice(0, 3)}</span>
+                <div>
+                  <strong>{vod.title}</strong>
+                  <small>{vod.channel} / {vod.duration_text} / {vod.label}</small>
+                </div>
+                <em className={vod.local_status === "downloaded" ? "ready" : ""}>{vod.local_status}</em>
+                <span>{vod.report_count} reports</span>
+              </button>
+            ))
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function ReviewPage(props: {
+  analysisJob: AnalysisJobResponse | null;
+  analyzing: boolean;
+  backendHealth: BackendHealth | null;
+  fullVod: boolean;
+  modelReview: boolean;
+  modelReviewAvailable: boolean;
+  report: Report | null;
+  runAnalysis: () => void;
+  runDuration: number;
+  runFps: string;
+  selectedVod: VODItem | null;
+  setFullVod: (value: boolean) => void;
+  setModelReview: (value: boolean) => void;
+  setRunDuration: (value: number) => void;
+  setRunFps: (value: string) => void;
+  setPage: (page: PageID) => void;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  seekVideo: (seconds: number) => void;
+}) {
+  const windows = props.report?.gameplay?.review_windows ?? [];
+  const focusAreas = props.report?.gameplay?.coach?.focus_areas ?? [];
+  return (
+    <>
+      <PageHeader eyebrow="Review" title={props.selectedVod?.title ?? "Select a VOD"} detail={props.selectedVod ? `${props.selectedVod.rank} / ${props.selectedVod.duration_text}` : "Choose a VOD from Library."} />
+      <div className="review-layout">
+        <section className="surface">
+          <div className="video-stage product-video">
+            {props.selectedVod?.video_url ? (
+              <video controls preload="metadata" ref={props.videoRef} src={apiURL(props.selectedVod.video_url)} />
+            ) : (
+              <div className="video-placeholder">
+                <Video size={30} />
+                <span>{props.selectedVod ? "Not downloaded" : "No VOD selected"}</span>
+              </div>
+            )}
+          </div>
+          <div className="run-controls product-controls">
+            <label>
+              <span>Sample seconds</span>
+              <input disabled={props.fullVod} min={30} max={600} step={30} type="number" value={props.runDuration} onChange={(event) => props.setRunDuration(Number(event.target.value))} />
+            </label>
+            <label>
+              <span>FPS</span>
+              <select value={props.runFps} onChange={(event) => props.setRunFps(event.target.value)}>
+                <option value="0.5">0.5</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
+            <label className="toggle-control">
+              <input checked={props.fullVod} onChange={(event) => props.setFullVod(event.target.checked)} type="checkbox" />
+              <span>Full VOD</span>
+            </label>
+            <label className={props.modelReviewAvailable ? "toggle-control" : "toggle-control disabled"}>
+              <input checked={props.modelReview && props.modelReviewAvailable} disabled={!props.modelReviewAvailable} onChange={(event) => props.setModelReview(event.target.checked)} type="checkbox" />
+              <span>Model review</span>
+            </label>
+            <button className="run-button" disabled={!props.selectedVod || props.selectedVod.local_status !== "downloaded" || props.analyzing} onClick={props.runAnalysis} type="button">
+              <Play size={18} fill="currentColor" />
+              {props.analyzing ? "Analyzing" : props.fullVod ? "Run full VOD" : "Run analysis"}
+            </button>
+          </div>
+          {props.analysisJob && (
+            <div className={`analysis-job status-${props.analysisJob.status}`}>
+              <span>{props.analysisJob.status}</span>
+              <strong>{props.analysisJob.run_id}</strong>
+              <small>{props.analysisJob.message ?? props.analysisJob.job_id}</small>
+            </div>
+          )}
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Coach output</p>
+              <h2>{props.report?.run_id ?? "No report"}</h2>
+            </div>
+            <span className="success-chip">
+              <CheckCircle2 size={14} />
+              {props.backendHealth?.analyzer ?? "baseline"}
+            </span>
+          </div>
+          {props.report ? (
+            <>
+              <div className="stat-grid compact-stats">
+                <Metric compact icon={<Timer size={17} />} label="Frames" value={String(props.report.sample.frame_count)} detail={`${props.report.sample.fps} fps`} />
+                <Metric compact icon={<Activity size={17} />} label="Windows" value={String(windows.length)} detail="review" />
+                <Metric compact icon={<Clock3 size={17} />} label="Rounds" value={String(props.report.gameplay?.round_segment_count ?? 0)} detail="estimated" />
+              </div>
+              <div className="focus-stack">
+                {focusAreas.slice(0, 3).map((area) => (
+                  <article className={`focus-card priority-${area.priority}`} key={area.id}>
+                    <span>{area.priority} / {area.category}</span>
+                    <h3>{area.title}</h3>
+                    <p>{area.detail}</p>
+                  </article>
+                ))}
+                {focusAreas.length === 0 && <EmptyState title="No focus areas" detail="Run a gameplay analysis report." />}
+              </div>
+              <button className="secondary-action" onClick={() => props.setPage("reports")} type="button">
+                <FileText size={16} />
+                Open full report
+              </button>
+            </>
+          ) : (
+            <EmptyState title="No report selected" detail="Run analysis or pick a report from history." />
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+function ReportsPage(props: {
+  correctionComment: string;
+  correctionTargetID: string;
+  correctionTargets: Array<{ id: string; label: string }>;
+  correctionType: string;
+  correctionValue: string;
+  evaluating: boolean;
+  evaluationAnnotations: EvaluationAnnotationSummary[];
+  evaluationHistory: EvaluationSummary[];
+  latestReportSummary: ReportSummary | null;
+  loadReport: (label: string, runID: string) => Promise<void>;
+  manualCorrections: ManualCorrection[];
+  manualCorrectionsPath: string;
+  report: Report | null;
+  reportHistory: ReportSummary[];
+  runEvaluation: () => void;
+  saveManualCorrection: () => void;
+  savingCorrection: boolean;
+  selectedVod: VODItem | null;
+  setCorrectionComment: (value: string) => void;
+  setCorrectionTargetID: (value: string) => void;
+  setCorrectionType: (value: string) => void;
+  setCorrectionValue: (value: string) => void;
+  seekVideo: (seconds: number) => void;
+}) {
+  const windows = props.report?.gameplay?.review_windows ?? [];
+  return (
+    <>
+      <PageHeader eyebrow="Reports" title="Review evidence and corrections" detail={props.report ? `Run ${props.report.run_id}` : "No report selected."} />
+      <div className="page-grid reports-grid">
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">History</p>
+              <h2>{props.selectedVod?.label ?? "No VOD"}</h2>
+            </div>
+            <History size={19} />
+          </div>
+          <div className="history-list product-history">
+            {props.reportHistory.map((item) => (
+              <button className={props.report?.run_id === item.run_id ? "history-run active" : "history-run"} key={item.run_id} onClick={() => props.selectedVod && void props.loadReport(props.selectedVod.label, item.run_id)} type="button">
+                <span>{item.run_id}</span>
+                <small>{item.frame_count} frames / {item.review_window_count} windows / {item.model_review_run_count || 0}/{item.model_review_task_count || 0} model</small>
+                <small>{item.analyzer ?? `schema ${item.schema_version}`}</small>
+              </button>
+            ))}
+            {props.reportHistory.length === 0 && <EmptyState title="No reports" detail="Run analysis first." />}
+          </div>
+          {props.latestReportSummary && (
+            <div className="artifact-actions">
+              <a href={artifactURL(props.latestReportSummary.json_path)} target="_blank" rel="noreferrer">
+                <FileJson2 size={15} />
+                JSON
+              </a>
+              <a href={artifactURL(props.latestReportSummary.markdown_path)} target="_blank" rel="noreferrer">
+                <FileText size={15} />
+                Markdown
+              </a>
+            </div>
+          )}
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Review windows</p>
+              <h2>{windows.length} moments</h2>
+            </div>
+            <Radar size={19} />
+          </div>
+          <div className="window-list compact-window-list">
+            {windows.slice(0, 8).map((window) => (
+              <article className={`review-window severity-${window.severity}`} key={window.id}>
+                <div className="review-window-head">
+                  <div>
+                    <span>{window.kind.replaceAll("_", " ")} / {windowRange(window)}</span>
+                    <h3>{window.title}</h3>
+                  </div>
+                  <button className="seek-button" onClick={() => props.seekVideo(window.peak_seconds)} type="button">
+                    <Play size={13} fill="currentColor" />
+                    {formatSeconds(window.peak_seconds)}
+                  </button>
+                </div>
+                <p>{window.summary}</p>
+              </article>
+            ))}
+            {windows.length === 0 && <EmptyState title="No windows" detail="This report has no gameplay windows." />}
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Findings</p>
+              <h2>{props.report?.findings.length ?? 0} items</h2>
+            </div>
+            <Lightbulb size={19} />
+          </div>
+          <div className="finding-list product-findings">
+            {(props.report?.findings ?? []).slice(0, 8).map((finding) => (
+              <article className={`finding severity-${finding.severity}`} key={finding.id}>
+                <div className="finding-head">
+                  <div>
+                    <span>{finding.severity} / {finding.category}</span>
+                    <h3>{finding.title}</h3>
+                  </div>
+                </div>
+                <p>{finding.detail}</p>
+              </article>
+            ))}
+            {!props.report?.findings.length && <EmptyState title="No findings" detail="The selected report has no findings." />}
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Corrections</p>
+              <h2>{props.manualCorrections.length} saved</h2>
+            </div>
+            <CheckCircle2 size={19} />
+          </div>
+          <div className="correction-form product-correction-form">
+            <label>
+              <span>Type</span>
+              <select value={props.correctionType} onChange={(event) => props.setCorrectionType(event.target.value)}>
+                {correctionTypes.map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Target</span>
+              <select value={props.correctionTargetID} onChange={(event) => props.setCorrectionTargetID(event.target.value)}>
+                <option value="">report / general</option>
+                {props.correctionTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Value</span>
+              <input value={props.correctionValue} onChange={(event) => props.setCorrectionValue(event.target.value)} placeholder="Correct value" />
+            </label>
+            <label className="correction-comment">
+              <span>Comment</span>
+              <textarea value={props.correctionComment} onChange={(event) => props.setCorrectionComment(event.target.value)} placeholder="Why this should change" rows={3} />
+            </label>
+            <button disabled={props.savingCorrection || (!props.correctionValue.trim() && !props.correctionComment.trim())} onClick={props.saveManualCorrection} type="button">
+              <CheckCircle2 size={15} />
+              {props.savingCorrection ? "Saving" : "Add correction"}
+            </button>
+          </div>
+          <div className="correction-list">
+            {props.manualCorrections.slice(-4).reverse().map((correction) => (
+              <article className="correction-card" key={correction.id}>
+                <div>
+                  <span>{correction.type.replaceAll("_", " ")}</span>
+                  <strong>{correction.target_id || "report"}</strong>
+                </div>
+                {correction.corrected_value ? <p>{correction.corrected_value}</p> : null}
+                {correction.comment ? <small>{correction.comment}</small> : null}
+              </article>
+            ))}
+          </div>
+          {props.manualCorrectionsPath && (
+            <div className="artifact-actions compact">
+              <a href={artifactURL(props.manualCorrectionsPath)} target="_blank" rel="noreferrer">
+                <FileJson2 size={13} />
+                Corrections JSON
+              </a>
+            </div>
+          )}
+        </section>
+
+        <section className="surface wide">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Benchmarks</p>
+              <h2>{props.evaluationHistory.length} eval runs</h2>
+            </div>
+            <button className="secondary-action inline" disabled={!props.report || props.evaluating || props.evaluationAnnotations.length === 0} onClick={props.runEvaluation} type="button">
+              <BarChart3 size={15} />
+              {props.evaluating ? "Running" : "Run benchmark"}
+            </button>
+          </div>
+          <div className="quality-list product-quality">
+            {props.evaluationHistory.slice(0, 4).map((item) => (
+              <article className="quality-card" key={item.run_id}>
+                <div>
+                  <span>{item.run_id}</span>
+                  <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
+                </div>
+                <p>{item.match_count}/{item.label_count} labels / {item.prediction_count} predictions / report {item.report_run_id}</p>
+              </article>
+            ))}
+            {props.evaluationHistory.length === 0 && <EmptyState title="No benchmarks" detail="Add labels in ml/evals and run benchmark." />}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function AdminPage(props: {
+  adminLogs: RequestLog[];
+  adminMetrics: AdminMetricsResponse | null;
+  adminOverview: AdminOverview | null;
+  adminUsers: AuthUser[];
+  refresh: () => void;
+}) {
+  const requests = props.adminMetrics?.requests ?? [];
+  const maxCount = Math.max(1, ...requests.map((item) => item.count));
+  return (
+    <>
+      <PageHeader eyebrow="Admin" title="Operations console" detail="Local service diagnostics, request metrics, logs, users." action={<IconButton icon={<RefreshCw size={17} />} onClick={props.refresh} title="Refresh admin" />} />
+      <div className="stat-grid">
+        <Metric icon={<Database size={18} />} label="Dataset" value={String(props.adminOverview?.dataset.total ?? 0)} detail="manifest rows" />
+        <Metric icon={<FileText size={18} />} label="Reports" value={String(props.adminOverview?.dataset.reported ?? 0)} detail="VODs ready" />
+        <Metric icon={<Shield size={18} />} label="Users" value={String(props.adminOverview?.auth.user_count ?? 0)} detail="local auth" />
+        <Metric icon={<Activity size={18} />} label="Jobs" value={String(props.adminOverview?.jobs.running ?? 0)} detail="running" />
+      </div>
+      <div className="page-grid two">
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">HTTP metrics</p>
+              <h2>Requests by route</h2>
+            </div>
+            <BarChart3 size={19} />
+          </div>
+          <div className="metric-bars">
+            {requests.slice(0, 10).map((item) => (
+              <div className="metric-bar" key={`${item.method}-${item.route}-${item.status}`}>
+                <span>{item.method} {item.route}</span>
+                <div><i style={{ width: `${Math.max(6, (item.count / maxCount) * 100)}%` }} /></div>
+                <strong>{item.count}</strong>
+              </div>
+            ))}
+            {requests.length === 0 && <EmptyState title="No request metrics" detail="Use the app and refresh admin." />}
+          </div>
+          <div className="admin-links">
+            <a href={apiURL("/metrics")} target="_blank" rel="noreferrer">Prometheus</a>
+            <a href={apiURL("/debug/pprof/")} target="_blank" rel="noreferrer">pprof</a>
+            <a href={apiURL("/readyz")} target="_blank" rel="noreferrer">readyz</a>
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Logs</p>
+              <h2>Recent requests</h2>
+            </div>
+            <Activity size={19} />
+          </div>
+          <div className="log-list">
+            {props.adminLogs.slice(0, 14).map((log) => (
+              <article className="log-row" key={`${log.time}-${log.path}-${log.duration_ms}`}>
+                <span className={log.status >= 500 ? "bad" : log.status >= 400 ? "warn" : "ok"}>{log.status}</span>
+                <div>
+                  <strong>{log.method} {log.route}</strong>
+                  <small>{log.path} / {log.duration_ms.toFixed(1)}ms / {new Date(log.time).toLocaleTimeString()}</small>
+                </div>
+              </article>
+            ))}
+            {props.adminLogs.length === 0 && <EmptyState title="No logs" detail="No requests recorded yet." />}
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Users</p>
+              <h2>Local accounts</h2>
+            </div>
+            <Shield size={19} />
+          </div>
+          <div className="user-list">
+            {props.adminUsers.map((account) => (
+              <article className="user-row" key={account.id}>
+                <span>{account.role}</span>
+                <div>
+                  <strong>{account.display_name}</strong>
+                  <small>{account.email}</small>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">System</p>
+              <h2>Paths</h2>
+            </div>
+            <Gauge size={19} />
+          </div>
+          <dl className="system-list">
+            <dt>manifest</dt>
+            <dd>{props.adminOverview?.system.manifest_path}</dd>
+            <dt>raw</dt>
+            <dd>{props.adminOverview?.system.raw_root}</dd>
+            <dt>processed</dt>
+            <dd>{props.adminOverview?.system.processed_root}</dd>
+            <dt>analyzer</dt>
+            <dd>{props.adminOverview?.system.analyzer}</dd>
+          </dl>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function PageHeader(props: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
+  return (
+    <header className="page-header">
+      <div>
+        <p className="eyebrow">{props.eyebrow}</p>
+        <h1>{props.title}</h1>
+        <span>{props.detail}</span>
+      </div>
+      {props.action}
+    </header>
+  );
+}
+
+function NavButton(props: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button className={props.active ? "nav-button active" : "nav-button"} onClick={props.onClick} type="button">
+      {props.icon}
+      {props.label}
+    </button>
+  );
+}
+
+function IconButton(props: { icon: ReactNode; onClick: () => void; title: string }) {
+  return (
+    <button className="icon-button" onClick={props.onClick} title={props.title} type="button">
+      {props.icon}
+    </button>
   );
 }
 
@@ -1537,27 +1676,33 @@ function Metric(props: { icon: ReactNode; label: string; value: string; detail: 
   );
 }
 
-function SignalMeter(props: { label: string; value: number }) {
+function StepPill(props: { index: string; title: string; detail: string }) {
   return (
-    <div className="signal-meter">
-      <div>
-        <span>{props.label}</span>
-        <strong>{Math.round(clamp01(props.value) * 100)}%</strong>
-      </div>
-      <div className="signal-track">
-        <span style={{ width: `${Math.round(clamp01(props.value) * 100)}%` }} />
-      </div>
+    <div className="step-pill">
+      <span>{props.index}</span>
+      <strong>{props.title}</strong>
+      <small>{props.detail}</small>
     </div>
   );
 }
 
-function SkeletonList() {
+function EmptyState(props: { title: string; detail: string }) {
   return (
-    <>
-      {Array.from({ length: 7 }).map((_, index) => (
-        <div className="vod-row skeleton" key={index} />
-      ))}
-    </>
+    <div className="empty-state compact-empty">
+      <Radar size={28} />
+      <h3>{props.title}</h3>
+      <p>{props.detail}</p>
+    </div>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <main className="auth-shell">
+      <div className="loading-mark">
+        <Crosshair size={28} />
+      </div>
+    </main>
   );
 }
 
@@ -1586,38 +1731,6 @@ function compactTimestamp(date: Date) {
   return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
 }
 
-function formatResolution(report: Report) {
-  if (!report.media.width || !report.media.height) {
-    return "unknown";
-  }
-  return `${report.media.width}x${report.media.height}`;
-}
-
-function coverageLabel(report: Report) {
-  if (!report.sample.duration_seconds) {
-    return "full";
-  }
-  return `${Math.round(report.sample.duration_seconds)}s`;
-}
-
-function hasGameplayReview(report: Report) {
-  return Boolean(report.gameplay && report.metadata.analyzer === "visual-heuristic-gameplay");
-}
-
-function primaryFocusTitle(coach: CoachSummary) {
-  return coach.focus_areas?.[0]?.title ?? "Full VOD coach summary";
-}
-
-function displayLocalStatus(vod: VODItem | null) {
-  if (!vod) {
-    return "idle";
-  }
-  if (vod.local_status === "downloaded") {
-    return "ready";
-  }
-  return vod.local_status;
-}
-
 function formatSeconds(seconds: number) {
   return `${seconds.toFixed(seconds % 1 === 0 ? 0 : 1)}s`;
 }
@@ -1626,32 +1739,11 @@ function windowRange(window: ReviewWindow) {
   return `${formatSeconds(window.start_seconds)}-${formatSeconds(window.end_seconds)}`;
 }
 
-function roundRange(segment: RoundSegment) {
-  return `${formatSeconds(segment.start_seconds)}-${formatSeconds(segment.end_seconds)}`;
-}
-
-function eventRange(event: GameplayEvent) {
-  return `${formatSeconds(event.start_seconds ?? event.timestamp_seconds)}-${formatSeconds(event.end_seconds ?? event.timestamp_seconds)}`;
-}
-
-function evidenceRangeLabel(start: number, count: number, total: number) {
-  if (total === 0) {
-    return "0 / 0";
-  }
-  return `${start + 1}-${start + count} / ${total}`;
-}
-
-function uniqueWindowKinds(windows: ReviewWindow[]) {
-  return Array.from(new Set(windows.map((window) => window.kind))).sort();
-}
-
 function buildCorrectionTargets(report: Report | null) {
   if (!report) {
     return [];
   }
-  const targets: Array<{ id: string; label: string }> = [
-    { id: `report:${report.run_id}`, label: `report / ${report.run_id}` }
-  ];
+  const targets: Array<{ id: string; label: string }> = [{ id: `report:${report.run_id}`, label: `report / ${report.run_id}` }];
   for (const finding of report.findings ?? []) {
     targets.push({ id: finding.id, label: compactLabel(`finding / ${finding.title}`) });
   }
@@ -1662,7 +1754,7 @@ function buildCorrectionTargets(report: Report | null) {
     targets.push({ id: window.id, label: compactLabel(`window / ${windowRange(window)} / ${window.title}`) });
   }
   for (const round of report.gameplay?.round_segments ?? []) {
-    targets.push({ id: `round:${round.round_number}`, label: compactLabel(`round ${round.round_number} / ${roundRange(round)}`) });
+    targets.push({ id: `round:${round.round_number}`, label: compactLabel(`round ${round.round_number} / ${formatSeconds(round.start_seconds)}-${formatSeconds(round.end_seconds)}`) });
   }
   return targets;
 }
@@ -1671,25 +1763,11 @@ function compactLabel(value: string) {
   return value.length > 88 ? `${value.slice(0, 85)}...` : value;
 }
 
-function kindLabel(kind: string) {
-  if (kind === "all") {
-    return "all";
-  }
-  return kind.replaceAll("_", " ");
-}
-
 function clamp01(value: number) {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.min(1, Math.max(0, value));
-}
-
-function evidenceLabel(evidence: NonNullable<Finding["evidence"]>[number]) {
-  if (evidence.frame_index) {
-    return `${evidence.artifact_type} #${evidence.frame_index}`;
-  }
-  return evidence.artifact_type;
 }
 
 function artifactURL(path: string) {
@@ -1705,14 +1783,6 @@ function artifactURL(path: string) {
   return apiURL(`/artifacts/${normalized.replace(/^\/+/, "")}`);
 }
 
-function reportPath(history: ReportSummary[], runID: string, kind: "json" | "markdown") {
-  const item = history.find((entry) => entry.run_id === runID);
-  if (!item) {
-    return "";
-  }
-  return kind === "json" ? item.json_path : item.markdown_path;
-}
-
 function apiURL(path: string) {
   const explicitBase = import.meta.env.VITE_API_BASE as string | undefined;
   const base = explicitBase || devBackendBase();
@@ -1725,4 +1795,13 @@ function devBackendBase() {
     return "http://127.0.0.1:8080";
   }
   return "";
+}
+
+function readStoredAuth(): AuthResponse | null {
+  try {
+    const raw = window.localStorage.getItem(authStorageKey);
+    return raw ? (JSON.parse(raw) as AuthResponse) : null;
+  } catch {
+    return null;
+  }
 }

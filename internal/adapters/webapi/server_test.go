@@ -431,6 +431,58 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 	}
 }
 
+func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	body := bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass","display_name":"Coach"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	var auth AuthResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &auth); err != nil {
+		t.Fatalf("decode auth response: %v", err)
+	}
+	if auth.Token == "" || auth.User.Role != app.AuthRoleAdmin {
+		t.Fatalf("unexpected auth response: %+v", auth)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/overview", nil)
+	request.Header.Set("Authorization", "Bearer "+auth.Token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected admin overview 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"user_count": 1`) ||
+		!strings.Contains(got, `"schema_version": 8`) {
+		t.Fatalf("unexpected admin overview:\n%s", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	request.Header.Set("Authorization", "Bearer "+auth.Token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass"}`)
+	request = httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected login 200, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -646,6 +698,7 @@ esac
 			EvaluationAnnotationsRoot: annotationsRoot,
 			FFprobePath:               ffprobePath,
 			FFmpegPath:                ffmpegPath,
+			AuthHashIterations:        4,
 		},
 		outRoot: outRoot,
 	}

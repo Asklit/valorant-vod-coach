@@ -57,7 +57,7 @@ cmd/
 
 internal/
   domain/                         # pure product concepts: VOD, media summary, findings, reports, corrections
-  app/                            # use cases and ports; local analysis, evaluation, corrections, persistence
+  app/                            # use cases and ports; local analysis, evaluation, corrections, auth, persistence
   adapters/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling
@@ -68,7 +68,7 @@ internal/
     report/                       # local JSON/Markdown report persistence
     vision/                       # local visual heuristic analyzer
     visionservice/                # HTTP client for Python model-review service
-    webapi/                       # local HTTP API for React UI
+    webapi/                       # local HTTP API for React UI, auth sessions, and admin diagnostics
   platform/                       # config/logging/observability/runtime helpers
 
 scripts/
