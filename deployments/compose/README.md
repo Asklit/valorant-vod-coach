@@ -44,6 +44,8 @@ When `vodctl analyze run` or `vod-web` receives a `DATABASE_URL`, successful ana
 - `report_artifacts`
 - `outbox_events`
 
+With `DATABASE_URL`, `vod-web` also reads report history and latest report metadata from PostgreSQL. The report JSON/Markdown files remain artifact payloads referenced by the database rows.
+
 When `REDIS_URL` is configured, analysis runs acquire a Redis-backed lock per VOD before ffprobe/ffmpeg work starts. Use the default `redis://localhost:6379/0` from `.env.example` for local duplicate-run protection.
 
 Publish pending outbox rows to Kafka:

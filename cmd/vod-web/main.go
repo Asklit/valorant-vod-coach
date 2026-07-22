@@ -35,13 +35,16 @@ func main() {
 	defer observability.Shutdown(context.Background(), obs.Shutdown, obs.Logger)
 
 	var catalog app.AnalysisCatalog
+	var reportCatalog app.ReportCatalog
 	if *databaseURL != "" {
 		db, err := postgres.Open(context.Background(), *databaseURL)
 		if err != nil {
 			log.Fatalf("open postgres: %v", err)
 		}
 		defer db.Close()
-		catalog = postgres.Store{DB: db, Producer: "vod-web"}
+		store := postgres.Store{DB: db, Producer: "vod-web"}
+		catalog = store
+		reportCatalog = store
 	}
 	var locks app.LockManager
 	if *redisURL != "" {
@@ -62,6 +65,7 @@ func main() {
 		VisionURL:     *visionURL,
 		StaticDir:     *staticDir,
 		Catalog:       catalog,
+		ReportCatalog: reportCatalog,
 		Locks:         locks,
 		Logger:        obs.Logger,
 		Tracer:        obs.Tracer,

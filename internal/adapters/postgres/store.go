@@ -56,6 +56,79 @@ func (s Store) SaveAnalysisResult(ctx context.Context, request app.PersistAnalys
 	return tx.Commit()
 }
 
+func (s Store) ListReportSummaries(ctx context.Context, vodLabel string) ([]app.ReportCatalogSummary, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("postgres store requires DB")
+	}
+	vodLabel = strings.TrimSpace(vodLabel)
+	if vodLabel == "" {
+		return nil, fmt.Errorf("vod label is required")
+	}
+
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT
+  vod_label,
+  run_id,
+  status,
+  generated_at,
+  schema_version,
+  analyzer,
+  mode,
+  frame_count,
+  finding_count,
+  review_window_count,
+  round_segment_count,
+  COALESCE(NULLIF(gameplay->>'model_review_task_count', '')::integer, 0) AS model_review_task_count,
+  model_review_run_count,
+  COALESCE(sample->>'name', '') AS sample_name,
+  COALESCE(sample->>'fps', '') AS sample_fps,
+  COALESCE(NULLIF(sample->>'duration_seconds', '')::double precision, 0) AS sample_duration_seconds,
+  COALESCE(sample->>'contact_sheet_path', '') AS contact_sheet_path,
+  report_json_path,
+  report_markdown_path
+FROM analysis_reports
+WHERE vod_label = $1
+ORDER BY generated_at DESC, run_id DESC
+`, vodLabel)
+	if err != nil {
+		return nil, fmt.Errorf("list report summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []app.ReportCatalogSummary
+	for rows.Next() {
+		var summary app.ReportCatalogSummary
+		if err := rows.Scan(
+			&summary.VODLabel,
+			&summary.RunID,
+			&summary.Status,
+			&summary.GeneratedAt,
+			&summary.SchemaVersion,
+			&summary.Analyzer,
+			&summary.Mode,
+			&summary.FrameCount,
+			&summary.FindingCount,
+			&summary.ReviewWindowCount,
+			&summary.RoundSegmentCount,
+			&summary.ModelReviewTaskCount,
+			&summary.ModelReviewRunCount,
+			&summary.SampleName,
+			&summary.SampleFPS,
+			&summary.SampleDuration,
+			&summary.ContactSheetPath,
+			&summary.JSONPath,
+			&summary.MarkdownPath,
+		); err != nil {
+			return nil, fmt.Errorf("scan report summary: %w", err)
+		}
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate report summaries: %w", err)
+	}
+	return summaries, nil
+}
+
 func upsertVOD(ctx context.Context, tx *sql.Tx, vod domain.VOD) error {
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO vods (
