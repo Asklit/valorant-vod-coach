@@ -154,6 +154,51 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	}
 }
 
+func TestServerListsEvaluations(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	evaluationDir := filepath.Join(fixture.outRoot, "evaluations", "eval_01")
+	if err := os.MkdirAll(evaluationDir, 0o755); err != nil {
+		t.Fatalf("mkdir evaluation dir: %v", err)
+	}
+	evaluationJSON := `{
+  "schema_version": 1,
+  "run_id": "eval_01",
+  "generated_at": "2026-07-22T12:00:00Z",
+  "vod_label": "diamond_example",
+  "report_run_id": "api_test",
+  "tolerance_seconds": 6,
+  "overall": {
+    "label_count": 4,
+    "prediction_count": 5,
+    "match_count": 3,
+    "precision": 0.6,
+    "recall": 0.75,
+    "f1": 0.6667
+  }
+}`
+	if err := os.WriteFile(filepath.Join(evaluationDir, "evaluation.json"), []byte(evaluationJSON), 0o644); err != nil {
+		t.Fatalf("write evaluation json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(evaluationDir, "evaluation.md"), []byte("# Eval\n"), 0o644); err != nil {
+		t.Fatalf("write evaluation markdown: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/evaluations?vod_label=diamond_example", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"run_id": "eval_01"`) ||
+		!strings.Contains(got, `"precision": 0.6`) ||
+		!strings.Contains(got, `"markdown_path"`) {
+		t.Fatalf("unexpected evaluations response:\n%s", got)
+	}
+}
+
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)

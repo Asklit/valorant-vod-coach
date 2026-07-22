@@ -347,6 +347,28 @@ type ReportListResponse = {
   reports: ReportSummary[];
 };
 
+type EvaluationSummary = {
+  schema_version: number;
+  run_id: string;
+  generated_at: string;
+  vod_label: string;
+  report_run_id: string;
+  tolerance_seconds: number;
+  label_count: number;
+  prediction_count: number;
+  match_count: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  json_path: string;
+  markdown_path: string;
+};
+
+type EvaluationListResponse = {
+  vod_label: string;
+  evaluations: EvaluationSummary[];
+};
+
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 const evidencePageSize = 24;
 
@@ -359,6 +381,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
+  const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([]);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
@@ -392,9 +415,11 @@ export function App() {
     if (!selectedLabel) {
       setReport(null);
       setReportHistory([]);
+      setEvaluationHistory([]);
       return;
     }
     void loadReports(selectedLabel, { preferGameplay: true });
+    void loadEvaluations(selectedLabel);
   }, [selectedLabel]);
 
   useEffect(() => {
@@ -481,6 +506,19 @@ export function App() {
     }
   }
 
+  async function loadEvaluations(label: string) {
+    try {
+      const response = await fetch(apiURL(`/api/evaluations?vod_label=${encodeURIComponent(label)}`));
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as EvaluationListResponse;
+      setEvaluationHistory(payload.evaluations);
+    } catch {
+      setEvaluationHistory([]);
+    }
+  }
+
   async function runAnalysis() {
     if (!selectedVod || analyzing) {
       return;
@@ -533,6 +571,7 @@ export function App() {
         }
         await loadVods();
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
+        await loadEvaluations(analyzedLabel);
         return;
       }
       if (job.status === "failed") {
@@ -820,6 +859,43 @@ export function App() {
                       </small>
                       <small>{item.analyzer ?? `schema ${item.schema_version || 1}`}</small>
                     </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {evaluationHistory.length > 0 && (
+              <div className="quality-panel">
+                <div className="history-title">
+                  <BarChart3 size={15} />
+                  Quality benchmarks
+                </div>
+                <div className="quality-list">
+                  {evaluationHistory.slice(0, 4).map((item) => (
+                    <article className="quality-card" key={item.run_id}>
+                      <div>
+                        <span>{item.run_id}</span>
+                        <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
+                      </div>
+                      <div className="quality-metrics">
+                        <small>{Math.round(clamp01(item.precision) * 100)}% precision</small>
+                        <small>{Math.round(clamp01(item.recall) * 100)}% recall</small>
+                        <small>{item.match_count}/{item.label_count} labels</small>
+                      </div>
+                      <p>
+                        {item.prediction_count} predictions / tolerance {formatSeconds(item.tolerance_seconds)} / report {item.report_run_id}
+                      </p>
+                      <div className="artifact-actions compact">
+                        <a href={artifactURL(item.json_path)} target="_blank" rel="noreferrer">
+                          <FileJson2 size={13} />
+                          JSON
+                        </a>
+                        <a href={artifactURL(item.markdown_path)} target="_blank" rel="noreferrer">
+                          <FileText size={13} />
+                          Markdown
+                        </a>
+                      </div>
+                    </article>
                   ))}
                 </div>
               </div>
