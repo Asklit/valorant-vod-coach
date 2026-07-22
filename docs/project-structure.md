@@ -83,6 +83,9 @@ tests/
   integration/                    # integration/e2e tests that need real services or tools
 web/
   app/                            # React/TypeScript/Vite MVP UI
+ml/
+  vision-service/                 # Python model-review service boundary
+  evals/                          # manual quality-evaluation label fixtures
 ```
 
 ## Target Layout

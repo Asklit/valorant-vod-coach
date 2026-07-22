@@ -24,7 +24,7 @@ This tells us how expensive the deterministic part of the pipeline is before OCR
 
 ### Phase 1: Detection Baseline
 
-Added after frame extraction code exists.
+Available for gameplay event candidates through `vodctl eval run`; OCR-specific fields are added later.
 
 - HUD/minimap visibility detection time;
 - OCR time per frame crop;
@@ -32,6 +32,8 @@ Added after frame extraction code exists.
 - timer/score extraction accuracy;
 - round boundary precision/recall;
 - death window precision/recall.
+- gameplay event precision/recall/F1 against manual labels;
+- missed labels and false-positive candidate events.
 
 ### Phase 2: VLM Baseline
 
@@ -118,10 +120,21 @@ Run a heavier extraction benchmark on one VOD:
 ./scripts/benchmark_video.sh --label diamond_crazies_01 --sample-seconds 600 --fps 2
 ```
 
+Run a gameplay event quality evaluation:
+
+```sh
+go run ./cmd/vodctl eval run \
+  --report data/processed/iron_spudbud_01/reports/gameplay_events_smoke/report.json \
+  --annotations ml/evals/gameplay_events.example.json \
+  --run-id gameplay-events-example \
+  --force
+```
+
 Results are written under:
 
 ```text
 data/processed/benchmarks/<run_id>/
+data/processed/evaluations/<run_id>/
 ```
 
 The generated `results.tsv` is intentionally simple so it can later be imported into PostgreSQL or ClickHouse.
@@ -153,6 +166,7 @@ The generated `results.tsv` is intentionally simple so it can later be imported 
 - Keep failed benchmark rows; failure rate is part of the benchmark.
 - Treat first-run results separately from warm-cache results.
 - GPU estimates are not accepted as project facts until measured by Phase 2.
+- Treat current visual gameplay events as candidates, not confirmed kills, deaths, or round boundaries.
 
 ## Benchmark Matrix
 
@@ -196,3 +210,14 @@ Early interpretation:
 - Frame extraction speed varies materially by source encoding, resolution, and local decode path.
 - Extrapolating from this tiny smoke sample, full-match 1 fps extraction for a 35 minute VOD might land around 1-3.5 minutes locally, but this is only a first approximation.
 - These numbers do not estimate AI cost yet. GPU/VLM cost remains unproven until Phase 2 benchmarks exist.
+
+Gameplay event evaluation smoke:
+
+| Run ID | Report | Labels | Predictions | Matches | Precision | Recall | F1 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `gameplay-events-example` | `gameplay_events_smoke` | 3 | 4 | 3 | 0.75 | 1.00 | 0.86 |
+
+Interpretation:
+
+- This is a harness smoke test with example labels, not a validated quality score for the algorithm.
+- Real quality claims require manually reviewed labels across multiple VODs and ranks.

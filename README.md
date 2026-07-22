@@ -149,6 +149,16 @@ Run a named benchmark:
 ./scripts/benchmark_video.sh --run-id media-smoke --rank diamond --limit 1 --sample-seconds 60 --fps 1
 ```
 
+Run a gameplay event quality evaluation:
+
+```sh
+go run ./cmd/vodctl eval run \
+  --report data/processed/iron_spudbud_01/reports/gameplay_events_smoke/report.json \
+  --annotations ml/evals/gameplay_events.example.json \
+  --run-id gameplay-events-example \
+  --force
+```
+
 ## Go CLI
 
 Build the CLI:

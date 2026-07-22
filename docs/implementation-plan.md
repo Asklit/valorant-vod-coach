@@ -397,6 +397,13 @@ Current status:
 - Measure frame extraction throughput on a small rank-balanced sample.
 - Record benchmark outputs under `data/processed/benchmarks/`.
 - Use measured media timings to set realistic SLA targets for `fast`, `standard`, and `deep` modes.
+- Evaluate gameplay event precision/recall/F1 against manual labels.
+
+Current status:
+
+- Media benchmark script exists at `scripts/benchmark_video.sh`.
+- Gameplay event quality evaluation exists at `vodctl eval run`.
+- Example manual labels live under `ml/evals/`.
 
 ### Milestone 1.6: Kafka Event Stream
 
