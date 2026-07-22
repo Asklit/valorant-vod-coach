@@ -359,6 +359,7 @@ Current status:
 - `.env.example` documents local service URLs and credentials.
 - Grafana datasources are provisioned for Prometheus, Loki, and Tempo.
 - `vod-web` exposes a Prometheus text metrics endpoint at `/metrics`.
+- `vod-web` exposes `/healthz`, `/readyz`, and stdlib Go pprof endpoints under `/debug/pprof/`.
 - PostgreSQL migrations define `vods`, `analysis_reports`, `report_artifacts`, and `outbox_events`.
 - ClickHouse migrations define the Kafka-engine event table and durable event projection table.
 
@@ -532,3 +533,4 @@ Completed local MVP infrastructure:
 - ClickHouse `kafka_events` migration plus `vod-clickhouse-sink` Kafka consumer for `vod.processing.v1` and `vod.lifecycle.v1`.
 - Redis-backed analysis locks for repeated local CLI/API requests when `REDIS_URL` is configured.
 - PostgreSQL-backed report history reads in `vod-web` as an alternative to filesystem scans.
+- Service diagnostics for `vod-web`: liveness, readiness, metrics, and pprof.

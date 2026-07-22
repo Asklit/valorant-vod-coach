@@ -424,6 +424,48 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	}
 }
 
+func TestServerDiagnosticsEndpoints(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected healthz 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"status": "ok"`) ||
+		!strings.Contains(got, `"service": "vod-web"`) {
+		t.Fatalf("unexpected healthz response:\n%s", got)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected readyz 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"status": "ready"`) ||
+		!strings.Contains(got, `"manifest"`) ||
+		!strings.Contains(got, `"vision_service"`) {
+		t.Fatalf("unexpected readyz response:\n%s", got)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected pprof 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, "profiles") {
+		t.Fatalf("unexpected pprof response:\n%s", got)
+	}
+}
+
 func TestServerMetricsEndpoint(t *testing.T) {
 	server := NewServer(Config{VisionURL: "http://vision.invalid"})
 
