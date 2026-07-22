@@ -191,12 +191,13 @@ type AuthSessionResponse struct {
 }
 
 type AdminOverviewResponse struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	User        app.PublicAuthUser `json:"user"`
-	System      AdminSystemStatus  `json:"system"`
-	Dataset     Counts             `json:"dataset"`
-	Jobs        map[string]int     `json:"jobs"`
-	Auth        AdminAuthStatus    `json:"auth"`
+	GeneratedAt time.Time                 `json:"generated_at"`
+	User        app.PublicAuthUser        `json:"user"`
+	System      AdminSystemStatus         `json:"system"`
+	Readiness   map[string]readinessCheck `json:"readiness"`
+	Dataset     Counts                    `json:"dataset"`
+	Jobs        map[string]int            `json:"jobs"`
+	Auth        AdminAuthStatus           `json:"auth"`
 }
 
 type AdminSystemStatus struct {
@@ -503,12 +504,7 @@ type readinessCheck struct {
 }
 
 func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	checks := map[string]readinessCheck{
-		"manifest":       checkExistingFile(s.config.ManifestPath),
-		"raw_root":       checkExistingDir(s.config.RawRoot),
-		"processed_root": checkWritableTargetDir(s.config.ProcessedRoot),
-		"vision_service": s.checkVisionReadiness(r.Context()),
-	}
+	checks := s.readinessChecks(r.Context())
 
 	ready := true
 	for _, check := range checks {
@@ -531,6 +527,15 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		"service":        "vod-web",
 		"checks":         checks,
 	})
+}
+
+func (s *Server) readinessChecks(ctx context.Context) map[string]readinessCheck {
+	return map[string]readinessCheck{
+		"manifest":       checkExistingFile(s.config.ManifestPath),
+		"raw_root":       checkExistingDir(s.config.RawRoot),
+		"processed_root": checkWritableTargetDir(s.config.ProcessedRoot),
+		"vision_service": s.checkVisionReadiness(ctx),
+	}
 }
 
 func (s *Server) checkVisionReadiness(ctx context.Context) readinessCheck {
@@ -749,9 +754,10 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			ProcessedRoot:       s.config.ProcessedRoot,
 			EvaluationLabelRoot: s.config.EvaluationAnnotationsRoot,
 		},
-		Dataset: counts,
-		Jobs:    s.jobs.countByStatus(),
-		Auth:    AdminAuthStatus{UserCount: userCount},
+		Readiness: s.readinessChecks(r.Context()),
+		Dataset:   counts,
+		Jobs:      s.jobs.countByStatus(),
+		Auth:      AdminAuthStatus{UserCount: userCount},
 	})
 }
 

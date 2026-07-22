@@ -388,6 +388,7 @@ type AdminOverview = {
     processed_root: string;
     evaluation_label_root: string;
   };
+  readiness: Record<string, ReadinessCheck>;
   dataset: VODListResponse["counts"];
   jobs: Record<string, number>;
   auth: {
@@ -401,6 +402,14 @@ type AdminMetric = {
   status: number;
   count: number;
   duration_seconds: number;
+};
+
+type ReadinessCheck = {
+  status: string;
+  detail?: string;
+  path?: string;
+  runtime?: string;
+  model?: string;
 };
 
 type RequestLog = {
@@ -1534,6 +1543,7 @@ function AdminPage(props: {
   refresh: () => void;
 }) {
   const requests = props.adminMetrics?.requests ?? [];
+  const readinessEntries = Object.entries(props.adminOverview?.readiness ?? {});
   const maxCount = Math.max(1, ...requests.map((item) => item.count));
   return (
     <>
@@ -1567,6 +1577,28 @@ function AdminPage(props: {
             <a href={apiURL("/metrics")} target="_blank" rel="noreferrer">Prometheus</a>
             <a href={apiURL("/debug/pprof/")} target="_blank" rel="noreferrer">pprof</a>
             <a href={apiURL("/readyz")} target="_blank" rel="noreferrer">readyz</a>
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface-heading">
+            <div>
+              <p className="eyebrow">Readiness</p>
+              <h2>Service checks</h2>
+            </div>
+            <CheckCircle2 size={19} />
+          </div>
+          <div className="log-list">
+            {readinessEntries.map(([name, check]) => (
+              <article className="log-row" key={name}>
+                <span className={check.status === "ok" ? "ok" : check.status === "failed" ? "bad" : "warn"}>{check.status}</span>
+                <div>
+                  <strong>{name.replaceAll("_", " ")}</strong>
+                  <small>{check.detail ?? check.path ?? check.runtime ?? check.model ?? "ready"}</small>
+                </div>
+              </article>
+            ))}
+            {readinessEntries.length === 0 && <EmptyState title="No readiness data" detail="Refresh admin diagnostics." />}
           </div>
         </section>
 

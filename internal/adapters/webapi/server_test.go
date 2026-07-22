@@ -503,7 +503,9 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 		t.Fatalf("expected admin overview 200, got %d: %s", response.Code, response.Body.String())
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"user_count": 1`) ||
-		!strings.Contains(got, `"schema_version": 8`) {
+		!strings.Contains(got, `"schema_version": 8`) ||
+		!strings.Contains(got, `"readiness"`) ||
+		!strings.Contains(got, `"vision_service"`) {
 		t.Fatalf("unexpected admin overview:\n%s", got)
 	}
 

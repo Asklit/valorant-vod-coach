@@ -140,7 +140,7 @@ The local web UI includes:
 
 - Dashboard, Library, Review, Reports, and Admin pages;
 - local registration/login through `POST /api/auth/register` and `POST /api/auth/login`;
-- Admin page backed by `GET /api/admin/overview`, `GET /api/admin/metrics`, `GET /api/admin/logs`, and `GET /api/admin/users`.
+- Admin page backed by `GET /api/admin/overview`, `GET /api/admin/metrics`, `GET /api/admin/logs`, and `GET /api/admin/users`, including readiness checks, request metrics, logs, users, and service links.
 - bearer-token protection for product JSON API routes. Health, metrics, pprof, video streaming, and generated artifact URLs remain public for local diagnostics and browser media playback.
 
 ## Current Analysis Model
