@@ -52,6 +52,15 @@ go run ./cmd/vod-outbox-relay \
   --brokers "${KAFKA_BROKERS:-localhost:9092}"
 ```
 
+Sink Kafka events into ClickHouse:
+
+```sh
+go run ./cmd/vod-clickhouse-sink \
+  --brokers "${KAFKA_BROKERS:-localhost:9092}" \
+  --clickhouse-url "${CLICKHOUSE_URL:-http://localhost:8123}" \
+  --clickhouse-db "${CLICKHOUSE_DB:-vodcoach}"
+```
+
 ## Stop
 
 ```sh

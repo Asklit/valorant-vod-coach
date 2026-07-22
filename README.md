@@ -162,6 +162,15 @@ go run ./cmd/vod-outbox-relay \
   --brokers "$KAFKA_BROKERS"
 ```
 
+Sink Kafka lifecycle and processing events into ClickHouse:
+
+```sh
+go run ./cmd/vod-clickhouse-sink \
+  --brokers "$KAFKA_BROKERS" \
+  --clickhouse-url "$CLICKHOUSE_URL" \
+  --clickhouse-db "$CLICKHOUSE_DB"
+```
+
 ## Benchmarks
 
 Preview a benchmark run:
