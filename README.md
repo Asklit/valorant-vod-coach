@@ -10,6 +10,7 @@ Current scope:
 - store raw videos outside git under `data/raw/youtube/<rank>/`;
 - run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
 - expose a Python `vision-service` contract for model review over selected clips.
+- capture manual corrections from the web UI into reproducible local JSON artifacts.
 
 Planned product stack:
 

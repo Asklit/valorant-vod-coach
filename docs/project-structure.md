@@ -56,8 +56,8 @@ cmd/
   vod-clickhouse-sink/            # Kafka event sink into ClickHouse
 
 internal/
-  domain/                         # pure product concepts: VOD, media summary, findings, reports
-  app/                            # use cases and ports; currently local analysis orchestration
+  domain/                         # pure product concepts: VOD, media summary, findings, reports, corrections
+  app/                            # use cases and ports; local analysis, evaluation, corrections, persistence
   adapters/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling

@@ -965,6 +965,137 @@ button {
   text-transform: uppercase;
 }
 
+.corrections-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(40, 215, 255, 0.22);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.04);
+}
+
+.correction-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.correction-form label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.correction-form span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.correction-form input,
+.correction-form select,
+.correction-form textarea {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  outline: 0;
+  padding: 0 10px;
+}
+
+.correction-form textarea {
+  min-height: 78px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.correction-comment {
+  grid-column: 1 / -1;
+}
+
+.correction-form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  border: 1px solid rgba(40, 215, 255, 0.46);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.1);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.correction-form button:disabled {
+  cursor: not-allowed;
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--subtle);
+}
+
+.correction-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.correction-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(8, 12, 20, 0.34);
+}
+
+.correction-card > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.correction-card span,
+.correction-card em {
+  color: var(--cyan);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.correction-card strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.correction-card p,
+.correction-card small {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.36;
+}
+
+.correction-card p {
+  color: var(--text);
+}
+
 .compat-banner {
   display: flex;
   align-items: center;
@@ -1897,6 +2028,11 @@ button {
   .quality-list {
     grid-template-columns: 1fr;
   }
+
+  .correction-form,
+  .correction-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1972,6 +2108,10 @@ button {
   }
 
   .quality-actions button {
+    width: 100%;
+  }
+
+  .correction-form button {
     width: 100%;
   }
 

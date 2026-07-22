@@ -164,6 +164,24 @@ type EvaluationAnnotationListResponse struct {
 	Annotations []EvaluationAnnotationSummary `json:"annotations"`
 }
 
+type ManualCorrectionRequest struct {
+	VODLabel         string   `json:"vod_label"`
+	ReportRunID      string   `json:"report_run_id"`
+	Type             string   `json:"type"`
+	TargetID         string   `json:"target_id,omitempty"`
+	CorrectedValue   string   `json:"corrected_value,omitempty"`
+	Comment          string   `json:"comment,omitempty"`
+	TimestampSeconds *float64 `json:"timestamp_seconds,omitempty"`
+	Author           string   `json:"author,omitempty"`
+}
+
+type ManualCorrectionResponse struct {
+	VODLabel    string                    `json:"vod_label"`
+	ReportRunID string                    `json:"report_run_id,omitempty"`
+	Corrections []domain.ManualCorrection `json:"corrections"`
+	JSONPath    string                    `json:"json_path"`
+}
+
 type ReportSummary struct {
 	SchemaVersion     int       `json:"schema_version"`
 	RunID             string    `json:"run_id"`
@@ -320,6 +338,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/evaluation-annotations", s.handleEvaluationAnnotations)
 	s.mux.HandleFunc("POST /api/evaluation-runs", s.handleRunEvaluation)
 	s.mux.HandleFunc("GET /api/evaluations", s.handleEvaluations)
+	s.mux.HandleFunc("GET /api/corrections", s.handleListCorrections)
+	s.mux.HandleFunc("POST /api/corrections", s.handleCreateCorrection)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
@@ -871,6 +891,60 @@ func (s *Server) handleEvaluationAnnotations(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+func (s *Server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
+	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
+	if label == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
+		return
+	}
+	reportRunID := strings.TrimSpace(r.URL.Query().Get("report_run_id"))
+
+	set, saved, err := app.LoadManualCorrections(s.correctionsRoot(), label, reportRunID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("load corrections: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, ManualCorrectionResponse{
+		VODLabel:    set.VODLabel,
+		ReportRunID: set.ReportRunID,
+		Corrections: set.Corrections,
+		JSONPath:    saved.JSONPath,
+	})
+}
+
+func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var request ManualCorrectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	if strings.TrimSpace(request.VODLabel) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
+		return
+	}
+
+	set, saved, err := app.AppendManualCorrection(r.Context(), s.correctionsRoot(), request.VODLabel, request.ReportRunID, domain.ManualCorrection{
+		Type:             request.Type,
+		TargetID:         request.TargetID,
+		CorrectedValue:   request.CorrectedValue,
+		Comment:          request.Comment,
+		TimestampSeconds: request.TimestampSeconds,
+		Author:           request.Author,
+	}, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ManualCorrectionResponse{
+		VODLabel:    set.VODLabel,
+		ReportRunID: set.ReportRunID,
+		Corrections: set.Corrections,
+		JSONPath:    saved.JSONPath,
+	})
+}
+
 func (s *Server) handleRunEvaluation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -965,6 +1039,10 @@ func (s *Server) listReportSummaries(ctx context.Context, vodLabel string) ([]Re
 		summaries = append(summaries, report.Summary)
 	}
 	return summaries, nil
+}
+
+func (s *Server) correctionsRoot() string {
+	return filepath.Join(s.config.ProcessedRoot, "corrections")
 }
 
 func (s *Server) resolveReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
@@ -1543,6 +1621,8 @@ func metricRoute(path string) string {
 		return "/api/evaluation-runs"
 	case path == "/api/evaluations":
 		return "/api/evaluations"
+	case path == "/api/corrections":
+		return "/api/corrections"
 	case path == "/api/reports":
 		return "/api/reports"
 	case path == "/api/reports/latest":
