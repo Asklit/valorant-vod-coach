@@ -159,6 +159,8 @@ go run ./cmd/vodctl eval run \
   --force
 ```
 
+The web UI also lists matching fixtures from `ml/evals` and can run the same evaluation through `POST /api/evaluation-runs`.
+
 ## Go CLI
 
 Build the CLI:

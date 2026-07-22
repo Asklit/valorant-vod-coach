@@ -199,6 +199,101 @@ func TestServerListsEvaluations(t *testing.T) {
 	}
 }
 
+func TestServerListsEvaluationAnnotations(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	annotationsPath := filepath.Join(fixture.config.EvaluationAnnotationsRoot, "diamond_example.json")
+	if err := os.WriteFile(annotationsPath, []byte(`{
+  "schema_version": 1,
+  "vod_label": "diamond_example",
+  "report_run_id": "api_test",
+  "tolerance_seconds": 4,
+  "labels": [
+    {"id": "label_001", "type": "combat", "timestamp_seconds": 2}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write annotations: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/evaluation-annotations?vod_label=diamond_example", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"vod_label": "diamond_example"`) ||
+		!strings.Contains(got, `"label_count": 1`) ||
+		!strings.Contains(got, `"path"`) {
+		t.Fatalf("unexpected annotations response:\n%s", got)
+	}
+}
+
+func TestServerRunsEvaluation(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	reportDir := filepath.Join(fixture.outRoot, "diamond_example", "reports", "api_test")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("mkdir report dir: %v", err)
+	}
+	reportJSON := `{
+  "schema_version": 8,
+  "run_id": "api_test",
+  "status": "completed",
+  "generated_at": "2026-07-22T12:00:00Z",
+  "vod": {"label": "diamond_example"},
+  "sample": {"name": "sample", "fps": "1", "frame_count": 1},
+  "gameplay": {
+    "gameplay_events": [
+      {
+        "id": "event_combat_001",
+        "type": "combat_candidate",
+        "category": "combat",
+        "severity": "medium",
+        "title": "Combat candidate",
+        "timestamp_seconds": 2
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(filepath.Join(reportDir, "report.json"), []byte(reportJSON), 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	annotationsPath := filepath.Join(fixture.config.EvaluationAnnotationsRoot, "diamond_example.json")
+	if err := os.WriteFile(annotationsPath, []byte(`{
+  "schema_version": 1,
+  "vod_label": "diamond_example",
+  "labels": [
+    {"id": "label_001", "type": "combat", "timestamp_seconds": 2.5}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write annotations: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"vod_label":"diamond_example","report_run_id":"api_test","annotations_path":"` + annotationsPath + `","run_id":"eval_api","force":true}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/evaluation-runs", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"run_id": "eval_api"`) ||
+		!strings.Contains(got, `"f1": 1`) ||
+		!strings.Contains(got, `"evaluation_json"`) {
+		t.Fatalf("unexpected evaluation response:\n%s", got)
+	}
+
+	if _, err := os.Stat(filepath.Join(fixture.outRoot, "evaluations", "eval_api", "evaluation.json")); err != nil {
+		t.Fatalf("expected evaluation json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.outRoot, "evaluations", "eval_api", "evaluation.md")); err != nil {
+		t.Fatalf("expected evaluation markdown: %v", err)
+	}
+}
+
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -289,9 +384,13 @@ func newFixture(t *testing.T) fixture {
 	manifestPath := filepath.Join(root, "vods.tsv")
 	rawRoot := filepath.Join(root, "raw")
 	outRoot := filepath.Join(root, "processed")
+	annotationsRoot := filepath.Join(root, "evals")
 	rankDir := filepath.Join(rawRoot, "diamond")
 	if err := os.MkdirAll(rankDir, 0o755); err != nil {
 		t.Fatalf("mkdir raw rank dir: %v", err)
+	}
+	if err := os.MkdirAll(annotationsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir annotations dir: %v", err)
 	}
 
 	manifest := "1\tdiamond\tdiamond_example\tabc123\thttps://www.youtube.com/watch?v=abc123\t37:04\tDiamond VOD\tChannel\ttitle\tgame_vod_20_40\n"
@@ -362,11 +461,12 @@ esac
 
 	return fixture{
 		config: Config{
-			ManifestPath:  manifestPath,
-			RawRoot:       rawRoot,
-			ProcessedRoot: outRoot,
-			FFprobePath:   ffprobePath,
-			FFmpegPath:    ffmpegPath,
+			ManifestPath:              manifestPath,
+			RawRoot:                   rawRoot,
+			ProcessedRoot:             outRoot,
+			EvaluationAnnotationsRoot: annotationsRoot,
+			FFprobePath:               ffprobePath,
+			FFmpegPath:                ffmpegPath,
 		},
 		outRoot: outRoot,
 	}

@@ -25,13 +25,14 @@ import (
 )
 
 type Config struct {
-	ManifestPath  string
-	RawRoot       string
-	ProcessedRoot string
-	FFprobePath   string
-	FFmpegPath    string
-	VisionURL     string
-	StaticDir     string
+	ManifestPath              string
+	RawRoot                   string
+	ProcessedRoot             string
+	EvaluationAnnotationsRoot string
+	FFprobePath               string
+	FFmpegPath                string
+	VisionURL                 string
+	StaticDir                 string
 }
 
 type Server struct {
@@ -94,6 +95,22 @@ type AnalyzeResponse struct {
 	ArtifactBase string                `json:"artifact_base"`
 }
 
+type EvaluationRunRequest struct {
+	VODLabel         string  `json:"vod_label"`
+	ReportRunID      string  `json:"report_run_id"`
+	AnnotationsPath  string  `json:"annotations_path"`
+	RunID            string  `json:"run_id"`
+	ToleranceSeconds float64 `json:"tolerance_seconds"`
+	Force            bool    `json:"force"`
+}
+
+type EvaluationRunResponse struct {
+	Evaluation     domain.GameplayEvaluationReport `json:"evaluation"`
+	EvaluationJSON string                          `json:"evaluation_json"`
+	EvaluationMD   string                          `json:"evaluation_md"`
+	ArtifactBase   string                          `json:"artifact_base"`
+}
+
 type AnalysisJobResponse struct {
 	JobID        string                 `json:"job_id"`
 	RunID        string                 `json:"run_id"`
@@ -127,6 +144,11 @@ type ReportListResponse struct {
 type EvaluationListResponse struct {
 	VODLabel    string              `json:"vod_label,omitempty"`
 	Evaluations []EvaluationSummary `json:"evaluations"`
+}
+
+type EvaluationAnnotationListResponse struct {
+	VODLabel    string                        `json:"vod_label,omitempty"`
+	Annotations []EvaluationAnnotationSummary `json:"annotations"`
 }
 
 type ReportSummary struct {
@@ -166,6 +188,15 @@ type EvaluationSummary struct {
 	MarkdownPath     string    `json:"markdown_path"`
 }
 
+type EvaluationAnnotationSummary struct {
+	SchemaVersion    int     `json:"schema_version"`
+	VODLabel         string  `json:"vod_label"`
+	ReportRunID      string  `json:"report_run_id,omitempty"`
+	ToleranceSeconds float64 `json:"tolerance_seconds,omitempty"`
+	LabelCount       int     `json:"label_count"`
+	Path             string  `json:"path"`
+}
+
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -179,6 +210,9 @@ func NewServer(config Config) *Server {
 	}
 	if config.ProcessedRoot == "" {
 		config.ProcessedRoot = "data/processed"
+	}
+	if config.EvaluationAnnotationsRoot == "" {
+		config.EvaluationAnnotationsRoot = "ml/evals"
 	}
 	if config.FFprobePath == "" {
 		config.FFprobePath = "ffprobe"
@@ -221,6 +255,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
 	s.mux.HandleFunc("GET /api/analysis-runs/", s.handleAnalysisJob)
+	s.mux.HandleFunc("GET /api/evaluation-annotations", s.handleEvaluationAnnotations)
+	s.mux.HandleFunc("POST /api/evaluation-runs", s.handleRunEvaluation)
 	s.mux.HandleFunc("GET /api/evaluations", s.handleEvaluations)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
@@ -618,6 +654,46 @@ func (s *Server) handleEvaluations(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleEvaluationAnnotations(w http.ResponseWriter, r *http.Request) {
+	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
+	annotations, err := s.listEvaluationAnnotations(label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	summaries := make([]EvaluationAnnotationSummary, 0, len(annotations))
+	for _, annotation := range annotations {
+		summaries = append(summaries, annotation.Summary)
+	}
+	writeJSON(w, http.StatusOK, EvaluationAnnotationListResponse{
+		VODLabel:    label,
+		Annotations: summaries,
+	})
+}
+
+func (s *Server) handleRunEvaluation(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var request EvaluationRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+
+	evaluation, saved, err := s.runEvaluation(r.Context(), request)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, EvaluationRunResponse{
+		Evaluation:     evaluation,
+		EvaluationJSON: saved.JSONPath,
+		EvaluationMD:   saved.MarkdownPath,
+		ArtifactBase:   "/artifacts/",
+	})
+}
+
 func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/reports/")
 	parts := strings.Split(rest, "/")
@@ -651,6 +727,12 @@ type evaluationIndexItem struct {
 	Path        string
 	GeneratedAt time.Time
 	Summary     EvaluationSummary
+}
+
+type annotationIndexItem struct {
+	Path        string
+	Annotations domain.EvaluationAnnotationSet
+	Summary     EvaluationAnnotationSummary
 }
 
 func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
@@ -720,7 +802,7 @@ func (s *Server) listEvaluations(vodLabel string) ([]evaluationIndexItem, error)
 		if !entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(root, entry.Name(), "evaluation.json")
+		path := filepath.Join(root, entry.Name(), app.EvaluationJSONName)
 		evaluation, err := readEvaluation(path)
 		if err != nil {
 			continue
@@ -746,7 +828,7 @@ func (s *Server) listEvaluations(vodLabel string) ([]evaluationIndexItem, error)
 				Recall:           evaluation.Overall.Recall,
 				F1:               evaluation.Overall.F1,
 				JSONPath:         path,
-				MarkdownPath:     filepath.Join(root, entry.Name(), "evaluation.md"),
+				MarkdownPath:     filepath.Join(root, entry.Name(), app.EvaluationMarkdownName),
 			},
 		})
 	}
@@ -755,6 +837,157 @@ func (s *Server) listEvaluations(vodLabel string) ([]evaluationIndexItem, error)
 		return evaluations[i].GeneratedAt.After(evaluations[j].GeneratedAt)
 	})
 	return evaluations, nil
+}
+
+func (s *Server) listEvaluationAnnotations(vodLabel string) ([]annotationIndexItem, error) {
+	root := s.config.EvaluationAnnotationsRoot
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var annotations []annotationIndexItem
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		annotationSet, err := readEvaluationAnnotations(path)
+		if err != nil {
+			continue
+		}
+		if vodLabel != "" && annotationSet.VODLabel != vodLabel {
+			continue
+		}
+		annotations = append(annotations, annotationIndexItem{
+			Path:        path,
+			Annotations: annotationSet,
+			Summary: EvaluationAnnotationSummary{
+				SchemaVersion:    annotationSet.SchemaVersion,
+				VODLabel:         annotationSet.VODLabel,
+				ReportRunID:      annotationSet.ReportRunID,
+				ToleranceSeconds: annotationSet.ToleranceSeconds,
+				LabelCount:       len(annotationSet.Labels),
+				Path:             path,
+			},
+		})
+	}
+
+	sort.Slice(annotations, func(i, j int) bool {
+		if annotations[i].Summary.VODLabel == annotations[j].Summary.VODLabel {
+			return annotations[i].Path < annotations[j].Path
+		}
+		return annotations[i].Summary.VODLabel < annotations[j].Summary.VODLabel
+	})
+	return annotations, nil
+}
+
+func (s *Server) runEvaluation(ctx context.Context, request EvaluationRunRequest) (domain.GameplayEvaluationReport, app.SavedEvaluation, error) {
+	vodLabel := strings.TrimSpace(request.VODLabel)
+	if vodLabel == "" {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, errors.New("vod_label is required")
+	}
+
+	reportPath, err := s.resolveEvaluationReportPath(vodLabel, request.ReportRunID)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, err
+	}
+	report, err := readReport(reportPath)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, fmt.Errorf("read report: %w", err)
+	}
+
+	annotationsPath, err := s.resolveEvaluationAnnotationsPath(request.AnnotationsPath, vodLabel, report.RunID)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, err
+	}
+	annotations, err := readEvaluationAnnotations(annotationsPath)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, fmt.Errorf("read annotations: %w", err)
+	}
+
+	var tolerance time.Duration
+	if request.ToleranceSeconds > 0 {
+		tolerance = time.Duration(request.ToleranceSeconds * float64(time.Second))
+	}
+	evaluation, err := app.EvaluateGameplayEvents(app.GameplayEvaluationRequest{
+		RunID:       strings.TrimSpace(request.RunID),
+		GeneratedAt: time.Now().UTC(),
+		Report:      report,
+		Annotations: annotations,
+		Tolerance:   tolerance,
+	})
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, err
+	}
+
+	saved, err := app.WriteEvaluationArtifacts(ctx, filepath.Join(s.config.ProcessedRoot, "evaluations"), evaluation, request.Force)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, fmt.Errorf("write evaluation artifacts: %w", err)
+	}
+	return evaluation, saved, nil
+}
+
+func (s *Server) resolveEvaluationReportPath(vodLabel string, reportRunID string) (string, error) {
+	reportRunID = strings.TrimSpace(reportRunID)
+	if reportRunID != "" {
+		return filepath.Join(s.config.ProcessedRoot, vodLabel, "reports", reportRunID, reportstore.JSONReportName), nil
+	}
+
+	reports, err := s.listReports(vodLabel)
+	if err != nil {
+		return "", err
+	}
+	if len(reports) == 0 {
+		return "", fmt.Errorf("no reports for %s", vodLabel)
+	}
+	return reports[0].Path, nil
+}
+
+func (s *Server) resolveEvaluationAnnotationsPath(rawPath string, vodLabel string, reportRunID string) (string, error) {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath != "" {
+		return s.cleanAnnotationPath(rawPath)
+	}
+
+	annotations, err := s.listEvaluationAnnotations(vodLabel)
+	if err != nil {
+		return "", err
+	}
+	if len(annotations) == 0 {
+		return "", fmt.Errorf("no evaluation annotations for %s", vodLabel)
+	}
+	for _, item := range annotations {
+		if item.Annotations.ReportRunID == reportRunID {
+			return item.Path, nil
+		}
+	}
+	return annotations[0].Path, nil
+}
+
+func (s *Server) cleanAnnotationPath(rawPath string) (string, error) {
+	path := filepath.Clean(rawPath)
+	if !filepath.IsAbs(path) {
+		if _, err := os.Stat(path); err != nil {
+			path = filepath.Join(s.config.EvaluationAnnotationsRoot, path)
+		}
+	}
+
+	rootAbs, err := filepath.Abs(s.config.EvaluationAnnotationsRoot)
+	if err != nil {
+		return "", err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if pathAbs != rootAbs && !strings.HasPrefix(pathAbs, rootAbs+string(os.PathSeparator)) {
+		return "", fmt.Errorf("annotations_path must be inside %s", s.config.EvaluationAnnotationsRoot)
+	}
+	return path, nil
 }
 
 func reviewWindowCount(gameplay *domain.GameplaySummary) int {
@@ -816,6 +1049,18 @@ func readEvaluation(path string) (domain.GameplayEvaluationReport, error) {
 		return domain.GameplayEvaluationReport{}, err
 	}
 	return report, nil
+}
+
+func readEvaluationAnnotations(path string) (domain.EvaluationAnnotationSet, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return domain.EvaluationAnnotationSet{}, err
+	}
+	var annotations domain.EvaluationAnnotationSet
+	if err := json.Unmarshal(raw, &annotations); err != nil {
+		return domain.EvaluationAnnotationSet{}, err
+	}
+	return annotations, nil
 }
 
 func normalizeAnalyzeRequest(request *AnalyzeRequest) (float64, error) {
