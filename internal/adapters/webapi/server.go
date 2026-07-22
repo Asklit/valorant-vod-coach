@@ -376,6 +376,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logRequest(ctx, r, route, status, time.Since(started))
 		return
 	}
+	if s.requiresAPIAuth(r) {
+		if _, ok := s.currentUser(r); !ok {
+			writeError(recorder, http.StatusUnauthorized, errors.New("authentication required"))
+			status := recorder.statusCode()
+			span.SetAttributes(attribute.Int("http.response.status_code", status))
+			s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
+			s.logRequest(ctx, r, route, status, time.Since(started))
+			return
+		}
+	}
 	s.mux.ServeHTTP(recorder, r)
 	status := recorder.statusCode()
 	span.SetAttributes(attribute.Int("http.response.status_code", status))
@@ -388,6 +398,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) logRequest(ctx context.Context, r *http.Request, route string, status int, duration time.Duration) {
 	if s.logs != nil {
+		user, _ := s.currentUser(r)
 		s.logs.append(requestLogEntry{
 			Time:       time.Now().UTC(),
 			Method:     r.Method,
@@ -395,6 +406,9 @@ func (s *Server) logRequest(ctx context.Context, r *http.Request, route string, 
 			Route:      route,
 			Status:     status,
 			DurationMS: float64(duration.Microseconds()) / 1000,
+			UserID:     user.ID,
+			UserEmail:  user.Email,
+			UserRole:   user.Role,
 		})
 	}
 	if s.logger == nil {
@@ -799,6 +813,24 @@ func (s *Server) currentUser(r *http.Request) (app.PublicAuthUser, bool) {
 		return app.PublicAuthUser{}, false
 	}
 	return s.auth.get(token)
+}
+
+func (s *Server) requiresAPIAuth(r *http.Request) bool {
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/api/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/auth/") || path == "/api/health" {
+		return false
+	}
+	if r.Method == http.MethodGet && isVODVideoPath(path) {
+		return false
+	}
+	return true
+}
+
+func isVODVideoPath(path string) bool {
+	return strings.HasPrefix(path, "/api/vods/") && strings.HasSuffix(path, "/video")
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (app.PublicAuthUser, bool) {
@@ -1840,6 +1872,9 @@ type requestLogEntry struct {
 	Route      string    `json:"route"`
 	Status     int       `json:"status"`
 	DurationMS float64   `json:"duration_ms"`
+	UserID     string    `json:"user_id,omitempty"`
+	UserEmail  string    `json:"user_email,omitempty"`
+	UserRole   string    `json:"user_role,omitempty"`
 }
 
 type requestLogStore struct {
