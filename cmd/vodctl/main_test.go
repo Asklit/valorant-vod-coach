@@ -388,6 +388,7 @@ func TestRunEvalRunWritesEvaluation(t *testing.T) {
 func TestFlagHelpReturnsSuccess(t *testing.T) {
 	tests := [][]string{
 		{"analyze", "run", "--help"},
+		{"db", "migrate", "--help"},
 		{"dataset", "validate", "--help"},
 		{"dataset", "list", "--help"},
 		{"dataset", "status", "--help"},

@@ -517,10 +517,16 @@ Current status:
 ## Immediate Next Steps
 
 1. Manually check the Platinum item marked `search_metadata`.
-2. Add contact sheet generation for sampled frames so reports are easier to review manually.
-3. Add contact sheet preview to the report evidence area.
-4. Add local Docker Compose infrastructure.
-5. Add Postgres migrations, typed DB access, and `outbox_events`.
-6. Persist VOD/assets/report metadata in PostgreSQL from the analysis pipeline.
-7. Publish the first `vod.probed`, `frames.extracted`, and `report.ready` events through the outbox-to-Kafka path.
-8. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run` and `vod-web`.
+2. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run` and `vod-web`.
+3. Add a ClickHouse sink for published `vod.processing.v1` and `vod.lifecycle.v1` events.
+4. Add PostgreSQL-backed report history reads to `vod-web` as an alternative to filesystem scans.
+5. Add Redis-backed cache/locks for repeated local analysis requests.
+
+Completed local MVP infrastructure:
+
+- Contact sheet generation for sampled frames.
+- Contact sheet preview in the UI evidence area.
+- Local Docker Compose infrastructure.
+- PostgreSQL migrations, typed DB access, and `outbox_events`.
+- Analysis pipeline persistence of VOD/report/artifact metadata in PostgreSQL when `DATABASE_URL` is configured.
+- Outbox-to-Kafka relay for `VodProbed`, `FramesExtracted`, and `ReportReady`.

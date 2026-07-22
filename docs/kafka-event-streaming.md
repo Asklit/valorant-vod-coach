@@ -130,6 +130,36 @@ Later:
 
 JSON is acceptable for the MVP because the event model will still change quickly. The important rule is to version events and test consumers.
 
+## Implemented MVP Path
+
+The first outbox-to-Kafka path is implemented.
+
+Apply PostgreSQL migrations:
+
+```sh
+go run ./cmd/vodctl db migrate --database-url "$DATABASE_URL"
+```
+
+Run analysis with Postgres persistence enabled:
+
+```sh
+go run ./cmd/vodctl analyze run --vod iron_spudbud_01 --database-url "$DATABASE_URL" --force
+```
+
+Run the relay:
+
+```sh
+go run ./cmd/vod-outbox-relay --database-url "$DATABASE_URL" --brokers "$KAFKA_BROKERS"
+```
+
+Current event mapping:
+
+| Event type | Topic | Producer |
+| --- | --- | --- |
+| `VodProbed` | `vod.processing.v1` | `vodctl`, `vod-web` |
+| `FramesExtracted` | `vod.processing.v1` | `vodctl`, `vod-web` |
+| `ReportReady` | `vod.lifecycle.v1` | `vodctl`, `vod-web` |
+
 ## Delivery Semantics
 
 Assume at-least-once delivery.
@@ -162,4 +192,3 @@ Temporal runs ExtractFramesActivity
 ```
 
 Kafka can replay the event stream into new consumers. Temporal can replay workflow history for deterministic workflow execution. These are different kinds of replay and both are useful.
-
