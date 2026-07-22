@@ -53,6 +53,7 @@ cmd/
   vodctl/                         # CLI entrypoint for local operations
   vod-web/                        # local Go HTTP API and optional static UI server
   vod-outbox-relay/               # PostgreSQL outbox to Kafka relay
+  vod-clickhouse-sink/            # Kafka event sink into ClickHouse
 
 internal/
   domain/                         # pure product concepts: VOD, media summary, findings, reports
@@ -62,6 +63,7 @@ internal/
     media/                        # ffprobe/ffmpeg probing and frame sampling
     postgres/                     # PostgreSQL migrations, metadata persistence, outbox access
     kafka/                        # Kafka outbox event producer
+    clickhouse/                   # ClickHouse HTTP migrations and event inserts
     report/                       # local JSON/Markdown report persistence
     vision/                       # local visual heuristic analyzer
     visionservice/                # HTTP client for Python model-review service

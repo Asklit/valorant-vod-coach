@@ -152,6 +152,12 @@ Run the relay:
 go run ./cmd/vod-outbox-relay --database-url "$DATABASE_URL" --brokers "$KAFKA_BROKERS"
 ```
 
+Run the ClickHouse sink:
+
+```sh
+go run ./cmd/vod-clickhouse-sink --brokers "$KAFKA_BROKERS" --clickhouse-url "$CLICKHOUSE_URL" --clickhouse-db "$CLICKHOUSE_DB"
+```
+
 Current event mapping:
 
 | Event type | Topic | Producer |
@@ -159,6 +165,8 @@ Current event mapping:
 | `VodProbed` | `vod.processing.v1` | `vodctl`, `vod-web` |
 | `FramesExtracted` | `vod.processing.v1` | `vodctl`, `vod-web` |
 | `ReportReady` | `vod.lifecycle.v1` | `vodctl`, `vod-web` |
+
+`vod-clickhouse-sink` stores these events in `kafka_events` through the ClickHouse HTTP API.
 
 ## Delivery Semantics
 
