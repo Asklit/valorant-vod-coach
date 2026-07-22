@@ -541,5 +541,5 @@ Completed local MVP infrastructure:
 - PostgreSQL-backed report history reads in `vod-web` as an alternative to filesystem scans.
 - Service diagnostics for `vod-web`: liveness, readiness, metrics, and pprof.
 - Manual correction capture in the Go API and React UI, saved as reproducible local JSON artifacts.
-- Page-based React product UI, local auth endpoints, and admin console for request metrics, logs, users, and service diagnostics.
+- Page-based React product UI, local auth endpoints, and admin console for readiness checks, request metrics, logs, users, and service diagnostics.
 - Product JSON API auth guard with public diagnostics and media/artifact routes.
