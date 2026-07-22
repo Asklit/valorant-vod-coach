@@ -124,6 +124,11 @@ type ReportListResponse struct {
 	Reports  []ReportSummary `json:"reports"`
 }
 
+type EvaluationListResponse struct {
+	VODLabel    string              `json:"vod_label,omitempty"`
+	Evaluations []EvaluationSummary `json:"evaluations"`
+}
+
 type ReportSummary struct {
 	SchemaVersion     int       `json:"schema_version"`
 	RunID             string    `json:"run_id"`
@@ -142,6 +147,23 @@ type ReportSummary struct {
 	ContactSheet      string    `json:"contact_sheet,omitempty"`
 	JSONPath          string    `json:"json_path"`
 	MarkdownPath      string    `json:"markdown_path"`
+}
+
+type EvaluationSummary struct {
+	SchemaVersion    int       `json:"schema_version"`
+	RunID            string    `json:"run_id"`
+	GeneratedAt      time.Time `json:"generated_at"`
+	VODLabel         string    `json:"vod_label"`
+	ReportRunID      string    `json:"report_run_id"`
+	ToleranceSeconds float64   `json:"tolerance_seconds"`
+	LabelCount       int       `json:"label_count"`
+	PredictionCount  int       `json:"prediction_count"`
+	MatchCount       int       `json:"match_count"`
+	Precision        float64   `json:"precision"`
+	Recall           float64   `json:"recall"`
+	F1               float64   `json:"f1"`
+	JSONPath         string    `json:"json_path"`
+	MarkdownPath     string    `json:"markdown_path"`
 }
 
 type ErrorResponse struct {
@@ -199,6 +221,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
 	s.mux.HandleFunc("GET /api/analysis-runs/", s.handleAnalysisJob)
+	s.mux.HandleFunc("GET /api/evaluations", s.handleEvaluations)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
@@ -578,6 +601,23 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleEvaluations(w http.ResponseWriter, r *http.Request) {
+	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
+	evaluations, err := s.listEvaluations(label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	summaries := make([]EvaluationSummary, 0, len(evaluations))
+	for _, evaluation := range evaluations {
+		summaries = append(summaries, evaluation.Summary)
+	}
+	writeJSON(w, http.StatusOK, EvaluationListResponse{
+		VODLabel:    label,
+		Evaluations: summaries,
+	})
+}
+
 func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/reports/")
 	parts := strings.Split(rest, "/")
@@ -604,6 +644,13 @@ type reportIndexItem struct {
 	Path        string
 	GeneratedAt time.Time
 	Summary     ReportSummary
+}
+
+type evaluationIndexItem struct {
+	RunID       string
+	Path        string
+	GeneratedAt time.Time
+	Summary     EvaluationSummary
 }
 
 func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
@@ -658,6 +705,58 @@ func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
 	return reports, nil
 }
 
+func (s *Server) listEvaluations(vodLabel string) ([]evaluationIndexItem, error) {
+	root := filepath.Join(s.config.ProcessedRoot, "evaluations")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var evaluations []evaluationIndexItem
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entry.Name(), "evaluation.json")
+		evaluation, err := readEvaluation(path)
+		if err != nil {
+			continue
+		}
+		if vodLabel != "" && evaluation.VODLabel != vodLabel {
+			continue
+		}
+		evaluations = append(evaluations, evaluationIndexItem{
+			RunID:       evaluation.RunID,
+			Path:        path,
+			GeneratedAt: evaluation.GeneratedAt,
+			Summary: EvaluationSummary{
+				SchemaVersion:    evaluation.SchemaVersion,
+				RunID:            evaluation.RunID,
+				GeneratedAt:      evaluation.GeneratedAt,
+				VODLabel:         evaluation.VODLabel,
+				ReportRunID:      evaluation.ReportRunID,
+				ToleranceSeconds: evaluation.ToleranceSeconds,
+				LabelCount:       evaluation.Overall.LabelCount,
+				PredictionCount:  evaluation.Overall.PredictionCount,
+				MatchCount:       evaluation.Overall.MatchCount,
+				Precision:        evaluation.Overall.Precision,
+				Recall:           evaluation.Overall.Recall,
+				F1:               evaluation.Overall.F1,
+				JSONPath:         path,
+				MarkdownPath:     filepath.Join(root, entry.Name(), "evaluation.md"),
+			},
+		})
+	}
+
+	sort.Slice(evaluations, func(i, j int) bool {
+		return evaluations[i].GeneratedAt.After(evaluations[j].GeneratedAt)
+	})
+	return evaluations, nil
+}
+
 func reviewWindowCount(gameplay *domain.GameplaySummary) int {
 	if gameplay == nil {
 		return 0
@@ -703,6 +802,18 @@ func readReport(path string) (domain.AnalysisReport, error) {
 	var report domain.AnalysisReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return domain.AnalysisReport{}, err
+	}
+	return report, nil
+}
+
+func readEvaluation(path string) (domain.GameplayEvaluationReport, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return domain.GameplayEvaluationReport{}, err
+	}
+	var report domain.GameplayEvaluationReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return domain.GameplayEvaluationReport{}, err
 	}
 	return report, nil
 }

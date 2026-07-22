@@ -821,6 +821,82 @@ button {
   text-transform: uppercase;
 }
 
+.quality-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid rgba(183, 255, 74, 0.24);
+  border-radius: var(--radius);
+  background: rgba(183, 255, 74, 0.045);
+}
+
+.quality-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.quality-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(8, 12, 20, 0.38);
+}
+
+.quality-card > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.quality-card span,
+.quality-card small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.quality-card strong {
+  flex: 0 0 auto;
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.quality-metrics small {
+  min-height: 26px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  text-align: center;
+}
+
+.quality-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .compat-banner {
   display: flex;
   align-items: center;
@@ -880,6 +956,16 @@ button {
   font-weight: 900;
   text-decoration: none;
   text-transform: uppercase;
+}
+
+.artifact-actions.compact {
+  margin-top: 0;
+}
+
+.artifact-actions.compact a {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .gameplay-review {
@@ -1739,6 +1825,10 @@ button {
   .practice-list {
     grid-template-columns: 1fr;
   }
+
+  .quality-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1802,6 +1892,10 @@ button {
   .review-window-head {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .quality-metrics {
+    grid-template-columns: 1fr;
   }
 
   .window-actions {
