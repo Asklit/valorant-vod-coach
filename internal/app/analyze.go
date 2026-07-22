@@ -42,6 +42,7 @@ type AnalysisRunner struct {
 	Analyzer ObservationAnalyzer
 	Reviewer ModelReviewer
 	Reports  ReportStore
+	Catalog  AnalysisCatalog
 	Clock    func() time.Time
 }
 
@@ -267,6 +268,14 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)
 	if err != nil {
 		return RunAnalysisResult{}, err
+	}
+	if r.Catalog != nil {
+		if err := r.Catalog.SaveAnalysisResult(ctx, PersistAnalysisRequest{
+			Report: report,
+			Saved:  saved,
+		}); err != nil {
+			return RunAnalysisResult{}, err
+		}
 	}
 
 	return RunAnalysisResult{Report: report, Saved: saved}, nil

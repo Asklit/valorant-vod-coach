@@ -129,6 +129,29 @@ Useful local consoles:
 
 The Go API exposes Prometheus metrics at `http://localhost:8090/metrics`.
 
+Apply PostgreSQL migrations:
+
+```sh
+go run ./cmd/vodctl db migrate --database-url "$DATABASE_URL"
+```
+
+Persist analysis metadata and write outbox events:
+
+```sh
+go run ./cmd/vodctl analyze run \
+  --vod iron_spudbud_01 \
+  --database-url "$DATABASE_URL" \
+  --force
+```
+
+Publish pending outbox events to Kafka:
+
+```sh
+go run ./cmd/vod-outbox-relay \
+  --database-url "$DATABASE_URL" \
+  --brokers "$KAFKA_BROKERS"
+```
+
 ## Benchmarks
 
 Preview a benchmark run:

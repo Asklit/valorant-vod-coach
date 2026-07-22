@@ -175,6 +175,35 @@ func TestAnalysisRunnerRequiresReviewerWhenModelReviewIsEnabled(t *testing.T) {
 	}
 }
 
+func TestAnalysisRunnerPersistsCatalogWhenConfigured(t *testing.T) {
+	catalog := &fakeCatalog{}
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeMediaProcessor{},
+		Reports:  &fakeReportStore{},
+		Catalog:  catalog,
+	}
+
+	result, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "persist_contract",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+	})
+	if err != nil {
+		t.Fatalf("run analysis: %v", err)
+	}
+
+	if catalog.last.Report.RunID != result.Report.RunID {
+		t.Fatalf("catalog received wrong report: %+v", catalog.last.Report)
+	}
+	if catalog.last.Saved.JSONPath != result.Saved.JSONPath || catalog.last.Saved.MarkdownPath != result.Saved.MarkdownPath {
+		t.Fatalf("catalog received wrong saved paths: %+v", catalog.last.Saved)
+	}
+}
+
 func TestBaselineAnalyzerEndsFullSampleAtLastFrame(t *testing.T) {
 	result, err := BaselineObservationAnalyzer{}.AnalyzeObservations(context.Background(), ObservationRequest{
 		Media: domain.MediaSummary{DurationSeconds: 120, HasDuration: true},
@@ -353,6 +382,15 @@ func (s *fakeReportStore) SaveReport(_ context.Context, report domain.AnalysisRe
 		JSONPath:     "/tmp/report.json",
 		MarkdownPath: "/tmp/report.md",
 	}, nil
+}
+
+type fakeCatalog struct {
+	last PersistAnalysisRequest
+}
+
+func (s *fakeCatalog) SaveAnalysisResult(_ context.Context, request PersistAnalysisRequest) error {
+	s.last = request
+	return nil
 }
 
 func hasFinding(findings []domain.Finding, id string) bool {

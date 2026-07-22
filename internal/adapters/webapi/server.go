@@ -33,6 +33,7 @@ type Config struct {
 	FFmpegPath                string
 	VisionURL                 string
 	StaticDir                 string
+	Catalog                   app.AnalysisCatalog
 }
 
 type Server struct {
@@ -568,6 +569,7 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 		Reports: reportstore.LocalStore{
 			ProcessedRoot: s.config.ProcessedRoot,
 		},
+		Catalog: s.config.Catalog,
 	}
 	if request.ModelReview {
 		if strings.TrimSpace(s.config.VisionURL) == "" {

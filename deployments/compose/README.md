@@ -28,6 +28,30 @@ Useful URLs:
 - MinIO S3 API: http://localhost:9002
 - ClickHouse HTTP: http://localhost:8123
 
+## Database and Outbox
+
+Apply the PostgreSQL schema after the stack is healthy:
+
+```sh
+go run ./cmd/vodctl db migrate \
+  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}"
+```
+
+When `vodctl analyze run` or `vod-web` receives a `DATABASE_URL`, successful analysis runs are persisted into:
+
+- `vods`
+- `analysis_reports`
+- `report_artifacts`
+- `outbox_events`
+
+Publish pending outbox rows to Kafka:
+
+```sh
+go run ./cmd/vod-outbox-relay \
+  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}" \
+  --brokers "${KAFKA_BROKERS:-localhost:9092}"
+```
+
 ## Stop
 
 ```sh

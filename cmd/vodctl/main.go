@@ -13,6 +13,7 @@ import (
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
@@ -39,6 +40,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "analyze":
 		return runAnalyze(args[1:], stdout, stderr)
+	case "db":
+		return runDB(args[1:], stdout, stderr)
 	case "dataset":
 		return runDataset(args[1:], stdout, stderr)
 	case "eval":
@@ -92,6 +95,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	force := fs.Bool("force", false, "overwrite existing sample and report artifacts")
 	modelReview := fs.Bool("model-review", false, "send generated model review tasks to the configured vision service")
 	visionURL := fs.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "vision service base URL; can also be set through VISION_SERVICE_URL")
+	databaseURL := fs.String("database-url", os.Getenv("DATABASE_URL"), "optional Postgres URL for report metadata and outbox persistence; can also be set through DATABASE_URL")
 	timeoutRaw := fs.String("timeout", "15m", "overall analysis timeout")
 	probeTimeoutRaw := fs.String("probe-timeout", "30s", "ffprobe command timeout")
 	sampleTimeoutRaw := fs.String("sample-timeout", "10m", "ffmpeg sample command timeout")
@@ -180,6 +184,15 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	}
 	if *modelReview {
 		runner.Reviewer = visionservice.Client{BaseURL: *visionURL}
+	}
+	if strings.TrimSpace(*databaseURL) != "" {
+		db, err := postgres.Open(ctx, *databaseURL)
+		if err != nil {
+			fmt.Fprintf(stderr, "open postgres: %v\n", err)
+			return 1
+		}
+		defer db.Close()
+		runner.Catalog = postgres.Store{DB: db, Producer: "vodctl"}
 	}
 
 	result, err := runner.Run(ctx, app.RunAnalysisRequest{
@@ -673,12 +686,14 @@ func formatBytes(bytes int64) string {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   vodctl analyze <command> [options]
+  vodctl db <command> [options]
   vodctl dataset <command> [options]
   vodctl eval <command> [options]
   vodctl video <command> [options]
 
 Commands:
   analyze run        Run the local MVP VOD analysis pipeline
+  db migrate         Apply PostgreSQL migrations
   dataset validate   Validate manifest structure and metadata
   dataset list       List VODs from the manifest
   dataset status     Show local download status
