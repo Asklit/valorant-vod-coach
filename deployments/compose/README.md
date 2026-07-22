@@ -44,6 +44,8 @@ When `vodctl analyze run` or `vod-web` receives a `DATABASE_URL`, successful ana
 - `report_artifacts`
 - `outbox_events`
 
+When `REDIS_URL` is configured, analysis runs acquire a Redis-backed lock per VOD before ffprobe/ffmpeg work starts. Use the default `redis://localhost:6379/0` from `.env.example` for local duplicate-run protection.
+
 Publish pending outbox rows to Kafka:
 
 ```sh

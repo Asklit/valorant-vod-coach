@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/webapi"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
@@ -22,6 +23,7 @@ func main() {
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable path")
 	visionURL := flag.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "optional vision-service base URL; can also be set through VISION_SERVICE_URL")
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "optional Postgres URL for report metadata and outbox persistence")
+	redisURL := flag.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
@@ -41,6 +43,15 @@ func main() {
 		defer db.Close()
 		catalog = postgres.Store{DB: db, Producer: "vod-web"}
 	}
+	var locks app.LockManager
+	if *redisURL != "" {
+		manager, err := redislock.NewManager(*redisURL)
+		if err != nil {
+			log.Fatalf("configure redis locks: %v", err)
+		}
+		defer manager.Close()
+		locks = manager
+	}
 
 	server := webapi.NewServer(webapi.Config{
 		ManifestPath:  *manifestPath,
@@ -51,11 +62,12 @@ func main() {
 		VisionURL:     *visionURL,
 		StaticDir:     *staticDir,
 		Catalog:       catalog,
+		Locks:         locks,
 		Logger:        obs.Logger,
 		Tracer:        obs.Tracer,
 	})
 
-	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "vision_configured", *visionURL != "")
+	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "vision_configured", *visionURL != "")
 	fmt.Fprintf(os.Stdout, "vod-web listening on http://localhost%s\n", *addr)
 	if err := http.ListenAndServe(*addr, server); err != nil {
 		log.Fatal(err)

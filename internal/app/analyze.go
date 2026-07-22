@@ -43,6 +43,7 @@ type AnalysisRunner struct {
 	Reviewer ModelReviewer
 	Reports  ReportStore
 	Catalog  AnalysisCatalog
+	Locks    LockManager
 	Clock    func() time.Time
 }
 
@@ -151,6 +152,14 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	runID := strings.TrimSpace(request.RunID)
 	if runID == "" {
 		runID = DefaultRunID(now)
+	}
+
+	if r.Locks != nil {
+		lock, err := r.Locks.Acquire(ctx, analysisLockKey(vodLabel), defaultAnalysisLockTTL)
+		if err != nil {
+			return RunAnalysisResult{}, err
+		}
+		defer lock.Release(context.Background())
 	}
 
 	sampleName := strings.TrimSpace(request.SampleName)

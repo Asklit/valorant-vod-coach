@@ -14,6 +14,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
@@ -99,6 +100,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 	modelReview := fs.Bool("model-review", false, "send generated model review tasks to the configured vision service")
 	visionURL := fs.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "vision service base URL; can also be set through VISION_SERVICE_URL")
 	databaseURL := fs.String("database-url", os.Getenv("DATABASE_URL"), "optional Postgres URL for report metadata and outbox persistence; can also be set through DATABASE_URL")
+	redisURL := fs.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks; can also be set through REDIS_URL")
 	timeoutRaw := fs.String("timeout", "15m", "overall analysis timeout")
 	probeTimeoutRaw := fs.String("probe-timeout", "30s", "ffprobe command timeout")
 	sampleTimeoutRaw := fs.String("sample-timeout", "10m", "ffmpeg sample command timeout")
@@ -183,6 +185,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		attribute.Float64("analysis.duration_seconds", duration.Seconds()),
 		attribute.Bool("analysis.model_review", *modelReview),
 		attribute.Bool("analysis.database_enabled", strings.TrimSpace(*databaseURL) != ""),
+		attribute.Bool("analysis.redis_locks_enabled", strings.TrimSpace(*redisURL) != ""),
 	)
 	defer span.End()
 	obs.Logger.InfoContext(ctx, "analysis started",
@@ -192,6 +195,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		"duration_seconds", duration.Seconds(),
 		"model_review", *modelReview,
 		"database_enabled", strings.TrimSpace(*databaseURL) != "",
+		"redis_locks_enabled", strings.TrimSpace(*redisURL) != "",
 	)
 
 	runner := app.AnalysisRunner{
@@ -222,6 +226,15 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 		}
 		defer db.Close()
 		runner.Catalog = postgres.Store{DB: db, Producer: "vodctl"}
+	}
+	if strings.TrimSpace(*redisURL) != "" {
+		manager, err := redislock.NewManager(*redisURL)
+		if err != nil {
+			fmt.Fprintf(stderr, "configure redis locks: %v\n", err)
+			return 1
+		}
+		defer manager.Close()
+		runner.Locks = manager
 	}
 
 	result, err := runner.Run(ctx, app.RunAnalysisRequest{

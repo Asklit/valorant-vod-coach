@@ -39,6 +39,7 @@ type Config struct {
 	VisionURL                 string
 	StaticDir                 string
 	Catalog                   app.AnalysisCatalog
+	Locks                     app.LockManager
 	Logger                    *slog.Logger
 	Tracer                    trace.Tracer
 }
@@ -625,6 +626,7 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 			ProcessedRoot: s.config.ProcessedRoot,
 		},
 		Catalog: s.config.Catalog,
+		Locks:   s.config.Locks,
 	}
 	if request.ModelReview {
 		if strings.TrimSpace(s.config.VisionURL) == "" {

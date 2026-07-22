@@ -204,6 +204,56 @@ func TestAnalysisRunnerPersistsCatalogWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAnalysisRunnerUsesLockManagerWhenConfigured(t *testing.T) {
+	locks := &fakeLockManager{}
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeMediaProcessor{},
+		Reports:  &fakeReportStore{},
+		Locks:    locks,
+	}
+
+	_, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "lock_contract",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+	})
+	if err != nil {
+		t.Fatalf("run analysis: %v", err)
+	}
+	if locks.key != "analysis:vod:diamond_example" {
+		t.Fatalf("unexpected lock key: %q", locks.key)
+	}
+	if !locks.released {
+		t.Fatalf("expected analysis lock to be released")
+	}
+}
+
+func TestAnalysisRunnerStopsWhenLockIsHeld(t *testing.T) {
+	locks := &fakeLockManager{err: LockAlreadyHeldError{Key: "analysis:vod:diamond_example"}}
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeMediaProcessor{},
+		Reports:  &fakeReportStore{},
+		Locks:    locks,
+	}
+
+	_, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel:     "diamond_example",
+		RunID:        "lock_conflict",
+		FPS:          "1",
+		Duration:     30 * time.Second,
+		ImageQuality: 3,
+		Overwrite:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "analysis lock already held") {
+		t.Fatalf("expected lock conflict, got %v", err)
+	}
+}
+
 func TestBaselineAnalyzerEndsFullSampleAtLastFrame(t *testing.T) {
 	result, err := BaselineObservationAnalyzer{}.AnalyzeObservations(context.Background(), ObservationRequest{
 		Media: domain.MediaSummary{DurationSeconds: 120, HasDuration: true},
@@ -390,6 +440,31 @@ type fakeCatalog struct {
 
 func (s *fakeCatalog) SaveAnalysisResult(_ context.Context, request PersistAnalysisRequest) error {
 	s.last = request
+	return nil
+}
+
+type fakeLockManager struct {
+	key      string
+	ttl      time.Duration
+	released bool
+	err      error
+}
+
+func (m *fakeLockManager) Acquire(_ context.Context, key string, ttl time.Duration) (Lock, error) {
+	m.key = key
+	m.ttl = ttl
+	if m.err != nil {
+		return nil, m.err
+	}
+	return fakeLock{manager: m}, nil
+}
+
+type fakeLock struct {
+	manager *fakeLockManager
+}
+
+func (l fakeLock) Release(context.Context) error {
+	l.manager.released = true
 	return nil
 }
 
