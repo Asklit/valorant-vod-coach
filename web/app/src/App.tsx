@@ -383,8 +383,28 @@ type EvaluationAnnotationListResponse = {
   annotations: EvaluationAnnotationSummary[];
 };
 
+type ManualCorrection = {
+  id: string;
+  type: string;
+  target_id?: string;
+  corrected_value?: string;
+  comment?: string;
+  timestamp_seconds?: number;
+  status: string;
+  author?: string;
+  created_at: string;
+};
+
+type ManualCorrectionResponse = {
+  vod_label: string;
+  report_run_id?: string;
+  corrections: ManualCorrection[];
+  json_path: string;
+};
+
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 const evidencePageSize = 24;
+const correctionTypes = ["false_detection", "map", "agent", "rank", "round_boundary", "finding_note", "event_note"];
 
 export function App() {
   const [vods, setVods] = useState<VODItem[]>([]);
@@ -397,17 +417,24 @@ export function App() {
   const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
   const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([]);
   const [evaluationAnnotations, setEvaluationAnnotations] = useState<EvaluationAnnotationSummary[]>([]);
+  const [manualCorrections, setManualCorrections] = useState<ManualCorrection[]>([]);
+  const [manualCorrectionsPath, setManualCorrectionsPath] = useState("");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [savingCorrection, setSavingCorrection] = useState(false);
   const [error, setError] = useState("");
   const [copiedTaskID, setCopiedTaskID] = useState("");
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
   const [modelReview, setModelReview] = useState(false);
+  const [correctionType, setCorrectionType] = useState("false_detection");
+  const [correctionTargetID, setCorrectionTargetID] = useState("");
+  const [correctionValue, setCorrectionValue] = useState("");
+  const [correctionComment, setCorrectionComment] = useState("");
   const [evidencePage, setEvidencePage] = useState(0);
   const [windowKind, setWindowKind] = useState("all");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -446,7 +473,19 @@ export function App() {
 
   useEffect(() => {
     setWindowKind("all");
+    setCorrectionTargetID("");
+    setCorrectionValue("");
+    setCorrectionComment("");
   }, [report?.run_id]);
+
+  useEffect(() => {
+    if (!selectedLabel || !report?.run_id) {
+      setManualCorrections([]);
+      setManualCorrectionsPath("");
+      return;
+    }
+    void loadManualCorrections(selectedLabel, report.run_id);
+  }, [selectedLabel, report?.run_id]);
 
   async function loadBackendHealth() {
     try {
@@ -547,6 +586,62 @@ export function App() {
       setEvaluationAnnotations(payload.annotations);
     } catch {
       setEvaluationAnnotations([]);
+    }
+  }
+
+  async function loadManualCorrections(label: string, runID: string) {
+    try {
+      const response = await fetch(apiURL(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`));
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as ManualCorrectionResponse;
+      setManualCorrections(payload.corrections);
+      setManualCorrectionsPath(payload.json_path);
+    } catch {
+      setManualCorrections([]);
+      setManualCorrectionsPath("");
+    }
+  }
+
+  async function saveManualCorrection() {
+    if (!selectedVod || !report || savingCorrection) {
+      return;
+    }
+    if (!correctionValue.trim() && !correctionComment.trim()) {
+      setError("Correction value or comment is required.");
+      return;
+    }
+
+    const currentTime = videoRef.current?.currentTime;
+    setSavingCorrection(true);
+    setError("");
+    try {
+      const response = await fetch(apiURL("/api/corrections"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vod_label: selectedVod.label,
+          report_run_id: report.run_id,
+          type: correctionType,
+          target_id: correctionTargetID,
+          corrected_value: correctionValue,
+          comment: correctionComment,
+          timestamp_seconds: Number.isFinite(currentTime) ? currentTime : undefined
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const payload = (await response.json()) as ManualCorrectionResponse;
+      setManualCorrections(payload.corrections);
+      setManualCorrectionsPath(payload.json_path);
+      setCorrectionValue("");
+      setCorrectionComment("");
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      setSavingCorrection(false);
     }
   }
 
@@ -657,6 +752,7 @@ export function App() {
   const modelReviewRuns = report?.gameplay?.model_review_runs ?? [];
   const selectedEvaluationAnnotation = evaluationAnnotations.find((item) => item.report_run_id && item.report_run_id === report?.run_id) ?? evaluationAnnotations[0] ?? null;
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
+  const correctionTargets = useMemo(() => buildCorrectionTargets(report), [report]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
   const backendMismatch = backendHealth ? (backendHealth.schema_version ?? 1) < 8 || backendHealth.analyzer !== "visual-heuristic-gameplay" : false;
@@ -1012,6 +1108,76 @@ export function App() {
                     <FileText size={15} />
                     Markdown
                   </a>
+                </div>
+
+                <div className="corrections-panel">
+                  <div className="history-title">
+                    <CheckCircle2 size={15} />
+                    Manual corrections
+                  </div>
+                  <div className="correction-form">
+                    <label>
+                      <span>Type</span>
+                      <select value={correctionType} onChange={(event) => setCorrectionType(event.target.value)}>
+                        {correctionTypes.map((type) => (
+                          <option key={type} value={type}>
+                            {type.replaceAll("_", " ")}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Target</span>
+                      <select value={correctionTargetID} onChange={(event) => setCorrectionTargetID(event.target.value)}>
+                        <option value="">report / general</option>
+                        {correctionTargets.map((target) => (
+                          <option key={target.id} value={target.id}>
+                            {target.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Value</span>
+                      <input value={correctionValue} onChange={(event) => setCorrectionValue(event.target.value)} placeholder="Correct value" />
+                    </label>
+                    <label className="correction-comment">
+                      <span>Comment</span>
+                      <textarea value={correctionComment} onChange={(event) => setCorrectionComment(event.target.value)} placeholder="Why this should change" rows={3} />
+                    </label>
+                    <button disabled={savingCorrection || (!correctionValue.trim() && !correctionComment.trim())} onClick={() => void saveManualCorrection()} type="button">
+                      <CheckCircle2 size={15} />
+                      {savingCorrection ? "Saving" : "Add correction"}
+                    </button>
+                  </div>
+                  {manualCorrections.length ? (
+                    <div className="correction-list">
+                      {manualCorrections.slice(-5).reverse().map((correction) => (
+                        <article className="correction-card" key={correction.id}>
+                          <div>
+                            <span>{correction.type.replaceAll("_", " ")}</span>
+                            <strong>{correction.target_id || "report"}</strong>
+                          </div>
+                          {correction.corrected_value ? <p>{correction.corrected_value}</p> : null}
+                          {correction.comment ? <small>{correction.comment}</small> : null}
+                          <em>
+                            {correction.status}
+                            {typeof correction.timestamp_seconds === "number" ? ` / ${formatSeconds(correction.timestamp_seconds)}` : ""}
+                          </em>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="quality-empty">No corrections for this report.</p>
+                  )}
+                  {manualCorrectionsPath && (
+                    <div className="artifact-actions compact">
+                      <a href={artifactURL(manualCorrectionsPath)} target="_blank" rel="noreferrer">
+                        <FileJson2 size={13} />
+                        Corrections JSON
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 {report.gameplay && (
@@ -1477,6 +1643,32 @@ function evidenceRangeLabel(start: number, count: number, total: number) {
 
 function uniqueWindowKinds(windows: ReviewWindow[]) {
   return Array.from(new Set(windows.map((window) => window.kind))).sort();
+}
+
+function buildCorrectionTargets(report: Report | null) {
+  if (!report) {
+    return [];
+  }
+  const targets: Array<{ id: string; label: string }> = [
+    { id: `report:${report.run_id}`, label: `report / ${report.run_id}` }
+  ];
+  for (const finding of report.findings ?? []) {
+    targets.push({ id: finding.id, label: compactLabel(`finding / ${finding.title}`) });
+  }
+  for (const event of report.gameplay?.gameplay_events ?? []) {
+    targets.push({ id: event.id, label: compactLabel(`event / ${formatSeconds(event.timestamp_seconds)} / ${event.title}`) });
+  }
+  for (const window of report.gameplay?.review_windows ?? []) {
+    targets.push({ id: window.id, label: compactLabel(`window / ${windowRange(window)} / ${window.title}`) });
+  }
+  for (const round of report.gameplay?.round_segments ?? []) {
+    targets.push({ id: `round:${round.round_number}`, label: compactLabel(`round ${round.round_number} / ${roundRange(round)}`) });
+  }
+  return targets;
+}
+
+function compactLabel(value: string) {
+  return value.length > 88 ? `${value.slice(0, 85)}...` : value;
 }
 
 function kindLabel(kind: string) {

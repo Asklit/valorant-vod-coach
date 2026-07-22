@@ -388,6 +388,49 @@ func TestServerRunsEvaluation(t *testing.T) {
 	}
 }
 
+func TestServerCreatesAndListsManualCorrections(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	body := bytes.NewBufferString(`{
+  "vod_label": "diamond_example",
+  "report_run_id": "api_test",
+  "type": "false_detection",
+  "target_id": "event_001",
+  "comment": "This event should be ignored.",
+  "timestamp_seconds": 42.5
+}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/corrections", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	got := response.Body.String()
+	if !strings.Contains(got, `"type": "false_detection"`) ||
+		!strings.Contains(got, `"target_id": "event_001"`) ||
+		!strings.Contains(got, `"json_path"`) {
+		t.Fatalf("unexpected correction response:\n%s", got)
+	}
+
+	correctionsPath := filepath.Join(fixture.outRoot, "corrections", "diamond_example", "api_test", app.ManualCorrectionsJSONName)
+	if _, err := os.Stat(correctionsPath); err != nil {
+		t.Fatalf("expected corrections file: %v", err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/corrections?vod_label=diamond_example&report_run_id=api_test", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"comment": "This event should be ignored."`) {
+		t.Fatalf("unexpected correction list response:\n%s", got)
+	}
+}
+
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)

@@ -87,6 +87,7 @@ Implemented local UI slice:
 - show model review tasks and allow copying prompt payloads;
 - jump from a review window to the matching timestamp in the local video player;
 - open generated mp4 clips for selected gameplay windows.
+- create manual corrections for false detections, map/agent/rank/round metadata, findings, and events; corrections are saved as local JSON artifacts under `data/processed/corrections/`.
 
 ## Mistake Taxonomy
 
@@ -393,6 +394,7 @@ Current status:
 - `web/app` contains the React/TypeScript/Vite UI for browsing VODs and running baseline analysis.
 - Postgres-backed VOD/report/artifact metadata persistence is implemented when `DATABASE_URL` is configured.
 - `vod-web` can read report history and latest report metadata from PostgreSQL through the report catalog. Local video availability is still scan-based so the UI reflects files actually present on disk.
+- Local manual corrections are implemented through `GET/POST /api/corrections` and JSON artifacts under `data/processed/corrections/`.
 
 ### Milestone 1.5: Media Benchmarks
 
@@ -534,3 +536,4 @@ Completed local MVP infrastructure:
 - Redis-backed analysis locks for repeated local CLI/API requests when `REDIS_URL` is configured.
 - PostgreSQL-backed report history reads in `vod-web` as an alternative to filesystem scans.
 - Service diagnostics for `vod-web`: liveness, readiness, metrics, and pprof.
+- Manual correction capture in the Go API and React UI, saved as reproducible local JSON artifacts.
