@@ -369,6 +369,20 @@ type EvaluationListResponse = {
   evaluations: EvaluationSummary[];
 };
 
+type EvaluationAnnotationSummary = {
+  schema_version: number;
+  vod_label: string;
+  report_run_id?: string;
+  tolerance_seconds?: number;
+  label_count: number;
+  path: string;
+};
+
+type EvaluationAnnotationListResponse = {
+  vod_label: string;
+  annotations: EvaluationAnnotationSummary[];
+};
+
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 const evidencePageSize = 24;
 
@@ -382,10 +396,12 @@ export function App() {
   const [report, setReport] = useState<Report | null>(null);
   const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
   const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([]);
+  const [evaluationAnnotations, setEvaluationAnnotations] = useState<EvaluationAnnotationSummary[]>([]);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState("");
   const [copiedTaskID, setCopiedTaskID] = useState("");
   const [runDuration, setRunDuration] = useState(180);
@@ -416,10 +432,12 @@ export function App() {
       setReport(null);
       setReportHistory([]);
       setEvaluationHistory([]);
+      setEvaluationAnnotations([]);
       return;
     }
     void loadReports(selectedLabel, { preferGameplay: true });
     void loadEvaluations(selectedLabel);
+    void loadEvaluationAnnotations(selectedLabel);
   }, [selectedLabel]);
 
   useEffect(() => {
@@ -519,6 +537,50 @@ export function App() {
     }
   }
 
+  async function loadEvaluationAnnotations(label: string) {
+    try {
+      const response = await fetch(apiURL(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`));
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as EvaluationAnnotationListResponse;
+      setEvaluationAnnotations(payload.annotations);
+    } catch {
+      setEvaluationAnnotations([]);
+    }
+  }
+
+  async function runEvaluation() {
+    if (!selectedVod || !report || evaluating || evaluationAnnotations.length === 0) {
+      return;
+    }
+    const annotation = evaluationAnnotations.find((item) => item.report_run_id && item.report_run_id === report.run_id) ?? evaluationAnnotations[0];
+    setEvaluating(true);
+    setError("");
+    try {
+      const response = await fetch(apiURL("/api/evaluation-runs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vod_label: selectedVod.label,
+          report_run_id: report.run_id,
+          annotations_path: annotation.path,
+          run_id: `ui_eval_${compactTimestamp(new Date())}`,
+          tolerance_seconds: annotation.tolerance_seconds ?? 0,
+          force: true
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      await loadEvaluations(selectedVod.label);
+    } catch (err) {
+      setError(messageFromError(err));
+    } finally {
+      setEvaluating(false);
+    }
+  }
+
   async function runAnalysis() {
     if (!selectedVod || analyzing) {
       return;
@@ -572,6 +634,7 @@ export function App() {
         await loadVods();
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
         await loadEvaluations(analyzedLabel);
+        await loadEvaluationAnnotations(analyzedLabel);
         return;
       }
       if (job.status === "failed") {
@@ -592,6 +655,7 @@ export function App() {
   const gameplayEvents = report?.gameplay?.gameplay_events ?? [];
   const modelReviewTasks = report?.gameplay?.model_review_tasks ?? [];
   const modelReviewRuns = report?.gameplay?.model_review_runs ?? [];
+  const selectedEvaluationAnnotation = evaluationAnnotations.find((item) => item.report_run_id && item.report_run_id === report?.run_id) ?? evaluationAnnotations[0] ?? null;
   const reviewWindowKinds = useMemo(() => uniqueWindowKinds(reviewWindows), [reviewWindows]);
   const visibleReviewWindows = windowKind === "all" ? reviewWindows : reviewWindows.filter((window) => window.kind === windowKind);
   const reportHasGameplay = report ? hasGameplayReview(report) : false;
@@ -864,40 +928,59 @@ export function App() {
               </div>
             )}
 
-            {evaluationHistory.length > 0 && (
+            {(evaluationHistory.length > 0 || evaluationAnnotations.length > 0) && (
               <div className="quality-panel">
                 <div className="history-title">
                   <BarChart3 size={15} />
                   Quality benchmarks
                 </div>
-                <div className="quality-list">
-                  {evaluationHistory.slice(0, 4).map((item) => (
-                    <article className="quality-card" key={item.run_id}>
-                      <div>
-                        <span>{item.run_id}</span>
-                        <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
-                      </div>
-                      <div className="quality-metrics">
-                        <small>{Math.round(clamp01(item.precision) * 100)}% precision</small>
-                        <small>{Math.round(clamp01(item.recall) * 100)}% recall</small>
-                        <small>{item.match_count}/{item.label_count} labels</small>
-                      </div>
-                      <p>
-                        {item.prediction_count} predictions / tolerance {formatSeconds(item.tolerance_seconds)} / report {item.report_run_id}
-                      </p>
-                      <div className="artifact-actions compact">
-                        <a href={artifactURL(item.json_path)} target="_blank" rel="noreferrer">
-                          <FileJson2 size={13} />
-                          JSON
-                        </a>
-                        <a href={artifactURL(item.markdown_path)} target="_blank" rel="noreferrer">
-                          <FileText size={13} />
-                          Markdown
-                        </a>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                {selectedEvaluationAnnotation && (
+                  <div className="quality-actions">
+                    <div>
+                      <span>{selectedEvaluationAnnotation.label_count} manual labels</span>
+                      <small>
+                        {selectedEvaluationAnnotation.report_run_id ? `fixture ${selectedEvaluationAnnotation.report_run_id}` : selectedEvaluationAnnotation.path} / tolerance{" "}
+                        {formatSeconds(selectedEvaluationAnnotation.tolerance_seconds ?? 6)}
+                      </small>
+                    </div>
+                    <button disabled={!report || evaluating} onClick={() => void runEvaluation()} type="button">
+                      <BarChart3 size={14} />
+                      {evaluating ? "Running eval" : "Run benchmark"}
+                    </button>
+                  </div>
+                )}
+                {evaluationHistory.length > 0 ? (
+                  <div className="quality-list">
+                    {evaluationHistory.slice(0, 4).map((item) => (
+                      <article className="quality-card" key={item.run_id}>
+                        <div>
+                          <span>{item.run_id}</span>
+                          <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
+                        </div>
+                        <div className="quality-metrics">
+                          <small>{Math.round(clamp01(item.precision) * 100)}% precision</small>
+                          <small>{Math.round(clamp01(item.recall) * 100)}% recall</small>
+                          <small>{item.match_count}/{item.label_count} labels</small>
+                        </div>
+                        <p>
+                          {item.prediction_count} predictions / tolerance {formatSeconds(item.tolerance_seconds)} / report {item.report_run_id}
+                        </p>
+                        <div className="artifact-actions compact">
+                          <a href={artifactURL(item.json_path)} target="_blank" rel="noreferrer">
+                            <FileJson2 size={13} />
+                            JSON
+                          </a>
+                          <a href={artifactURL(item.markdown_path)} target="_blank" rel="noreferrer">
+                            <FileText size={13} />
+                            Markdown
+                          </a>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="quality-empty">No benchmark runs for this VOD yet.</p>
+                )}
               </div>
             )}
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/asklit/valorant-vod-coach/internal/app"
 )
 
 func TestRunVideoProbeWritesArtifact(t *testing.T) {
@@ -360,7 +362,7 @@ func TestRunEvalRunWritesEvaluation(t *testing.T) {
 		t.Fatalf("unexpected stdout:\n%s", got)
 	}
 
-	evaluationPath := filepath.Join(outRoot, "eval_test", evaluationJSONName)
+	evaluationPath := filepath.Join(outRoot, "eval_test", app.EvaluationJSONName)
 	rawEvaluation, err := os.ReadFile(evaluationPath)
 	if err != nil {
 		t.Fatalf("expected evaluation JSON: %v", err)
@@ -371,7 +373,7 @@ func TestRunEvalRunWritesEvaluation(t *testing.T) {
 		t.Fatalf("unexpected evaluation JSON:\n%s", got)
 	}
 
-	markdownPath := filepath.Join(outRoot, "eval_test", evaluationMarkdownName)
+	markdownPath := filepath.Join(outRoot, "eval_test", app.EvaluationMarkdownName)
 	rawMarkdown, err := os.ReadFile(markdownPath)
 	if err != nil {
 		t.Fatalf("expected evaluation markdown: %v", err)
