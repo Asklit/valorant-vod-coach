@@ -521,10 +521,11 @@ Current status:
 
 ## Immediate Next Steps
 
-1. Manually check the Platinum item marked `search_metadata`.
+No open code tasks for the current local MVP.
 
 Completed local MVP infrastructure:
 
+- Platinum `platinum_sanctifyed_01` search metadata was checked against the downloaded yt-dlp metadata: the uploader description says `Currently Platinum 1`.
 - Contact sheet generation for sampled frames.
 - Contact sheet preview in the UI evidence area.
 - Local Docker Compose infrastructure.
