@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -307,7 +308,10 @@ func (s *Server) logRequest(ctx context.Context, r *http.Request, route string, 
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /healthz", s.handleLiveness)
+	s.mux.HandleFunc("GET /readyz", s.handleReadiness)
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
+	s.registerPprofRoutes()
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
@@ -336,6 +340,147 @@ func (s *Server) routes() {
 			http.ServeFile(w, r, filepath.Join(s.config.StaticDir, "index.html"))
 		})
 	}
+}
+
+func (s *Server) registerPprofRoutes() {
+	s.mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	s.mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	s.mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	s.mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	s.mux.HandleFunc("POST /debug/pprof/symbol", pprof.Symbol)
+	s.mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	for _, name := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
+		s.mux.Handle("GET /debug/pprof/"+name, pprof.Handler(name))
+	}
+}
+
+func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"schema_version": domain.AnalysisReportSchemaVersion,
+		"service":        "vod-web",
+	})
+}
+
+type readinessCheck struct {
+	Status  string `json:"status"`
+	Detail  string `json:"detail,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]readinessCheck{
+		"manifest":       checkExistingFile(s.config.ManifestPath),
+		"raw_root":       checkExistingDir(s.config.RawRoot),
+		"processed_root": checkWritableTargetDir(s.config.ProcessedRoot),
+		"vision_service": s.checkVisionReadiness(r.Context()),
+	}
+
+	ready := true
+	for _, check := range checks {
+		if check.Status == "failed" {
+			ready = false
+			break
+		}
+	}
+
+	status := http.StatusOK
+	payloadStatus := "ready"
+	if !ready {
+		status = http.StatusServiceUnavailable
+		payloadStatus = "not_ready"
+	}
+
+	writeJSON(w, status, map[string]any{
+		"status":         payloadStatus,
+		"schema_version": domain.AnalysisReportSchemaVersion,
+		"service":        "vod-web",
+		"checks":         checks,
+	})
+}
+
+func (s *Server) checkVisionReadiness(ctx context.Context) readinessCheck {
+	if strings.TrimSpace(s.config.VisionURL) == "" {
+		return readinessCheck{Status: "skipped", Detail: "VISION_SERVICE_URL is not configured"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	status, err := (visionservice.Client{
+		BaseURL:    s.config.VisionURL,
+		HTTPClient: &http.Client{Timeout: time.Second},
+	}).Health(ctx)
+	if err != nil {
+		return readinessCheck{Status: "failed", Detail: err.Error()}
+	}
+	if !strings.EqualFold(status.Status, "ok") {
+		return readinessCheck{Status: "failed", Detail: "vision service returned " + status.Status, Runtime: status.Runtime, Model: status.Model}
+	}
+	return readinessCheck{Status: "ok", Runtime: status.Runtime, Model: status.Model}
+}
+
+func checkExistingFile(path string) readinessCheck {
+	check := readinessCheck{Path: path}
+	info, err := os.Stat(path)
+	if err != nil {
+		check.Status = "failed"
+		check.Detail = err.Error()
+		return check
+	}
+	if info.IsDir() {
+		check.Status = "failed"
+		check.Detail = "expected a file"
+		return check
+	}
+	check.Status = "ok"
+	return check
+}
+
+func checkExistingDir(path string) readinessCheck {
+	check := readinessCheck{Path: path}
+	info, err := os.Stat(path)
+	if err != nil {
+		check.Status = "failed"
+		check.Detail = err.Error()
+		return check
+	}
+	if !info.IsDir() {
+		check.Status = "failed"
+		check.Detail = "expected a directory"
+		return check
+	}
+	check.Status = "ok"
+	return check
+}
+
+func checkWritableTargetDir(path string) readinessCheck {
+	check := readinessCheck{Path: path}
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			check.Status = "failed"
+			check.Detail = "expected a directory"
+			return check
+		}
+		check.Status = "ok"
+		return check
+	}
+	if !os.IsNotExist(err) {
+		check.Status = "failed"
+		check.Detail = err.Error()
+		return check
+	}
+
+	parent := filepath.Dir(path)
+	parentCheck := checkExistingDir(parent)
+	if parentCheck.Status != "ok" {
+		check.Status = "failed"
+		check.Detail = "parent is not ready: " + parentCheck.Detail
+		return check
+	}
+	return readinessCheck{Status: "ok", Path: path, Detail: "directory will be created on first write"}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -1374,8 +1519,14 @@ func metricRoute(path string) string {
 	switch {
 	case path == "":
 		return "/"
+	case path == "/healthz":
+		return "/healthz"
+	case path == "/readyz":
+		return "/readyz"
 	case path == "/metrics":
 		return "/metrics"
+	case strings.HasPrefix(path, "/debug/pprof/"):
+		return "/debug/pprof/*"
 	case path == "/api/health":
 		return "/api/health"
 	case path == "/api/vods":

@@ -127,7 +127,12 @@ Useful local consoles:
 - MinIO S3 API: `http://localhost:9002`
 - ClickHouse HTTP: `http://localhost:8123`
 
-The Go API exposes Prometheus metrics at `http://localhost:8090/metrics`.
+The Go API exposes diagnostics endpoints:
+
+- `http://localhost:8090/healthz` for liveness;
+- `http://localhost:8090/readyz` for manifest/storage/vision readiness;
+- `http://localhost:8090/metrics` for Prometheus metrics;
+- `http://localhost:8090/debug/pprof/` for local Go profiling.
 
 Structured logs and traces:
 

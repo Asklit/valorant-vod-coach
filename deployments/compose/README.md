@@ -28,6 +28,13 @@ Useful URLs:
 - MinIO S3 API: http://localhost:9002
 - ClickHouse HTTP: http://localhost:8123
 
+`vod-web` service diagnostics:
+
+- `GET /healthz`: liveness;
+- `GET /readyz`: manifest, local storage, and optional vision-service readiness;
+- `GET /metrics`: Prometheus text metrics;
+- `GET /debug/pprof/`: local Go profiling index.
+
 ## Database and Outbox
 
 Apply the PostgreSQL schema after the stack is healthy:
