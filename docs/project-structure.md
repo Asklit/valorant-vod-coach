@@ -62,6 +62,7 @@ internal/
     dataset/                      # TSV manifest parsing and local dataset inventory
     media/                        # ffprobe/ffmpeg probing and frame sampling
     postgres/                     # PostgreSQL migrations, metadata persistence, outbox access
+    redislock/                    # Redis-backed analysis locks
     kafka/                        # Kafka outbox event producer
     clickhouse/                   # ClickHouse HTTP migrations and event inserts
     report/                       # local JSON/Markdown report persistence

@@ -151,8 +151,11 @@ Persist analysis metadata and write outbox events:
 go run ./cmd/vodctl analyze run \
   --vod iron_spudbud_01 \
   --database-url "$DATABASE_URL" \
+  --redis-url "$REDIS_URL" \
   --force
 ```
+
+When `REDIS_URL` is configured, CLI and web analysis runs acquire a Redis-backed VOD lock before starting ffprobe/ffmpeg work. This prevents duplicate concurrent analysis jobs for the same VOD.
 
 Publish pending outbox events to Kafka:
 

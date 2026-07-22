@@ -518,7 +518,6 @@ Current status:
 
 1. Manually check the Platinum item marked `search_metadata`.
 2. Add PostgreSQL-backed report history reads to `vod-web` as an alternative to filesystem scans.
-3. Add Redis-backed cache/locks for repeated local analysis requests.
 
 Completed local MVP infrastructure:
 
@@ -530,3 +529,4 @@ Completed local MVP infrastructure:
 - Outbox-to-Kafka relay for `VodProbed`, `FramesExtracted`, and `ReportReady`.
 - OpenTelemetry trace setup and structured logs around `vodctl analyze run` and `vod-web`.
 - ClickHouse `kafka_events` migration plus `vod-clickhouse-sink` Kafka consumer for `vod.processing.v1` and `vod.lifecycle.v1`.
+- Redis-backed analysis locks for repeated local CLI/API requests when `REDIS_URL` is configured.
