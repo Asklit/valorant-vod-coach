@@ -11,6 +11,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/webapi"
 	"github.com/asklit/valorant-vod-coach/internal/app"
+	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
 )
 
 func main() {
@@ -24,6 +25,12 @@ func main() {
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
+
+	obs, err := observability.Setup(context.Background(), observability.Config{ServiceName: "vod-web"}, os.Stderr)
+	if err != nil {
+		log.Fatalf("setup observability: %v", err)
+	}
+	defer observability.Shutdown(context.Background(), obs.Shutdown, obs.Logger)
 
 	var catalog app.AnalysisCatalog
 	if *databaseURL != "" {
@@ -44,8 +51,11 @@ func main() {
 		VisionURL:     *visionURL,
 		StaticDir:     *staticDir,
 		Catalog:       catalog,
+		Logger:        obs.Logger,
+		Tracer:        obs.Tracer,
 	})
 
+	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "vision_configured", *visionURL != "")
 	fmt.Fprintf(os.Stdout, "vod-web listening on http://localhost%s\n", *addr)
 	if err := http.ListenAndServe(*addr, server); err != nil {
 		log.Fatal(err)

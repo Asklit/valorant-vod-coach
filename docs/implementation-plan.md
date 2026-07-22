@@ -517,10 +517,9 @@ Current status:
 ## Immediate Next Steps
 
 1. Manually check the Platinum item marked `search_metadata`.
-2. Add the first OpenTelemetry traces and structured logs around `vodctl analyze run` and `vod-web`.
-3. Add a ClickHouse sink for published `vod.processing.v1` and `vod.lifecycle.v1` events.
-4. Add PostgreSQL-backed report history reads to `vod-web` as an alternative to filesystem scans.
-5. Add Redis-backed cache/locks for repeated local analysis requests.
+2. Add a ClickHouse sink for published `vod.processing.v1` and `vod.lifecycle.v1` events.
+3. Add PostgreSQL-backed report history reads to `vod-web` as an alternative to filesystem scans.
+4. Add Redis-backed cache/locks for repeated local analysis requests.
 
 Completed local MVP infrastructure:
 
@@ -530,3 +529,4 @@ Completed local MVP infrastructure:
 - PostgreSQL migrations, typed DB access, and `outbox_events`.
 - Analysis pipeline persistence of VOD/report/artifact metadata in PostgreSQL when `DATABASE_URL` is configured.
 - Outbox-to-Kafka relay for `VodProbed`, `FramesExtracted`, and `ReportReady`.
+- OpenTelemetry trace setup and structured logs around `vodctl analyze run` and `vod-web`.
