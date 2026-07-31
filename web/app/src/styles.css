@@ -2873,6 +2873,67 @@ button {
   line-height: 1.45;
 }
 
+.understanding-summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	margin: 0 0 13px;
+	padding: 10px 0;
+	border-top: 1px solid var(--line);
+	border-bottom: 1px solid var(--line);
+}
+
+.understanding-summary > div:first-child span,
+.understanding-summary > div:first-child strong,
+.understanding-summary > div:first-child small,
+.understanding-counts strong,
+.understanding-counts small {
+	display: block;
+}
+
+.understanding-summary > div:first-child span,
+.understanding-counts small {
+	color: var(--muted);
+	font-size: 9px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.understanding-summary > div:first-child strong {
+	margin: 2px 0;
+	font-size: 13px;
+	text-transform: uppercase;
+}
+
+.understanding-summary > div:first-child small {
+	color: var(--muted);
+	font-size: 10px;
+}
+
+.understanding-summary.compatibility-supported > div:first-child strong {
+	color: var(--green);
+}
+
+.understanding-summary.compatibility-degraded > div:first-child strong {
+	color: var(--amber);
+}
+
+.understanding-summary.compatibility-unsupported > div:first-child strong {
+	color: var(--red);
+}
+
+.understanding-counts {
+	display: grid;
+	grid-template-columns: repeat(3, 44px);
+	gap: 5px;
+	text-align: center;
+}
+
+.understanding-counts strong {
+	font-size: 16px;
+}
+
 .coach-queue {
   display: grid;
   gap: 7px;
@@ -2979,6 +3040,62 @@ button {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.evidence-sequence {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.evidence-sequence button {
+	display: grid;
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	background: rgba(255, 255, 255, 0.025);
+	color: var(--text);
+	text-align: left;
+	transition: border-color 150ms ease, transform 150ms ease, background 150ms ease;
+}
+
+.evidence-sequence button:hover {
+	border-color: rgba(40, 215, 255, 0.48);
+	background: rgba(40, 215, 255, 0.055);
+	transform: translateY(-2px);
+}
+
+.evidence-sequence img {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	background: #11151a;
+}
+
+.evidence-sequence button > span {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 9px;
+}
+
+.evidence-sequence strong,
+.evidence-sequence small {
+	font-size: 10px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.evidence-sequence strong {
+	color: var(--cyan);
+}
+
+.evidence-sequence small {
+	color: var(--muted);
 }
 
 .guided-review-columns {
@@ -3559,6 +3676,10 @@ button {
 	.guided-review-header,
 	.validated-row-head {
 		flex-direction: column;
+	}
+
+	.evidence-sequence {
+		grid-template-columns: 1fr;
 	}
 
 	.coach-assessment-output {

@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 9
+const AnalysisReportSchemaVersion = 10
 
 type Rank string
 
@@ -85,6 +85,7 @@ type Finding struct {
 type EvidenceRef struct {
 	ArtifactType     string  `json:"artifact_type"`
 	Path             string  `json:"path"`
+	Role             string  `json:"role,omitempty"`
 	TimestampSeconds float64 `json:"timestamp_seconds,omitempty"`
 	FrameIndex       int     `json:"frame_index,omitempty"`
 }
@@ -97,28 +98,48 @@ type TimelineEvent struct {
 }
 
 type GameplaySummary struct {
-	Analyzer             string             `json:"analyzer,omitempty"`
-	SampledFrames        int                `json:"sampled_frames"`
-	AnalyzedFrames       int                `json:"analyzed_frames"`
-	SkippedFrames        int                `json:"skipped_frames,omitempty"`
-	ReviewWindowCount    int                `json:"review_window_count"`
-	RoundSegmentCount    int                `json:"round_segment_count,omitempty"`
-	ModelReviewTaskCount int                `json:"model_review_task_count,omitempty"`
-	ModelReviewRunCount  int                `json:"model_review_run_count,omitempty"`
-	AverageMotionScore   float64            `json:"average_motion_score,omitempty"`
-	AverageMinimapSignal float64            `json:"average_minimap_signal,omitempty"`
-	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
-	PeakCombatScore      float64            `json:"peak_combat_score,omitempty"`
-	Coach                *CoachSummary      `json:"coach,omitempty"`
-	CoachReview          *CoachReview       `json:"coach_review,omitempty"`
-	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
-	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
-	GameplayEvents       []GameplayEvent    `json:"gameplay_events,omitempty"`
-	ModelReviewTasks     []ModelReviewTask  `json:"model_review_tasks,omitempty"`
-	ModelReviewRuns      []ModelReviewRun   `json:"model_review_runs,omitempty"`
-	FrameObservations    []FrameObservation `json:"frame_observations,omitempty"`
-	ReviewWindows        []ReviewWindow     `json:"review_windows,omitempty"`
-	Notes                []string           `json:"notes,omitempty"`
+	Analyzer             string                 `json:"analyzer,omitempty"`
+	SampledFrames        int                    `json:"sampled_frames"`
+	AnalyzedFrames       int                    `json:"analyzed_frames"`
+	SkippedFrames        int                    `json:"skipped_frames,omitempty"`
+	ReviewWindowCount    int                    `json:"review_window_count"`
+	RoundSegmentCount    int                    `json:"round_segment_count,omitempty"`
+	ModelReviewTaskCount int                    `json:"model_review_task_count,omitempty"`
+	ModelReviewRunCount  int                    `json:"model_review_run_count,omitempty"`
+	AverageMotionScore   float64                `json:"average_motion_score,omitempty"`
+	AverageMinimapSignal float64                `json:"average_minimap_signal,omitempty"`
+	AverageHUDSignal     float64                `json:"average_hud_signal,omitempty"`
+	PeakCombatScore      float64                `json:"peak_combat_score,omitempty"`
+	Understanding        *GameplayUnderstanding `json:"understanding,omitempty"`
+	Coach                *CoachSummary          `json:"coach,omitempty"`
+	CoachReview          *CoachReview           `json:"coach_review,omitempty"`
+	PhaseProfile         []PhaseStat            `json:"phase_profile,omitempty"`
+	RoundSegments        []RoundSegment         `json:"round_segments,omitempty"`
+	GameplayEvents       []GameplayEvent        `json:"gameplay_events,omitempty"`
+	ModelReviewTasks     []ModelReviewTask      `json:"model_review_tasks,omitempty"`
+	ModelReviewRuns      []ModelReviewRun       `json:"model_review_runs,omitempty"`
+	FrameObservations    []FrameObservation     `json:"frame_observations,omitempty"`
+	ReviewWindows        []ReviewWindow         `json:"review_windows,omitempty"`
+	Notes                []string               `json:"notes,omitempty"`
+}
+
+type GameplayUnderstanding struct {
+	Game                       string  `json:"game"`
+	Method                     string  `json:"method"`
+	CaptureCompatibility       string  `json:"capture_compatibility"`
+	CompatibilityConfidence    float64 `json:"compatibility_confidence"`
+	AverageHUDLayoutConfidence float64 `json:"average_hud_layout_confidence,omitempty"`
+	BuyPhaseFrameCount         int     `json:"buy_phase_frame_count,omitempty"`
+	ScoreboardFrameCount       int     `json:"scoreboard_frame_count,omitempty"`
+	CombatReportFrameCount     int     `json:"combat_report_frame_count,omitempty"`
+	RoundEndFrameCount         int     `json:"round_end_frame_count,omitempty"`
+	KillfeedEventFrameCount    int     `json:"killfeed_event_frame_count,omitempty"`
+	DamageEventFrameCount      int     `json:"damage_event_frame_count,omitempty"`
+	DeathReviewCount           int     `json:"death_review_count,omitempty"`
+	CorroboratedFightCount     int     `json:"corroborated_fight_count,omitempty"`
+	RoundDetectionMethod       string  `json:"round_detection_method,omitempty"`
+	OCRStatus                  string  `json:"ocr_status,omitempty"`
+	OCRAnalyzedFrameCount      int     `json:"ocr_analyzed_frame_count,omitempty"`
 }
 
 type CoachSummary struct {
@@ -154,17 +175,27 @@ type PhaseStat struct {
 }
 
 type FrameObservation struct {
-	Index            int     `json:"index"`
-	TimestampSeconds float64 `json:"timestamp_seconds"`
-	Path             string  `json:"path"`
-	Brightness       float64 `json:"brightness"`
-	Contrast         float64 `json:"contrast"`
-	MotionScore      float64 `json:"motion_score"`
-	CenterActivity   float64 `json:"center_activity"`
-	MinimapSignal    float64 `json:"minimap_signal"`
-	HUDSignal        float64 `json:"hud_signal"`
-	CombatSignal     float64 `json:"combat_signal"`
-	Phase            string  `json:"phase"`
+	Index               int      `json:"index"`
+	TimestampSeconds    float64  `json:"timestamp_seconds"`
+	Path                string   `json:"path"`
+	Brightness          float64  `json:"brightness"`
+	Contrast            float64  `json:"contrast"`
+	MotionScore         float64  `json:"motion_score"`
+	CenterActivity      float64  `json:"center_activity"`
+	MinimapSignal       float64  `json:"minimap_signal"`
+	HUDSignal           float64  `json:"hud_signal"`
+	HUDLayoutConfidence float64  `json:"hud_layout_confidence"`
+	KillfeedSignal      float64  `json:"killfeed_signal,omitempty"`
+	KillfeedChange      float64  `json:"killfeed_change,omitempty"`
+	KillfeedEventSignal float64  `json:"killfeed_event_signal,omitempty"`
+	DamageSignal        float64  `json:"damage_signal,omitempty"`
+	ScoreboardSignal    float64  `json:"scoreboard_signal,omitempty"`
+	CombatReportSignal  float64  `json:"combat_report_signal,omitempty"`
+	BuyPhaseSignal      float64  `json:"buy_phase_signal,omitempty"`
+	RoundEndSignal      float64  `json:"round_end_signal,omitempty"`
+	OCRSignals          []string `json:"ocr_signals,omitempty"`
+	CombatSignal        float64  `json:"combat_signal"`
+	Phase               string   `json:"phase"`
 }
 
 type RoundSegment struct {

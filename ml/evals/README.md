@@ -1,14 +1,17 @@
 # Evaluation Fixtures
 
-Manual evaluation labels live here before they are promoted into a database-backed evaluation workflow.
+Reviewed evaluation labels live here as versioned regression fixtures.
 
 Run an evaluation against an existing analysis report:
 
 ```sh
 go run ./cmd/vodctl eval run \
-  --report data/processed/iron_spudbud_01/reports/gameplay_events_smoke/report.json \
-  --annotations ml/evals/gameplay_events.example.json \
-  --run-id gameplay-events-example \
+  --report data/processed/gold_remortius_01/reports/cpu_cv_gold_180_v1/report.json \
+  --annotations ml/evals/gold_remortius_01.first_180s.v1.json \
+  --run-id cpu_cv_gold_180_v1 \
+  --min-precision 0.95 \
+  --min-recall 0.95 \
+  --min-f1 0.95 \
   --force
 ```
 
@@ -19,9 +22,10 @@ The command writes:
 
 Supported label `type` aliases:
 
-- `combat`, `fight`, `death`, `kill`, `bad_fight`
+- `combat`, `fight`, `kill`, `bad_fight`
+- `death`, `death_review`, `death_state_confirmed`
 - `rotation`, `rotate`, `bad_rotate`
 - `tempo`, `low_activity`, `hold`, `pacing`
 - `round`, `round_start`, `round_boundary`
 
-The evaluator matches labels to `report.gameplay.gameplay_events` within the configured timestamp tolerance and reports precision, recall, F1, missed labels, and false positives.
+The evaluator matches labels to `report.gameplay.gameplay_events` within the configured timestamp tolerance and reports precision, recall, F1, missed labels, and false positives. Use `evaluated_types` to measure false positives for classes that intentionally have no labels in a fixture.

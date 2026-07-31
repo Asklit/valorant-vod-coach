@@ -120,6 +120,14 @@ type BackendHealth = {
   };
 };
 
+type EvidenceRef = {
+	artifact_type: string;
+	path: string;
+	role?: string;
+	timestamp_seconds?: number;
+	frame_index?: number;
+};
+
 type Finding = {
   id: string;
   severity: string;
@@ -128,12 +136,7 @@ type Finding = {
   detail: string;
   recommendation?: string;
   confidence?: number;
-  evidence?: Array<{
-    artifact_type: string;
-    path: string;
-    timestamp_seconds?: number;
-    frame_index?: number;
-  }>;
+	evidence?: EvidenceRef[];
 };
 
 type Frame = {
@@ -306,6 +309,24 @@ type GameplaySummary = {
   average_minimap_signal?: number;
   average_hud_signal?: number;
   peak_combat_score?: number;
+	understanding?: {
+		game: string;
+		method: string;
+		capture_compatibility: "supported" | "degraded" | "unsupported";
+		compatibility_confidence: number;
+		average_hud_layout_confidence?: number;
+		buy_phase_frame_count?: number;
+		scoreboard_frame_count?: number;
+		combat_report_frame_count?: number;
+		round_end_frame_count?: number;
+		killfeed_event_frame_count?: number;
+		damage_event_frame_count?: number;
+		death_review_count?: number;
+		corroborated_fight_count?: number;
+		round_detection_method?: string;
+		ocr_status?: string;
+		ocr_analyzed_frame_count?: number;
+	};
   coach?: CoachSummary;
   coach_review?: CoachReview;
   phase_profile?: PhaseStat[];
@@ -1325,7 +1346,7 @@ function AuthScreen(props: {
           </div>
           <div>
             <div className="brand-title">VOD COACH</div>
-            <div className="brand-subtitle">LOCAL MVP</div>
+            <div className="brand-subtitle">VOD REVIEW</div>
           </div>
         </div>
         <div className="auth-mode">
@@ -1403,7 +1424,7 @@ function DashboardPage(props: {
             <StepPill index="4" title="Report" detail="coach schema" />
           </div>
           <p className="plain-copy">
-            The current engine is a deterministic visual baseline. It finds review moments from sampled frames and generates coach-ready evidence. Real VLM reasoning is optional through the vision service and is used only on selected clips.
+            The CPU engine validates the VALORANT HUD, confirms buy phases and death-state overlays with OCR, and selects corroborated evidence sequences for guided coaching review.
           </p>
           <div className="hero-actions">
             <button onClick={() => props.setPage("library")} type="button">
@@ -1629,6 +1650,7 @@ function ReviewPage(props: {
   seekVideo: (seconds: number) => void;
 }) {
 	const review = props.report?.gameplay?.coach_review;
+	const understanding = props.report?.gameplay?.understanding;
 	const decisions = review?.decisions ?? [];
 	const [selectedDecisionID, setSelectedDecisionID] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -1707,9 +1729,15 @@ function ReviewPage(props: {
             </div>
 			{review && <span className={`quality-chip quality-${review.evidence_quality.level}`}><Eye size={14} />{Math.round(review.evidence_quality.score * 100)}% evidence</span>}
           </div>
-		  {review ? (
-			<>
-			  <div className="review-progress" aria-label="Guided review progress"><i style={{ width: `${review.decisions.length ? ((props.coachProgress?.completed ?? 0) / review.decisions.length) * 100 : 0}%` }} /></div>
+			  {review ? (
+				<>
+				  {understanding && (
+					<div className={`understanding-summary compatibility-${understanding.capture_compatibility}`}>
+					  <div><span>Capture</span><strong>{understanding.capture_compatibility}</strong><small>{Math.round(understanding.compatibility_confidence * 100)}% HUD / {understanding.ocr_status ?? "OCR unknown"}</small></div>
+					  <div className="understanding-counts"><span><strong>{understanding.death_review_count ?? 0}</strong><small>Deaths</small></span><span><strong>{understanding.corroborated_fight_count ?? 0}</strong><small>Fights</small></span><span><strong>{props.report?.gameplay?.round_segment_count ?? 0}</strong><small>Rounds</small></span></div>
+					</div>
+				  )}
+				  <div className="review-progress" aria-label="Guided review progress"><i style={{ width: `${review.decisions.length ? ((props.coachProgress?.completed ?? 0) / review.decisions.length) * 100 : 0}%` }} /></div>
 			  <p className="review-contract-copy">{review.summary}</p>
 			  <div className="coach-queue">
 				{decisions.map((decision) => {
@@ -1740,9 +1768,20 @@ function ReviewPage(props: {
 			  <p>{result?.observation ?? selectedDecision.observation}</p>
 			</div>
 			<button className="seek-button" onClick={() => props.seekVideo(selectedDecision.timestamp_seconds)} type="button"><Play size={14} fill="currentColor" />{formatSeconds(selectedDecision.timestamp_seconds)}</button>
-		  </div>
+			  </div>
 
-		  <div className="guided-review-columns">
+			  {selectedDecision.evidence && selectedDecision.evidence.length > 0 && (
+				<div className="evidence-sequence">
+				  {selectedDecision.evidence.map((evidence, index) => (
+					<button key={`${evidence.path}-${evidence.role ?? index}`} onClick={() => props.seekVideo(evidence.timestamp_seconds ?? selectedDecision.timestamp_seconds)} title={`Seek to ${evidence.role ?? "evidence"}`} type="button">
+					  <img alt={`${evidence.role ?? "Gameplay"} evidence at ${formatSeconds(evidence.timestamp_seconds ?? selectedDecision.timestamp_seconds)}`} loading="lazy" src={artifactURL(evidence.path)} />
+					  <span><strong>{evidence.role ?? `Frame ${index + 1}`}</strong><small>{formatSeconds(evidence.timestamp_seconds ?? selectedDecision.timestamp_seconds)}</small></span>
+					</button>
+				  ))}
+				</div>
+			  )}
+
+			  <div className="guided-review-columns">
 			<form className="coach-questionnaire" onSubmit={(event) => { event.preventDefault(); props.saveCoachAssessment(selectedDecision.window_id, answers); }}>
 			  <div className="questionnaire-heading"><span>Confirm only visible facts</span><strong>{Object.keys(answers).length} answered</strong></div>
 			  {(selectedDecision.questions ?? []).map((question) => (

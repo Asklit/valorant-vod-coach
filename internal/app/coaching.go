@@ -90,6 +90,8 @@ func (EvidenceCoachEngine) AssessDecision(ctx context.Context, request CoachAsse
 	switch decision.Kind {
 	case "combat_spike":
 		return assessCombat(decision, answers), nil
+	case "death_review":
+		return assessDeath(decision, answers), nil
 	case "rotation_spike":
 		return assessRotation(decision, answers), nil
 	case "low_activity":
@@ -119,6 +121,18 @@ func decisionForWindow(window domain.ReviewWindow, quality domain.CoachEvidenceQ
 	}
 
 	switch window.Kind {
+	case "death_review":
+		base.Title = "Review the decisions before this death"
+		base.Observation = window.Summary
+		base.WhyReview = "The combat-report UI corroborates a death state. The evidence sequence can locate the preceding decision, but tradeability, intent, utility, and mechanics still require visible confirmation."
+		base.Requirements = requirements(
+			requirement("death_confirmed", "The combat report belongs to this POV death"),
+			requirement("tradeable", "Trade context is visible"),
+			requirement("utility_used", "Utility sequence is visible"),
+			requirement("crosshair_ready", "Crosshair readiness is visible"),
+			requirement("escape_route", "Cover or fallback options are visible"),
+		)
+		base.Questions = deathQuestions()
 	case "combat_spike":
 		base.Title = "Confirm the fight context"
 		base.Observation = window.Summary
@@ -171,6 +185,7 @@ func SummarizeCoachReview(review *domain.CoachReview) *domain.CoachSummary {
 		decisions []domain.CoachDecision
 	}
 	groups := []group{
+		{kind: "death_review", category: "death_review", title: "Deaths to review"},
 		{kind: "combat_spike", category: "combat_review", title: "Fight contexts to validate"},
 		{kind: "rotation_spike", category: "macro_review", title: "Rotation contexts to validate"},
 		{kind: "low_activity", category: "tempo_review", title: "Hold and tempo contexts to validate"},
@@ -228,6 +243,23 @@ func SummarizeCoachReview(review *domain.CoachReview) *domain.CoachSummary {
 		FocusAreas:   focus,
 		PracticePlan: practice,
 	}
+}
+
+func assessDeath(decision domain.CoachDecision, answers map[string]string) domain.CoachDecision {
+	if answers["death_confirmed"] == "no" {
+		return conclude(decision, "not_applicable", "death_false_positive", domain.FindingSeverityInfo, "Not this POV's death", "The selected combat-report panel did not represent a death by the reviewed player.", nil, 0.98)
+	}
+	if missingRequired(decision, answers) {
+		return pending(decision, "Confirm the death, trade setup, utility sequence, crosshair readiness, and fallback options before drawing a conclusion.")
+	}
+
+	mapped := make(map[string]string, len(answers)+2)
+	for key, value := range answers {
+		mapped[key] = value
+	}
+	mapped["fight_occurred"] = "yes"
+	mapped["outcome"] = "death"
+	return assessCombat(decision, mapped)
 }
 
 func assessCombat(decision domain.CoachDecision, answers map[string]string) domain.CoachDecision {
@@ -417,6 +449,18 @@ func combatQuestions() []domain.CoachQuestion {
 		question("fight_occurred", "Did a real fight occur in this window?", true, yesNoUnknown()...),
 		question("outcome", "What was the visible outcome?", true, option("death", "Death"), option("kill", "Kill"), option("survived", "Survived / disengaged"), option("unknown", "Cannot tell")),
 		question("tradeable", "Could a teammate trade the contact quickly?", true, yesNoUnknown()...),
+		question("utility_available", "Was useful utility available before contact?", true, yesNoUnknown()...),
+		question("utility_used", "Was utility used to improve the contact?", true, option("yes", "Yes"), option("no", "No"), option("not_available", "Not available"), option("unknown", "Cannot tell")),
+		question("crosshair_ready", "Was the crosshair ready on the likely contact angle?", true, yesNoUnknown()...),
+		question("escape_route", "Was cover or a fallback route available after the first burst?", true, yesNoUnknown()...),
+	}
+}
+
+func deathQuestions() []domain.CoachQuestion {
+	return []domain.CoachQuestion{
+		question("death_confirmed", "Does this combat report belong to the reviewed player's death?", true, yesNoUnknown()...),
+		question("contact_intent", "What was the visible purpose of the contact?", false, option("entry", "Entry / take space"), option("trade", "Trade teammate"), option("hold", "Hold controlled space"), option("retake", "Retake / defend objective"), option("forced", "Forced by opponent"), option("unknown", "Cannot tell")),
+		question("tradeable", "Could a teammate trade this death quickly?", true, yesNoUnknown()...),
 		question("utility_available", "Was useful utility available before contact?", true, yesNoUnknown()...),
 		question("utility_used", "Was utility used to improve the contact?", true, option("yes", "Yes"), option("no", "No"), option("not_available", "Not available"), option("unknown", "Cannot tell")),
 		question("crosshair_ready", "Was the crosshair ready on the likely contact angle?", true, yesNoUnknown()...),

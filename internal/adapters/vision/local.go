@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -18,15 +15,20 @@ import (
 )
 
 const (
+	GameplayAnalyzerName       = "valorant-hud-cv-v2"
 	GameplayReviewArtifactName = "gameplay_review.json"
 	DefaultMaxReviewWindows    = 12
 	MaxReviewWindowsLimit      = 20
+	trustedBuyPhaseSignal      = 0.90
+	trustedScoreboardSignal    = 0.80
+	trustedCombatReportSignal  = 0.90
 )
 
 type LocalGameplayAnalyzer struct {
 	Baseline         app.ObservationAnalyzer
 	MaxReviewWindows int
 	ArtifactName     string
+	TesseractPath    string
 }
 
 func (a LocalGameplayAnalyzer) AnalyzeObservations(ctx context.Context, request app.ObservationRequest) (app.ObservationResult, error) {
@@ -43,12 +45,13 @@ func (a LocalGameplayAnalyzer) AnalyzeObservations(ctx context.Context, request 
 
 	review := AnalyzeGameplay(ctx, request, GameplayOptions{
 		MaxReviewWindows: a.MaxReviewWindows,
+		TesseractPath:    a.TesseractPath,
 	})
 	result.Gameplay = &review.Summary
 	result.Findings = append(result.Findings, review.Findings...)
 	result.Timeline = append(result.Timeline, review.Timeline...)
 	result.Metadata = domain.AnalysisRunMetadata{
-		Analyzer: "visual-heuristic-gameplay",
+		Analyzer: GameplayAnalyzerName,
 		Mode:     "local",
 	}
 
@@ -65,6 +68,7 @@ func (a LocalGameplayAnalyzer) AnalyzeObservations(ctx context.Context, request 
 
 type GameplayOptions struct {
 	MaxReviewWindows int
+	TesseractPath    string
 }
 
 type GameplayResult struct {
@@ -81,12 +85,13 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 
 	observations, skipped := collectFrameObservations(ctx, request.Sample.Frames)
 	summary := domain.GameplaySummary{
-		Analyzer:       "visual-heuristic-gameplay",
+		Analyzer:       GameplayAnalyzerName,
 		SampledFrames:  request.Sample.FrameCount,
 		AnalyzedFrames: len(observations),
 		SkippedFrames:  skipped,
 		Notes: []string{
-			"Local visual heuristics inspect sampled frames and highlight review windows. The Qwen/VLM service can replace this analyzer later without changing report consumers.",
+			"The local CPU analyzer validates the VALORANT HUD layout and uses corroborated killfeed, damage, death-state, scoreboard, and buy-phase evidence to select review windows.",
+			"Candidate windows remain observations rather than coaching conclusions until the guided visible-context rubric is complete.",
 		},
 	}
 
@@ -107,6 +112,7 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 			},
 		}
 	}
+	ocrStatus, ocrAnalyzedFrames := enrichFrameObservationsWithOCR(ctx, observations, options.TesseractPath)
 
 	summary.AverageMotionScore = round4(avgObservation(observations, func(o domain.FrameObservation) float64 { return o.MotionScore }))
 	summary.AverageMinimapSignal = round4(avgObservation(observations, func(o domain.FrameObservation) float64 { return o.MinimapSignal }))
@@ -123,6 +129,7 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	summary.PhaseProfile = phaseProfile
 	summary.RoundSegments = roundSegments
 	summary.RoundSegmentCount = len(roundSegments)
+	summary.Understanding = buildGameplayUnderstanding(observations, windows, roundSegments, ocrStatus, ocrAnalyzedFrames)
 	summary.GameplayEvents = buildGameplayEvents(observations, windows, roundSegments, summary)
 	summary.FrameObservations = observations
 
@@ -133,185 +140,26 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	}
 }
 
-type imageSignature []float64
-
-type regionStats struct {
-	brightness  float64
-	contrast    float64
-	edgeDensity float64
-	redSignal   float64
-}
-
-func collectFrameObservations(ctx context.Context, frames []domain.Frame) ([]domain.FrameObservation, int) {
-	observations := make([]domain.FrameObservation, 0, len(frames))
-	skipped := 0
-	var previous imageSignature
-
-	for _, frame := range frames {
-		if err := ctx.Err(); err != nil {
-			break
-		}
-
-		observation, signature, err := analyzeFrame(frame, previous)
-		if err != nil {
-			skipped++
-			continue
-		}
-		previous = signature
-		observations = append(observations, observation)
-	}
-
-	return observations, skipped
-}
-
-func analyzeFrame(frame domain.Frame, previous imageSignature) (domain.FrameObservation, imageSignature, error) {
-	file, err := os.Open(frame.Path)
-	if err != nil {
-		return domain.FrameObservation{}, nil, err
-	}
-	defer file.Close()
-
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return domain.FrameObservation{}, nil, err
-	}
-
-	bounds := img.Bounds()
-	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
-		return domain.FrameObservation{}, nil, fmt.Errorf("empty image bounds")
-	}
-
-	global := measureRegion(img, bounds)
-	center := measureRegion(img, relativeRect(bounds, 0.32, 0.25, 0.68, 0.76))
-	minimap := measureRegion(img, relativeRect(bounds, 0.015, 0.025, 0.245, 0.31))
-	topHUD := measureRegion(img, relativeRect(bounds, 0.34, 0.0, 0.66, 0.105))
-	bottomHUD := measureRegion(img, relativeRect(bounds, 0.28, 0.82, 0.72, 0.995))
-
-	signature := makeSignature(img, 48, 27)
-	motion := motionScore(previous, signature)
-	centerActivity := clamp01(center.contrast*0.48 + center.edgeDensity*0.38 + center.redSignal*0.14)
-	minimapSignal := clamp01((minimap.contrast*0.56 + minimap.edgeDensity*0.44) * 1.18)
-	hudSignal := clamp01(topHUD.contrast*0.34 + topHUD.edgeDensity*0.3 + bottomHUD.contrast*0.2 + bottomHUD.edgeDensity*0.16)
-	redActivity := clamp01(global.redSignal*0.45 + center.redSignal*0.55)
-	combatSignal := clamp01(motion*0.5 + centerActivity*0.34 + redActivity*0.16)
-
-	return domain.FrameObservation{
-		Index:            frame.Index,
-		TimestampSeconds: round3(frame.TimestampSeconds),
-		Path:             frame.Path,
-		Brightness:       round4(global.brightness),
-		Contrast:         round4(global.contrast),
-		MotionScore:      round4(motion),
-		CenterActivity:   round4(centerActivity),
-		MinimapSignal:    round4(minimapSignal),
-		HUDSignal:        round4(hudSignal),
-		CombatSignal:     round4(combatSignal),
-		Phase:            "unknown",
-	}, signature, nil
-}
-
-func measureRegion(img image.Image, rect image.Rectangle) regionStats {
-	rect = rect.Intersect(img.Bounds())
-	if rect.Empty() {
-		return regionStats{}
-	}
-
-	step := max(1, min(rect.Dx(), rect.Dy())/72)
-	var count, redCount int
-	var sum, sumSq, edgeSum float64
-	var edgePairs int
-
-	for y := rect.Min.Y; y < rect.Max.Y; y += step {
-		for x := rect.Min.X; x < rect.Max.X; x += step {
-			r, g, b, _ := img.At(x, y).RGBA()
-			r8 := float64(r >> 8)
-			g8 := float64(g >> 8)
-			b8 := float64(b >> 8)
-			luma := 0.2126*r8 + 0.7152*g8 + 0.0722*b8
-			sum += luma
-			sumSq += luma * luma
-			count++
-
-			if r8 > 120 && r8 > g8*1.22 && r8 > b8*1.22 {
-				redCount++
-			}
-			if x+step < rect.Max.X {
-				edgeSum += math.Abs(luma-lumaAt(img, x+step, y)) / 255
-				edgePairs++
-			}
-			if y+step < rect.Max.Y {
-				edgeSum += math.Abs(luma-lumaAt(img, x, y+step)) / 255
-				edgePairs++
-			}
-		}
-	}
-
-	if count == 0 {
-		return regionStats{}
-	}
-
-	mean := sum / float64(count)
-	variance := sumSq/float64(count) - mean*mean
-	if variance < 0 {
-		variance = 0
-	}
-
-	edgeDensity := 0.0
-	if edgePairs > 0 {
-		edgeDensity = clamp01((edgeSum / float64(edgePairs)) * 3.2)
-	}
-
-	return regionStats{
-		brightness:  clamp01(mean / 255),
-		contrast:    clamp01(math.Sqrt(variance) / 92),
-		edgeDensity: edgeDensity,
-		redSignal:   float64(redCount) / float64(count),
-	}
-}
-
-func makeSignature(img image.Image, cols, rows int) imageSignature {
-	bounds := img.Bounds()
-	signature := make(imageSignature, 0, cols*rows)
-	for row := 0; row < rows; row++ {
-		y := bounds.Min.Y + int((float64(row)+0.5)*float64(bounds.Dy())/float64(rows))
-		if y >= bounds.Max.Y {
-			y = bounds.Max.Y - 1
-		}
-		for col := 0; col < cols; col++ {
-			x := bounds.Min.X + int((float64(col)+0.5)*float64(bounds.Dx())/float64(cols))
-			if x >= bounds.Max.X {
-				x = bounds.Max.X - 1
-			}
-			signature = append(signature, lumaAt(img, x, y))
-		}
-	}
-	return signature
-}
-
-func motionScore(previous, current imageSignature) float64 {
-	if len(previous) == 0 || len(previous) != len(current) {
-		return 0
-	}
-
-	var diff float64
-	for index := range current {
-		diff += math.Abs(current[index] - previous[index])
-	}
-	return clamp01((diff / float64(len(current)) / 255) * 3.6)
-}
-
 func classifyPhases(observations []domain.FrameObservation) {
 	avgMotion := avgObservation(observations, func(o domain.FrameObservation) float64 { return o.MotionScore })
 	avgCombat := avgObservation(observations, func(o domain.FrameObservation) float64 { return o.CombatSignal })
 	stdCombat := stdObservation(observations, avgCombat, func(o domain.FrameObservation) float64 { return o.CombatSignal })
 
-	fightThreshold := math.Max(0.32, avgCombat+stdCombat*0.72)
+	fightThreshold := math.Max(0.24, avgCombat+stdCombat*0.72)
 	rotateThreshold := math.Max(0.16, avgMotion*1.35)
 	holdThreshold := math.Max(0.035, avgMotion*0.58)
 
 	for index := range observations {
 		switch {
-		case observations[index].CombatSignal >= fightThreshold:
+		case observations[index].BuyPhaseSignal >= trustedBuyPhaseSignal:
+			observations[index].Phase = "buy"
+		case observations[index].CombatReportSignal >= trustedCombatReportSignal:
+			observations[index].Phase = "death"
+		case observations[index].ScoreboardSignal >= trustedScoreboardSignal:
+			observations[index].Phase = "scoreboard"
+		case observations[index].RoundEndSignal >= 0.90:
+			observations[index].Phase = "round_end"
+		case observations[index].CombatSignal >= fightThreshold && hasCombatCorroboration(observations[index]):
 			observations[index].Phase = "fight"
 		case observations[index].MotionScore >= rotateThreshold:
 			observations[index].Phase = "rotate"
@@ -361,7 +209,7 @@ func buildPhaseProfile(observations []domain.FrameObservation) []domain.PhaseSta
 		counts[observation.Phase]++
 	}
 
-	order := []string{"fight", "rotate", "midround", "hold"}
+	order := []string{"buy", "fight", "death", "scoreboard", "round_end", "rotate", "midround", "hold"}
 	stats := make([]domain.PhaseStat, 0, len(order))
 	for _, phase := range order {
 		count := counts[phase]
@@ -385,6 +233,23 @@ func buildRoundSegments(observations []domain.FrameObservation, windows []domain
 	first := observations[0].TimestampSeconds
 	last := observations[len(observations)-1].TimestampSeconds
 	total := math.Max(0, last-first)
+	buyAnchors := detectBuyPhaseAnchors(observations)
+	if len(buyAnchors) >= 2 {
+		boundaries := []float64{first}
+		for _, anchor := range buyAnchors {
+			if anchor.TimestampSeconds-first <= 12 || anchor.TimestampSeconds-boundaries[len(boundaries)-1] < 35 || last-anchor.TimestampSeconds < 20 {
+				continue
+			}
+			boundaries = append(boundaries, anchor.TimestampSeconds)
+		}
+		boundaries = append(boundaries, last)
+		if len(boundaries) >= 3 {
+			anchorQuality := avgObservation(buyAnchors, func(o domain.FrameObservation) float64 { return o.BuyPhaseSignal })
+			confidence := round4(math.Min(0.88, 0.61+anchorQuality*0.21+clamp01(float64(len(buyAnchors))/12)*0.06))
+			return roundSegmentsFromBoundaries(observations, windows, boundaries, "buy_phase_visual_anchor", confidence)
+		}
+	}
+
 	roundCount := estimateRoundCount(total)
 	if roundCount <= 0 {
 		roundCount = 1
@@ -414,7 +279,11 @@ func buildRoundSegments(observations []domain.FrameObservation, windows []domain
 	boundaries = append(boundaries, last)
 
 	confidence := estimatedRoundConfidence(total, request.Sample.FPSValue, snapQualityTotal/float64(snapCount))
-	segments := make([]domain.RoundSegment, 0, roundCount)
+	return roundSegmentsFromBoundaries(observations, windows, boundaries, "estimated_from_visual_timeline", confidence)
+}
+
+func roundSegmentsFromBoundaries(observations []domain.FrameObservation, windows []domain.ReviewWindow, boundaries []float64, method string, confidence float64) []domain.RoundSegment {
+	segments := make([]domain.RoundSegment, 0, len(boundaries)-1)
 	for index := 0; index < len(boundaries)-1; index++ {
 		start := boundaries[index]
 		end := boundaries[index+1]
@@ -425,13 +294,13 @@ func buildRoundSegments(observations []domain.FrameObservation, windows []domain
 		phaseProfile := buildPhaseProfile(segmentFrames)
 		windowIDs := reviewWindowIDsInRange(windows, start, end, index == len(boundaries)-2)
 		primaryPhase := dominantPhase(phaseProfile)
-		summary := fmt.Sprintf("Estimated from %s visual frames. Dominant phase: %s. Review windows: %d.", formatCoverage(end-start), primaryPhase, len(windowIDs))
+		summary := fmt.Sprintf("Detected from %s visual frames using %s. Dominant phase: %s. Review windows: %d.", formatCoverage(end-start), strings.ReplaceAll(method, "_", " "), primaryPhase, len(windowIDs))
 		segments = append(segments, domain.RoundSegment{
 			RoundNumber:     index + 1,
 			StartSeconds:    round3(start),
 			EndSeconds:      round3(end),
 			DurationSeconds: round3(end - start),
-			DetectionMethod: "estimated_from_visual_timeline",
+			DetectionMethod: method,
 			Confidence:      confidence,
 			PhaseProfile:    phaseProfile,
 			ReviewWindowIDs: windowIDs,
@@ -440,6 +309,43 @@ func buildRoundSegments(observations []domain.FrameObservation, windows []domain
 	}
 
 	return segments
+}
+
+func detectBuyPhaseAnchors(observations []domain.FrameObservation) []domain.FrameObservation {
+	anchors := make([]domain.FrameObservation, 0)
+	clusterStart := -1
+	flushCluster := func(clusterEnd int) {
+		if clusterStart == -1 || clusterEnd < clusterStart {
+			return
+		}
+		best := observations[clusterStart]
+		for candidate := clusterStart + 1; candidate <= clusterEnd; candidate++ {
+			if observations[candidate].BuyPhaseSignal > best.BuyPhaseSignal {
+				best = observations[candidate]
+			}
+		}
+		if clusterEnd-clusterStart >= 1 || best.BuyPhaseSignal >= 0.95 {
+			anchor := observations[clusterStart]
+			anchor.BuyPhaseSignal = best.BuyPhaseSignal
+			anchors = append(anchors, anchor)
+		}
+		clusterStart = -1
+	}
+	for index, observation := range observations {
+		isBuy := observation.BuyPhaseSignal >= trustedBuyPhaseSignal && observation.HUDLayoutConfidence >= 0.24
+		if isBuy {
+			if clusterStart != -1 && index > 0 && observation.TimestampSeconds-observations[index-1].TimestampSeconds > 12 {
+				flushCluster(index - 1)
+			}
+			if clusterStart == -1 {
+				clusterStart = index
+			}
+			continue
+		}
+		flushCluster(index - 1)
+	}
+	flushCluster(len(observations) - 1)
+	return anchors
 }
 
 func estimateRoundCount(totalSeconds float64) int {
@@ -548,27 +454,99 @@ func assignWindowRoundNumbers(windows []domain.ReviewWindow, segments []domain.R
 
 func buildReviewWindows(observations []domain.FrameObservation, maxWindows int) []domain.ReviewWindow {
 	maxWindows = min(max(1, maxWindows), MaxReviewWindowsLimit)
-
-	combatBudget := max(1, int(math.Ceil(float64(maxWindows)*0.5)))
+	deathBudget := max(1, int(math.Ceil(float64(maxWindows)*0.34)))
+	combatBudget := max(1, int(math.Ceil(float64(maxWindows)*0.40)))
 	decisionBudget := 1
-	rotationBudget := 0
 	if maxWindows >= 8 {
-		decisionBudget = max(2, int(math.Round(float64(maxWindows)*0.25)))
-		rotationBudget = max(1, maxWindows-combatBudget-decisionBudget)
+		decisionBudget = max(2, int(math.Round(float64(maxWindows)*0.16)))
 	}
 
-	combat := buildHighImpactWindows(observations, combatBudget, nil)
-	decision := buildPassiveWindows(observations, decisionBudget, combat)
-	used := append([]domain.ReviewWindow{}, combat...)
-	used = append(used, decision...)
-
-	rotation := buildRotationWindows(observations, rotationBudget, used)
-	windows := append(used, rotation...)
-	if len(windows) < maxWindows {
-		windows = append(windows, buildHighImpactWindows(observations, maxWindows-len(windows), windows)...)
+	windows := buildDeathReviewWindows(observations, min(maxWindows, deathBudget))
+	remaining := maxWindows - len(windows)
+	if remaining > 0 {
+		windows = append(windows, buildHighImpactWindows(observations, min(remaining, combatBudget), windows)...)
+	}
+	remaining = maxWindows - len(windows)
+	if remaining > 0 {
+		windows = append(windows, buildPassiveWindows(observations, min(remaining, decisionBudget), windows)...)
+	}
+	remaining = maxWindows - len(windows)
+	if remaining > 0 {
+		windows = append(windows, buildRotationWindows(observations, remaining, windows)...)
 	}
 
 	return sortReviewWindows(windows)
+}
+
+func buildDeathReviewWindows(observations []domain.FrameObservation, maxWindows int) []domain.ReviewWindow {
+	if len(observations) == 0 || maxWindows <= 0 {
+		return nil
+	}
+
+	type deathCluster struct {
+		start int
+		end   int
+		peak  int
+	}
+	clusters := make([]deathCluster, 0)
+	clusterStart := -1
+	peak := -1
+	for index, observation := range observations {
+		visible := observation.CombatReportSignal >= trustedCombatReportSignal &&
+			observation.HUDLayoutConfidence >= 0.22 &&
+			observation.BuyPhaseSignal < trustedBuyPhaseSignal &&
+			observation.ScoreboardSignal < trustedScoreboardSignal &&
+			observation.RoundEndSignal < 0.90
+		if visible {
+			if clusterStart == -1 {
+				clusterStart = index
+				peak = index
+			}
+			if observation.CombatReportSignal > observations[peak].CombatReportSignal && observation.TimestampSeconds-observations[clusterStart].TimestampSeconds <= 8 {
+				peak = index
+			}
+		}
+		if (!visible || index == len(observations)-1) && clusterStart != -1 {
+			end := index - 1
+			if visible && index == len(observations)-1 {
+				end = index
+			}
+			clusters = append(clusters, deathCluster{start: clusterStart, end: end, peak: peak})
+			clusterStart = -1
+			peak = -1
+		}
+	}
+
+	sort.SliceStable(clusters, func(i, j int) bool {
+		return observations[clusters[i].peak].CombatReportSignal > observations[clusters[j].peak].CombatReportSignal
+	})
+	windows := make([]domain.ReviewWindow, 0, min(maxWindows, len(clusters)))
+	for _, cluster := range clusters {
+		candidate := observations[cluster.peak]
+		start := math.Max(0, candidate.TimestampSeconds-10)
+		end := candidate.TimestampSeconds + 8
+		if overlapsAny(windows, start, end, 5) {
+			continue
+		}
+		windows = append(windows, domain.ReviewWindow{
+			ID:             fmt.Sprintf("death_%03d", len(windows)+1),
+			Kind:           "death_review",
+			Severity:       domain.FindingSeverityMedium,
+			Title:          "Death context review",
+			Summary:        fmt.Sprintf("The VALORANT combat-report panel became visible around %s. Review the decisions immediately before the death state.", formatClock(candidate.TimestampSeconds)),
+			Recommendation: "Use the before/event/after evidence and confirm first-contact intent, tradeability, utility sequence, crosshair readiness, and escape options.",
+			StartSeconds:   round3(start),
+			EndSeconds:     round3(end),
+			PeakSeconds:    candidate.TimestampSeconds,
+			Score:          round4(candidate.CombatReportSignal),
+			Evidence:       evidenceSequence(observations, cluster.peak, 5, 3),
+			Tags:           []string{"death", "fight", "decision"},
+		})
+		if len(windows) >= maxWindows {
+			break
+		}
+	}
+	return windows
 }
 
 func buildHighImpactWindows(observations []domain.FrameObservation, maxWindows int, existing []domain.ReviewWindow) []domain.ReviewWindow {
@@ -578,36 +556,32 @@ func buildHighImpactWindows(observations []domain.FrameObservation, maxWindows i
 
 	avgCombat := avgObservation(observations, func(o domain.FrameObservation) float64 { return o.CombatSignal })
 	stdCombat := stdObservation(observations, avgCombat, func(o domain.FrameObservation) float64 { return o.CombatSignal })
-	threshold := math.Max(0.3, avgCombat+stdCombat*0.68)
+	threshold := math.Max(0.20, avgCombat+stdCombat*0.68)
 
-	candidates := make([]domain.FrameObservation, 0)
-	for _, observation := range observations {
-		if observation.CombatSignal >= threshold {
-			candidates = append(candidates, observation)
+	type indexedObservation struct {
+		index       int
+		observation domain.FrameObservation
+	}
+	candidates := make([]indexedObservation, 0)
+	for index, observation := range observations {
+		if observation.CombatSignal >= threshold && observation.HUDLayoutConfidence >= 0.22 && hasCombatCorroboration(observation) && observation.ScoreboardSignal < 0.48 && observation.BuyPhaseSignal < 0.48 && observation.CombatReportSignal < 0.58 && observation.RoundEndSignal < 0.48 {
+			candidates = append(candidates, indexedObservation{index: index, observation: observation})
 		}
 	}
 	if len(candidates) == 0 {
-		best := observations[0]
-		for _, observation := range observations[1:] {
-			if observation.CombatSignal > best.CombatSignal {
-				best = observation
-			}
-		}
-		if best.CombatSignal < 0.18 {
-			return nil
-		}
-		candidates = append(candidates, best)
+		return nil
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].CombatSignal > candidates[j].CombatSignal
+		return candidates[i].observation.CombatSignal > candidates[j].observation.CombatSignal
 	})
 
 	windows := make([]domain.ReviewWindow, 0, maxWindows)
-	for _, candidate := range candidates {
+	for _, indexed := range candidates {
+		candidate := indexed.observation
 		start := math.Max(0, candidate.TimestampSeconds-8)
 		end := candidate.TimestampSeconds + 10
-		if overlapsAny(existing, start, end, 6) || overlapsAny(windows, start, end, 6) {
+		if overlapsAny(existing, start, end, 0) || overlapsAny(windows, start, end, 6) {
 			continue
 		}
 
@@ -620,13 +594,13 @@ func buildHighImpactWindows(observations []domain.FrameObservation, maxWindows i
 			Kind:           "combat_spike",
 			Severity:       severity,
 			Title:          "High-impact fight window",
-			Summary:        fmt.Sprintf("Visual intensity peaked at %s with motion %.2f and center activity %.2f.", formatClock(candidate.TimestampSeconds), candidate.MotionScore, candidate.CenterActivity),
+			Summary:        fmt.Sprintf("A corroborated fight event peaked at %s (killfeed %.2f, damage %.2f, center activity %.2f).", formatClock(candidate.TimestampSeconds), candidate.KillfeedEventSignal, candidate.DamageSignal, candidate.CenterActivity),
 			Recommendation: "Confirm that a fight occurred, then complete the visible-context rubric before treating this window as a coaching finding.",
 			StartSeconds:   round3(start),
 			EndSeconds:     round3(end),
 			PeakSeconds:    candidate.TimestampSeconds,
 			Score:          round4(candidate.CombatSignal),
-			Evidence:       []domain.EvidenceRef{evidenceForObservation(candidate)},
+			Evidence:       evidenceSequence(observations, indexed.index, 4, 3),
 			Tags:           []string{"fight", "micro", "trade"},
 		}
 		windows = append(windows, window)
@@ -654,7 +628,7 @@ func buildPassiveWindows(observations []domain.FrameObservation, maxWindows int,
 	var segments []segment
 	start := -1
 	for index, observation := range observations {
-		isPassive := observation.MotionScore <= threshold && observation.CombatSignal < 0.32
+		isPassive := observation.MotionScore <= threshold && observation.CombatSignal < 0.24 && observation.HUDLayoutConfidence >= 0.22 && observation.BuyPhaseSignal < 0.42 && observation.ScoreboardSignal < 0.42 && observation.CombatReportSignal < 0.42 && observation.RoundEndSignal < 0.42
 		if isPassive && start == -1 {
 			start = index
 		}
@@ -686,7 +660,8 @@ func buildPassiveWindows(observations []domain.FrameObservation, maxWindows int,
 		if overlapsAny(existing, first.TimestampSeconds, last.TimestampSeconds, 4) || overlapsAny(windows, first.TimestampSeconds, last.TimestampSeconds, 4) {
 			continue
 		}
-		peak := observations[(segment.start+segment.end)/2]
+		peakIndex := (segment.start + segment.end) / 2
+		peak := observations[peakIndex]
 		window := domain.ReviewWindow{
 			ID:             fmt.Sprintf("decision_%03d", len(windows)+1),
 			Kind:           "low_activity",
@@ -698,7 +673,7 @@ func buildPassiveWindows(observations []domain.FrameObservation, maxWindows int,
 			EndSeconds:     last.TimestampSeconds,
 			PeakSeconds:    peak.TimestampSeconds,
 			Score:          round4(segment.score),
-			Evidence:       []domain.EvidenceRef{evidenceForObservation(peak)},
+			Evidence:       evidenceSequence(observations, peakIndex, 4, 4),
 			Tags:           []string{"decision", "pacing", "macro"},
 		}
 		windows = append(windows, window)
@@ -720,19 +695,24 @@ func buildRotationWindows(observations []domain.FrameObservation, maxWindows int
 	avgCombat := avgObservation(observations, func(o domain.FrameObservation) float64 { return o.CombatSignal })
 	threshold := math.Max(0.22, avgMotion+stdMotion*0.55)
 
-	candidates := make([]domain.FrameObservation, 0)
-	for _, observation := range observations {
-		if observation.MotionScore >= threshold && observation.CombatSignal <= avgCombat+0.12 {
-			candidates = append(candidates, observation)
+	type indexedObservation struct {
+		index       int
+		observation domain.FrameObservation
+	}
+	candidates := make([]indexedObservation, 0)
+	for index, observation := range observations {
+		if observation.MotionScore >= threshold && observation.CombatSignal <= avgCombat+0.12 && observation.HUDLayoutConfidence >= 0.22 && observation.BuyPhaseSignal < 0.42 && observation.ScoreboardSignal < 0.42 && observation.CombatReportSignal < 0.42 && observation.RoundEndSignal < 0.42 && !hasNearbyBlockingOverlay(observations, index, 4) {
+			candidates = append(candidates, indexedObservation{index: index, observation: observation})
 		}
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].MotionScore > candidates[j].MotionScore
+		return candidates[i].observation.MotionScore > candidates[j].observation.MotionScore
 	})
 
 	windows := make([]domain.ReviewWindow, 0, maxWindows)
-	for _, candidate := range candidates {
+	for _, indexed := range candidates {
+		candidate := indexed.observation
 		start := math.Max(0, candidate.TimestampSeconds-6)
 		end := candidate.TimestampSeconds + 8
 		if overlapsAny(existing, start, end, 5) || overlapsAny(windows, start, end, 5) {
@@ -750,7 +730,7 @@ func buildRotationWindows(observations []domain.FrameObservation, maxWindows int
 			EndSeconds:     round3(end),
 			PeakSeconds:    candidate.TimestampSeconds,
 			Score:          round4(candidate.MotionScore),
-			Evidence:       []domain.EvidenceRef{evidenceForObservation(candidate)},
+			Evidence:       evidenceSequence(observations, indexed.index, 4, 3),
 			Tags:           []string{"rotation", "macro", "timing"},
 		})
 		if len(windows) >= maxWindows {
@@ -760,6 +740,25 @@ func buildRotationWindows(observations []domain.FrameObservation, maxWindows int
 	return windows
 }
 
+func hasNearbyBlockingOverlay(observations []domain.FrameObservation, index int, radiusSeconds float64) bool {
+	if index < 0 || index >= len(observations) {
+		return false
+	}
+	timestamp := observations[index].TimestampSeconds
+	for _, observation := range observations {
+		if math.Abs(observation.TimestampSeconds-timestamp) > radiusSeconds {
+			continue
+		}
+		if observation.BuyPhaseSignal >= trustedBuyPhaseSignal ||
+			observation.ScoreboardSignal >= trustedScoreboardSignal ||
+			observation.CombatReportSignal >= trustedCombatReportSignal ||
+			observation.RoundEndSignal >= 0.90 {
+			return true
+		}
+	}
+	return false
+}
+
 func buildGameplayFindings(request app.ObservationRequest, summary domain.GameplaySummary) []domain.Finding {
 	findings := []domain.Finding{
 		{
@@ -767,7 +766,7 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 			Severity:       domain.FindingSeverityInfo,
 			Category:       "gameplay_review",
 			Title:          "Gameplay review windows are ready",
-			Detail:         fmt.Sprintf("Analyzed %d/%d sampled frames and selected %d gameplay review windows from visual motion, HUD, minimap, and center-screen signals.", summary.AnalyzedFrames, summary.SampledFrames, summary.ReviewWindowCount),
+			Detail:         fmt.Sprintf("Analyzed %d/%d sampled frames and selected %d evidence windows from VALORANT HUD layout, temporal killfeed, damage, combat-report, scoreboard, and buy-phase signals.", summary.AnalyzedFrames, summary.SampledFrames, summary.ReviewWindowCount),
 			Recommendation: "Open the guided review queue and confirm visible context. Candidate windows are not gameplay mistakes until the evidence rubric is complete.",
 			Confidence:     confidenceFromCoverage(summary),
 			Tags:           []string{"vision", "review-windows"},
@@ -776,14 +775,29 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 
 	if len(summary.RoundSegments) > 0 {
 		findings = append(findings, domain.Finding{
-			ID:             "gameplay_round_segments_estimated",
+			ID:             "gameplay_round_segments_detected",
 			Severity:       domain.FindingSeverityInfo,
 			Category:       "round_timeline",
-			Title:          "Estimated round segments generated",
-			Detail:         fmt.Sprintf("Built %d estimated round segments from sampled visual activity. These segments are for navigation and review grouping, not OCR-confirmed score or timer state.", len(summary.RoundSegments)),
-			Recommendation: "Use round segments to review the match in order, then validate boundaries manually in the video player. The OCR stage should replace these estimates with timer and scoreboard-confirmed rounds.",
+			Title:          "Round navigation segments generated",
+			Detail:         fmt.Sprintf("Built %d round segments using %s. Buy-phase OCR anchors are preferred; cadence estimation is retained as an explicit fallback.", len(summary.RoundSegments), strings.ReplaceAll(summary.RoundSegments[0].DetectionMethod, "_", " ")),
+			Recommendation: "Use round segments for navigation and review grouping. Treat cadence-based boundaries as estimates when buy-phase OCR anchors are unavailable.",
 			Confidence:     roundSegmentConfidence(summary.RoundSegments),
 			Tags:           []string{"rounds", "timeline", "estimated"},
+		})
+	}
+
+	deathWindows := windowsByKind(summary.ReviewWindows, "death_review")
+	if len(deathWindows) > 0 {
+		findings = append(findings, domain.Finding{
+			ID:             "gameplay_death_reviews_detected",
+			Severity:       domain.FindingSeverityMedium,
+			Category:       "death_review",
+			Title:          "Death review moments detected",
+			Detail:         fmt.Sprintf("Detected %d distinct combat-report transitions. Each window includes evidence before, at, and after the death state.", len(deathWindows)),
+			Recommendation: "Complete the visible-context rubric for each death. Advice is generated only after tradeability, utility, crosshair, and fallback facts are confirmed.",
+			Confidence:     windowConfidence(deathWindows),
+			Evidence:       windowEvidence(deathWindows, 6),
+			Tags:           []string{"death", "evidence-sequence"},
 		})
 	}
 
@@ -799,6 +813,23 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 			Confidence:     windowConfidence(combatWindows),
 			Evidence:       windowEvidence(combatWindows, 4),
 			Tags:           []string{"fight", "micro"},
+		})
+	}
+
+	if summary.Understanding != nil && summary.Understanding.CaptureCompatibility != "supported" {
+		severity := domain.FindingSeverityMedium
+		if summary.Understanding.CaptureCompatibility == "unsupported" {
+			severity = domain.FindingSeverityHigh
+		}
+		findings = append(findings, domain.Finding{
+			ID:             "gameplay_capture_compatibility_" + summary.Understanding.CaptureCompatibility,
+			Severity:       severity,
+			Category:       "capture_quality",
+			Title:          "Recording compatibility is " + summary.Understanding.CaptureCompatibility,
+			Detail:         fmt.Sprintf("VALORANT HUD layout confidence is %.0f%%. Cropping, overlays, resolution, or a non-gameplay video can reduce event detection quality.", summary.Understanding.CompatibilityConfidence*100),
+			Recommendation: "Upload uncropped 16:9 gameplay with the minimap, team bar, timer, health, abilities, and ammo visible.",
+			Confidence:     summary.Understanding.CompatibilityConfidence,
+			Tags:           []string{"compatibility", "hud", summary.Understanding.CaptureCompatibility},
 		})
 	}
 
@@ -947,8 +978,10 @@ func buildGameplayEvents(observations []domain.FrameObservation, windows []domai
 
 func eventCopyForWindow(window domain.ReviewWindow) (string, string, string, string) {
 	switch window.Kind {
+	case "death_review":
+		return "death_state_confirmed", "death_review", "Death review", window.Summary + " The combat-report UI corroborates the death state; decision quality still depends on guided context."
 	case "combat_spike":
-		return "combat_candidate", "fight_selection", "Combat review candidate", window.Summary + " This is a fight/death candidate, not an OCR-confirmed killfeed event."
+		return "combat_candidate", "fight_selection", "Combat review candidate", window.Summary + " Killfeed or damage evidence corroborates contact; decision quality still depends on guided context."
 	case "rotation_spike":
 		return "rotation_candidate", "rotation_timing", "Rotation review candidate", window.Summary + " Validate visible minimap and teammate spacing before treating it as a macro mistake."
 	case "low_activity":
@@ -1046,30 +1079,6 @@ func (a LocalGameplayAnalyzer) writeArtifact(ctx context.Context, sample domain.
 		Format: "json",
 		Path:   filepath.ToSlash(path),
 	}, nil
-}
-
-func relativeRect(bounds image.Rectangle, left, top, right, bottom float64) image.Rectangle {
-	width := bounds.Dx()
-	height := bounds.Dy()
-	minX := bounds.Min.X + int(left*float64(width))
-	minY := bounds.Min.Y + int(top*float64(height))
-	maxX := bounds.Min.X + int(right*float64(width))
-	maxY := bounds.Min.Y + int(bottom*float64(height))
-	if maxX <= minX {
-		maxX = minX + 1
-	}
-	if maxY <= minY {
-		maxY = minY + 1
-	}
-	return image.Rect(minX, minY, maxX, maxY).Intersect(bounds)
-}
-
-func lumaAt(img image.Image, x, y int) float64 {
-	r, g, b, _ := img.At(x, y).RGBA()
-	r8 := float64(r >> 8)
-	g8 := float64(g >> 8)
-	b8 := float64(b >> 8)
-	return 0.2126*r8 + 0.7152*g8 + 0.0722*b8
 }
 
 func avgObservation(observations []domain.FrameObservation, value func(domain.FrameObservation) float64) float64 {
@@ -1190,13 +1199,126 @@ func confidenceFromCoverage(summary domain.GameplaySummary) float64 {
 	return round4(clamp01(0.45 + coverage*0.45 + math.Min(float64(summary.ReviewWindowCount), 5)*0.02))
 }
 
+func hasCombatCorroboration(observation domain.FrameObservation) bool {
+	return observation.KillfeedEventSignal >= 0.18 || observation.DamageSignal >= 0.82
+}
+
+func buildGameplayUnderstanding(observations []domain.FrameObservation, windows []domain.ReviewWindow, segments []domain.RoundSegment, ocrStatus string, ocrAnalyzedFrames int) *domain.GameplayUnderstanding {
+	if len(observations) == 0 {
+		return nil
+	}
+
+	averageLayout := avgObservation(observations, func(o domain.FrameObservation) float64 { return o.HUDLayoutConfidence })
+	compatibleFrames := 0
+	understanding := &domain.GameplayUnderstanding{
+		Game:                       "valorant",
+		Method:                     "cpu_hud_layout_and_temporal_cv",
+		AverageHUDLayoutConfidence: round4(averageLayout),
+		OCRStatus:                  ocrStatus,
+		OCRAnalyzedFrameCount:      ocrAnalyzedFrames,
+	}
+	for _, observation := range observations {
+		if observation.HUDLayoutConfidence >= 0.22 {
+			compatibleFrames++
+		}
+		if observation.BuyPhaseSignal >= trustedBuyPhaseSignal {
+			understanding.BuyPhaseFrameCount++
+		}
+		if observation.ScoreboardSignal >= trustedScoreboardSignal {
+			understanding.ScoreboardFrameCount++
+		}
+		if observation.CombatReportSignal >= trustedCombatReportSignal {
+			understanding.CombatReportFrameCount++
+		}
+		if observation.RoundEndSignal >= 0.90 {
+			understanding.RoundEndFrameCount++
+		}
+		if observation.KillfeedEventSignal >= 0.18 {
+			understanding.KillfeedEventFrameCount++
+		}
+		if observation.DamageSignal >= 0.82 {
+			understanding.DamageEventFrameCount++
+		}
+	}
+	for _, window := range windows {
+		switch window.Kind {
+		case "death_review":
+			understanding.DeathReviewCount++
+		case "combat_spike":
+			understanding.CorroboratedFightCount++
+		}
+	}
+	if len(segments) > 0 {
+		understanding.RoundDetectionMethod = segments[0].DetectionMethod
+	}
+
+	coverage := float64(compatibleFrames) / float64(len(observations))
+	understanding.CompatibilityConfidence = round4(clamp01(averageLayout*0.56 + coverage*0.44))
+	switch {
+	case averageLayout >= 0.30 && coverage >= 0.50:
+		understanding.CaptureCompatibility = "supported"
+	case averageLayout >= 0.16 && coverage >= 0.22:
+		understanding.CaptureCompatibility = "degraded"
+	default:
+		understanding.CaptureCompatibility = "unsupported"
+	}
+	return understanding
+}
+
 func evidenceForObservation(observation domain.FrameObservation) domain.EvidenceRef {
+	return evidenceForObservationRole(observation, "")
+}
+
+func evidenceForObservationRole(observation domain.FrameObservation, role string) domain.EvidenceRef {
 	return domain.EvidenceRef{
 		ArtifactType:     "frame",
 		Path:             observation.Path,
+		Role:             role,
 		TimestampSeconds: observation.TimestampSeconds,
 		FrameIndex:       observation.Index,
 	}
+}
+
+func evidenceSequence(observations []domain.FrameObservation, peakIndex int, beforeSeconds, afterSeconds float64) []domain.EvidenceRef {
+	if peakIndex < 0 || peakIndex >= len(observations) {
+		return nil
+	}
+
+	peak := observations[peakIndex]
+	evidence := make([]domain.EvidenceRef, 0, 3)
+	if before := nearestObservationIndex(observations, peakIndex, peak.TimestampSeconds-beforeSeconds, -1); before >= 0 {
+		evidence = append(evidence, evidenceForObservationRole(observations[before], "before"))
+	}
+	evidence = append(evidence, evidenceForObservationRole(peak, "event"))
+	if after := nearestObservationIndex(observations, peakIndex, peak.TimestampSeconds+afterSeconds, 1); after >= 0 {
+		evidence = append(evidence, evidenceForObservationRole(observations[after], "after"))
+	}
+	return evidence
+}
+
+func nearestObservationIndex(observations []domain.FrameObservation, peakIndex int, target float64, direction int) int {
+	best := -1
+	bestDistance := math.MaxFloat64
+	start, end, step := 0, len(observations), 1
+	if direction < 0 {
+		start, end, step = peakIndex-1, -1, -1
+	} else if direction > 0 {
+		start = peakIndex + 1
+	}
+	for index := start; index != end; index += step {
+		distance := math.Abs(observations[index].TimestampSeconds - target)
+		if distance < bestDistance {
+			best = index
+			bestDistance = distance
+		}
+		if direction < 0 && observations[index].TimestampSeconds < target {
+			break
+		}
+		if direction > 0 && observations[index].TimestampSeconds > target {
+			break
+		}
+	}
+	return best
 }
 
 func formatWindowPeaks(windows []domain.ReviewWindow, limit int) string {

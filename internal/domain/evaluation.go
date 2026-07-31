@@ -9,7 +9,15 @@ type EvaluationAnnotationSet struct {
 	VODLabel         string            `json:"vod_label"`
 	ReportRunID      string            `json:"report_run_id,omitempty"`
 	ToleranceSeconds float64           `json:"tolerance_seconds,omitempty"`
+	EvaluatedTypes   []string          `json:"evaluated_types,omitempty"`
+	Sample           *EvaluationSample `json:"sample,omitempty"`
 	Labels           []EvaluationLabel `json:"labels"`
+}
+
+type EvaluationSample struct {
+	StartSeconds    float64 `json:"start_seconds"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	FPS             float64 `json:"fps"`
 }
 
 type EvaluationLabel struct {

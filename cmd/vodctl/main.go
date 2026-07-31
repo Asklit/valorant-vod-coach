@@ -210,7 +210,7 @@ func runAnalyzeRun(args []string, stdout, stderr io.Writer) int {
 			ProbeTimeout:  probeTimeout,
 			SampleTimeout: sampleTimeout,
 		},
-		Analyzer: vision.LocalGameplayAnalyzer{},
+		Analyzer: vision.LocalGameplayAnalyzer{TesseractPath: "tesseract"},
 		Reports: reportstore.LocalStore{
 			ProcessedRoot: *outRoot,
 		},

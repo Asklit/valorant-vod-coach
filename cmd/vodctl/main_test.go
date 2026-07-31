@@ -286,7 +286,7 @@ esac
 	}
 
 	if got := string(rawReport); !strings.Contains(got, `"run_id": "test_run"`) ||
-		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
+		!strings.Contains(got, `"analyzer": "valorant-hud-cv-v2"`) ||
 		!strings.Contains(got, `"gameplay"`) ||
 		!strings.Contains(got, `"gameplay_review"`) ||
 		!strings.Contains(got, `"contact_sheet_path"`) {
@@ -332,7 +332,7 @@ func TestRunEvalRunWritesEvaluation(t *testing.T) {
   "vod_label": "iron_example",
   "tolerance_seconds": 6,
   "labels": [
-    {"id": "label_fight_001", "type": "death", "timestamp_seconds": 12, "description": "Bad duel"},
+    {"id": "label_fight_001", "type": "fight", "timestamp_seconds": 12, "description": "Bad duel"},
     {"id": "label_tempo_001", "type": "tempo", "timestamp_seconds": 90, "description": "Lost tempo"}
   ]
 }`
@@ -382,6 +382,33 @@ func TestRunEvalRunWritesEvaluation(t *testing.T) {
 		!strings.Contains(got, "Missed Labels") ||
 		!strings.Contains(got, "False Positives") {
 		t.Fatalf("unexpected evaluation markdown:\n%s", got)
+	}
+}
+
+func TestRunEvalRunFailsQualityGate(t *testing.T) {
+	root := t.TempDir()
+	reportPath := filepath.Join(root, "report.json")
+	annotationsPath := filepath.Join(root, "annotations.json")
+	report := `{"run_id":"analysis_01","vod":{"label":"example"},"gameplay":{"gameplay_events":[{"id":"false","type":"combat_candidate","timestamp_seconds":50}]}}`
+	annotations := `{"schema_version":1,"vod_label":"example","evaluated_types":["combat"],"labels":[{"id":"true","type":"combat","timestamp_seconds":10}]}`
+	if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	if err := os.WriteFile(annotationsPath, []byte(annotations), 0o644); err != nil {
+		t.Fatalf("write annotations: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{
+		"eval", "run",
+		"--report", reportPath,
+		"--annotations", annotationsPath,
+		"--out-root", filepath.Join(root, "out"),
+		"--min-f1", "0.8",
+	}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "evaluation quality gate failed") {
+		t.Fatalf("expected quality gate failure, code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 }
 

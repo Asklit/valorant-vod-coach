@@ -720,7 +720,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":                  "ok",
 		"schema_version":          domain.AnalysisReportSchemaVersion,
-		"analyzer":                "visual-heuristic-gameplay",
+		"analyzer":                vision.GameplayAnalyzerName,
 		"model_review_configured": configured,
 		"model_review_available":  available,
 		"vision_service":          visionStatus,
@@ -824,7 +824,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		User:        user,
 		System: AdminSystemStatus{
 			SchemaVersion:       domain.AnalysisReportSchemaVersion,
-			Analyzer:            "visual-heuristic-gameplay",
+			Analyzer:            vision.GameplayAnalyzerName,
 			ModelReviewEnabled:  strings.TrimSpace(s.config.VisionURL) != "",
 			ManifestPath:        s.config.ManifestPath,
 			RawRoot:             s.config.RawRoot,
@@ -988,7 +988,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	fmt.Fprintf(w, "# HELP vodcoach_info Static application information.\n")
 	fmt.Fprintf(w, "# TYPE vodcoach_info gauge\n")
-	fmt.Fprintf(w, "vodcoach_info{schema_version=\"%d\",analyzer=\"visual-heuristic-gameplay\"} 1\n", domain.AnalysisReportSchemaVersion)
+	fmt.Fprintf(w, "vodcoach_info{schema_version=\"%d\",analyzer=\"%s\"} 1\n", domain.AnalysisReportSchemaVersion, vision.GameplayAnalyzerName)
 
 	fmt.Fprintf(w, "# HELP vodcoach_uptime_seconds Process uptime in seconds.\n")
 	fmt.Fprintf(w, "# TYPE vodcoach_uptime_seconds gauge\n")
@@ -1483,7 +1483,7 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 			ProbeTimeout:  30 * time.Second,
 			SampleTimeout: sampleTimeout,
 		},
-		Analyzer: vision.LocalGameplayAnalyzer{},
+		Analyzer: vision.LocalGameplayAnalyzer{TesseractPath: "tesseract"},
 		Reports: reportstore.LocalStore{
 			ProcessedRoot: s.config.ProcessedRoot,
 		},
