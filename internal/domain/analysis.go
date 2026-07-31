@@ -7,13 +7,19 @@ const AnalysisReportSchemaVersion = 9
 type Rank string
 
 type VOD struct {
-	Label                   string  `json:"label"`
-	VideoID                 string  `json:"video_id"`
-	Rank                    Rank    `json:"rank"`
-	SourceURL               string  `json:"source_url"`
-	Title                   string  `json:"title"`
-	Channel                 string  `json:"channel"`
-	ManifestDurationSeconds float64 `json:"manifest_duration_seconds,omitempty"`
+	Label                   string    `json:"label"`
+	VideoID                 string    `json:"video_id"`
+	Rank                    Rank      `json:"rank"`
+	SourceURL               string    `json:"source_url"`
+	Title                   string    `json:"title"`
+	Channel                 string    `json:"channel"`
+	ManifestDurationSeconds float64   `json:"manifest_duration_seconds,omitempty"`
+	Map                     string    `json:"map,omitempty"`
+	Agent                   string    `json:"agent,omitempty"`
+	OwnerID                 string    `json:"owner_id,omitempty"`
+	SourceType              string    `json:"source_type,omitempty"`
+	OriginalFilename        string    `json:"original_filename,omitempty"`
+	UploadedAt              time.Time `json:"uploaded_at,omitempty"`
 }
 
 type MediaSummary struct {

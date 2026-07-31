@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/vodstore"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,9 +32,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const sessionCookieName = "vodcoach_session"
+
 type Config struct {
 	ManifestPath              string
 	RawRoot                   string
+	UploadRoot                string
+	MaxUploadBytes            int64
 	ProcessedRoot             string
 	EvaluationAnnotationsRoot string
 	FFprobePath               string
@@ -59,6 +65,7 @@ type Server struct {
 	logger   *slog.Logger
 	tracer   trace.Tracer
 	guidedMu sync.Mutex
+	uploadMu sync.Mutex
 }
 
 type VODItem struct {
@@ -80,6 +87,11 @@ type VODItem struct {
 	LatestReportID   string  `json:"latest_report_id,omitempty"`
 	LatestGenerated  string  `json:"latest_generated,omitempty"`
 	LatestReportPath string  `json:"latest_report_path,omitempty"`
+	Map              string  `json:"map,omitempty"`
+	Agent            string  `json:"agent,omitempty"`
+	OwnerID          string  `json:"owner_id,omitempty"`
+	SourceType       string  `json:"source_type"`
+	UploadedAt       string  `json:"uploaded_at,omitempty"`
 }
 
 type VODListResponse struct {
@@ -105,6 +117,24 @@ type AnalyzeRequest struct {
 	Force           bool     `json:"force"`
 	Async           bool     `json:"async,omitempty"`
 	ModelReview     bool     `json:"model_review,omitempty"`
+	OwnerID         string   `json:"-"`
+	IncludeAll      bool     `json:"-"`
+}
+
+type UploadVODResponse struct {
+	VOD VODItem `json:"vod"`
+}
+
+type UpdateVODRequest struct {
+	Title string `json:"title"`
+	Rank  string `json:"rank"`
+	Map   string `json:"map"`
+	Agent string `json:"agent"`
+}
+
+type DeleteVODResponse struct {
+	Label   string `json:"label"`
+	Deleted bool   `json:"deleted"`
 }
 
 type AnalyzeResponse struct {
@@ -207,6 +237,7 @@ type AdminSystemStatus struct {
 	ModelReviewEnabled  bool   `json:"model_review_enabled"`
 	ManifestPath        string `json:"manifest_path"`
 	RawRoot             string `json:"raw_root"`
+	UploadRoot          string `json:"upload_root"`
 	ProcessedRoot       string `json:"processed_root"`
 	EvaluationLabelRoot string `json:"evaluation_label_root"`
 }
@@ -349,6 +380,9 @@ func NewServer(config Config) *Server {
 	if config.ProcessedRoot == "" {
 		config.ProcessedRoot = "data/processed"
 	}
+	if config.UploadRoot == "" {
+		config.UploadRoot = filepath.Join(filepath.Dir(config.RawRoot), "uploads")
+	}
 	if config.EvaluationAnnotationsRoot == "" {
 		config.EvaluationAnnotationsRoot = "ml/evals"
 	}
@@ -398,8 +432,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	recorder := &statusRecorder{ResponseWriter: w}
 	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
 		recorder.Header().Set("Access-Control-Allow-Origin", origin)
-		recorder.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		recorder.Header().Set("Access-Control-Allow-Credentials", "true")
+		recorder.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		recorder.Header().Add("Vary", "Origin")
 	}
 	if r.Method == http.MethodOptions {
 		recorder.WriteHeader(http.StatusNoContent)
@@ -477,6 +513,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
+	s.mux.HandleFunc("POST /api/vods/upload", s.handleUploadVOD)
+	s.mux.HandleFunc("PATCH /api/vods/{label}", s.handleUpdateUploadedVOD)
+	s.mux.HandleFunc("DELETE /api/vods/{label}", s.handleDeleteUploadedVOD)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
 	s.mux.HandleFunc("GET /api/analysis-runs/", s.handleAnalysisJob)
@@ -709,6 +748,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusCreated, AuthResponse{User: user, Token: token})
 }
 
@@ -732,13 +772,15 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusOK, AuthResponse{User: user, Token: token})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
-	if token := bearerToken(r); token != "" {
+	if token := sessionToken(r); token != "" {
 		s.auth.delete(token)
 	}
+	s.clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -786,6 +828,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			ModelReviewEnabled:  strings.TrimSpace(s.config.VisionURL) != "",
 			ManifestPath:        s.config.ManifestPath,
 			RawRoot:             s.config.RawRoot,
+			UploadRoot:          s.config.UploadRoot,
 			ProcessedRoot:       s.config.ProcessedRoot,
 			EvaluationLabelRoot: s.config.EvaluationAnnotationsRoot,
 		},
@@ -849,7 +892,7 @@ func (s *Server) authStore() *app.AuthStore {
 }
 
 func (s *Server) currentUser(r *http.Request) (app.PublicAuthUser, bool) {
-	token := bearerToken(r)
+	token := sessionToken(r)
 	if token == "" || s.auth == nil {
 		return app.PublicAuthUser{}, false
 	}
@@ -864,14 +907,7 @@ func (s *Server) requiresAPIAuth(r *http.Request) bool {
 	if strings.HasPrefix(path, "/api/auth/") || path == "/api/health" {
 		return false
 	}
-	if r.Method == http.MethodGet && isVODVideoPath(path) {
-		return false
-	}
 	return true
-}
-
-func isVODVideoPath(path string) bool {
-	return strings.HasPrefix(path, "/api/vods/") && strings.HasSuffix(path, "/video")
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (app.PublicAuthUser, bool) {
@@ -897,6 +933,51 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return parts[1]
+}
+
+func sessionToken(r *http.Request) string {
+	if token := bearerToken(r); token != "" {
+		return token
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	ttl := 24 * time.Hour
+	if s.auth != nil && s.auth.ttl > 0 {
+		ttl = s.auth.ttl
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(ttl.Seconds()),
+		Expires:  time.Now().UTC().Add(ttl),
+		HttpOnly: true,
+		Secure:   requestUsesHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0).UTC(),
+		HttpOnly: true,
+		Secure:   requestUsesHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func requestUsesHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -982,6 +1063,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 			LocalStatus:     string(asset.Status),
 			LocalSizeBytes:  asset.SizeBytes,
 			ReportCount:     len(reports),
+			SourceType:      "curated",
 		}
 		if asset.Status == dataset.LocalStatusDownloaded {
 			counts.Downloaded++
@@ -997,6 +1079,35 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
+	user, _ := s.currentUser(r)
+	uploads, err := s.uploadStore().List(r.Context(), user.ID, user.Role == app.AuthRoleAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("list uploaded VODs: %w", err))
+		return
+	}
+	for _, asset := range uploads {
+		vod := asset.Upload.VOD
+		if rank != "" && !strings.EqualFold(string(vod.Rank), rank) {
+			continue
+		}
+		if search != "" && !matchesUploadedSearch(vod, search) {
+			continue
+		}
+		reports, err := s.listReportSummaries(r.Context(), vod.Label)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		item := uploadedVODItem(asset, reports)
+		counts.Total++
+		counts.Enabled++
+		counts.Downloaded++
+		if len(reports) > 0 {
+			counts.Reported++
+		}
+		items = append(items, item)
+	}
+
 	writeJSON(w, http.StatusOK, VODListResponse{
 		GeneratedAt: time.Now().UTC(),
 		Counts:      counts,
@@ -1004,7 +1115,237 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleUploadVOD(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.currentUser(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	store := s.uploadStore()
+	r.Body = http.MaxBytesReader(w, r.Body, storeMaxBodyBytes(store))
+	reader, err := r.MultipartReader()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("multipart/form-data body is required"))
+		return
+	}
+	fields := map[string]string{}
+	var staged vodstore.StagedUpload
+	filename := ""
+	created := false
+	defer func() {
+		if staged.Path != "" && !created {
+			store.Discard(staged)
+		}
+	}()
+	for {
+		part, nextErr := reader.NextPart()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("read multipart upload: %w", nextErr))
+			return
+		}
+		if part.FormName() == "file" {
+			if staged.Path != "" {
+				part.Close()
+				writeError(w, http.StatusBadRequest, errors.New("only one video file is allowed"))
+				return
+			}
+			filename = part.FileName()
+			staged, err = store.Stage(r.Context(), part)
+			part.Close()
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			continue
+		}
+		name := part.FormName()
+		value, readErr := io.ReadAll(io.LimitReader(part, 8193))
+		part.Close()
+		if readErr != nil {
+			writeError(w, http.StatusBadRequest, readErr)
+			return
+		}
+		if len(value) > 8192 {
+			writeError(w, http.StatusBadRequest, errors.New("upload metadata field is too large"))
+			return
+		}
+		fields[name] = string(value)
+	}
+	if staged.Path == "" {
+		writeError(w, http.StatusBadRequest, errors.New("video file is required"))
+		return
+	}
+	s.uploadMu.Lock()
+	asset, err := store.Create(r.Context(), vodstore.CreateUploadRequest{
+		OwnerID: user.ID, Title: fields["title"], Rank: fields["rank"], Map: fields["map"], Agent: fields["agent"],
+		OriginalFilename: filename, Staged: staged,
+	})
+	s.uploadMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	created = true
+	writeJSON(w, http.StatusCreated, UploadVODResponse{VOD: uploadedVODItem(asset, nil)})
+}
+
+func (s *Server) handleUpdateUploadedVOD(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	label := strings.TrimSpace(r.PathValue("label"))
+	if label == "" {
+		writeError(w, http.StatusBadRequest, errors.New("VOD label is required"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	defer r.Body.Close()
+	var request UpdateVODRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	s.uploadMu.Lock()
+	asset, err := s.uploadStore().Update(r.Context(), label, user.ID, user.Role == app.AuthRoleAdmin, vodstore.UpdateUploadRequest{
+		Title: request.Title,
+		Rank:  request.Rank,
+		Map:   request.Map,
+		Agent: request.Agent,
+	})
+	s.uploadMu.Unlock()
+	if errors.Is(err, vodstore.ErrUploadNotFound) {
+		writeError(w, http.StatusNotFound, fmt.Errorf("uploaded VOD %q was not found", label))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	reports, err := s.listReportSummaries(r.Context(), label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, UploadVODResponse{VOD: uploadedVODItem(asset, reports)})
+}
+
+func (s *Server) handleDeleteUploadedVOD(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	label := strings.TrimSpace(r.PathValue("label"))
+	if label == "" {
+		writeError(w, http.StatusBadRequest, errors.New("VOD label is required"))
+		return
+	}
+	s.uploadMu.Lock()
+	asset, err := s.uploadStore().Delete(r.Context(), label, user.ID, user.Role == app.AuthRoleAdmin)
+	s.uploadMu.Unlock()
+	if errors.Is(err, vodstore.ErrUploadNotFound) {
+		writeError(w, http.StatusNotFound, fmt.Errorf("uploaded VOD %q was not found", label))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := removeProcessedVOD(s.config.ProcessedRoot, asset.Upload.VOD.Label); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, DeleteVODResponse{Label: asset.Upload.VOD.Label, Deleted: true})
+}
+
+func removeProcessedVOD(root string, label string) error {
+	label = strings.TrimSpace(label)
+	if label == "" || filepath.Base(label) != label || !strings.HasPrefix(label, "upload_") {
+		return errors.New("invalid uploaded VOD label")
+	}
+	rootPath, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(filepath.Join(rootPath, label))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rootPath, target)
+	if err != nil || rel != label {
+		return errors.New("invalid processed VOD path")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("remove processed artifacts: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) uploadStore() vodstore.LocalStore {
+	return vodstore.LocalStore{
+		Root: s.config.UploadRoot, FFprobePath: s.config.FFprobePath, MaxUploadBytes: s.config.MaxUploadBytes,
+	}
+}
+
+func storeMaxBodyBytes(store vodstore.LocalStore) int64 {
+	limit := store.MaxUploadBytes
+	if limit <= 0 {
+		limit = vodstore.DefaultMaxUploadBytes
+	}
+	return limit + 1<<20
+}
+
+func uploadedVODItem(asset vodstore.UploadedAsset, reports []ReportSummary) VODItem {
+	vod := asset.Upload.VOD
+	item := VODItem{
+		Label: vod.Label, Rank: string(vod.Rank), Title: vod.Title, Channel: vod.Channel,
+		VideoID: vod.VideoID, DurationText: formatClockDuration(asset.Upload.Media.DurationSeconds),
+		DurationSeconds: asset.Upload.Media.DurationSeconds, RankSource: "user_metadata", Enabled: true,
+		LocalStatus: string(dataset.LocalStatusDownloaded), LocalSizeBytes: asset.Upload.SizeBytes,
+		VideoURL: "/api/vods/" + url.PathEscape(vod.Label) + "/video", ReportCount: len(reports),
+		Map: vod.Map, Agent: vod.Agent, OwnerID: vod.OwnerID, SourceType: "upload",
+	}
+	if !vod.UploadedAt.IsZero() {
+		item.UploadedAt = vod.UploadedAt.Format(time.RFC3339)
+	}
+	if len(reports) > 0 {
+		latest := reports[0]
+		item.LatestReportID = latest.RunID
+		item.LatestGenerated = latest.GeneratedAt.Format(time.RFC3339)
+		item.LatestReportPath = latest.JSONPath
+	}
+	return item
+}
+
+func matchesUploadedSearch(vod domain.VOD, search string) bool {
+	values := []string{vod.Label, string(vod.Rank), vod.Title, vod.Map, vod.Agent, vod.OriginalFilename}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), search) {
+			return true
+		}
+	}
+	return false
+}
+
+func formatClockDuration(seconds float64) string {
+	if seconds <= 0 {
+		return "--:--"
+	}
+	total := int(math.Round(seconds))
+	hours := total / 3600
+	minutes := total % 3600 / 60
+	remaining := total % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, remaining)
+	}
+	return fmt.Sprintf("%02d:%02d", minutes, remaining)
+}
+
 func (s *Server) handleVODVideo(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.currentUser(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/vods/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] != "video" {
@@ -1018,21 +1359,9 @@ func (s *Server) handleVODVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vods, err := dataset.LoadManifest(s.config.ManifestPath)
+	_, videoPath, err := s.vodResolver(user.ID, user.Role == app.AuthRoleAdmin).ResolveVOD(r.Context(), label)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("load manifest: %w", err))
-		return
-	}
-
-	vod, ok := dataset.FindByLabel(vods, label)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("unknown VOD label %q", label))
-		return
-	}
-
-	videoPath, _, ok := dataset.FindLocalVideo(s.config.RawRoot, vod)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("video file not found: %s", videoPath))
+		writeError(w, http.StatusNotFound, fmt.Errorf("video file not found for %q", label))
 		return
 	}
 
@@ -1047,9 +1376,16 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
+	user, _ := s.currentUser(r)
+	request.OwnerID = user.ID
+	request.IncludeAll = user.Role == app.AuthRoleAdmin
 	durationSeconds, err := normalizeAnalyzeRequest(&request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, _, err := s.vodResolver(request.OwnerID, request.IncludeAll).ResolveVOD(r.Context(), request.VODLabel); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Errorf("VOD %q is unavailable", request.VODLabel))
 		return
 	}
 
@@ -1139,10 +1475,7 @@ func (s *Server) runAnalysisJob(jobID string, request AnalyzeRequest, durationSe
 func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, durationSeconds float64) (app.RunAnalysisResult, error) {
 	_, sampleTimeout := analysisTimeouts(durationSeconds)
 	runner := app.AnalysisRunner{
-		Resolver: dataset.LocalVODResolver{
-			ManifestPath: s.config.ManifestPath,
-			RawRoot:      s.config.RawRoot,
-		},
+		Resolver: s.vodResolver(request.OwnerID, request.IncludeAll),
 		Media: media.LocalProcessor{
 			FFprobePath:   s.config.FFprobePath,
 			FFmpegPath:    s.config.FFmpegPath,
@@ -1174,6 +1507,18 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 		Overwrite:    request.Force,
 		ModelReview:  request.ModelReview,
 	})
+}
+
+func (s *Server) vodResolver(ownerID string, includeAll bool) vodstore.OwnedResolver {
+	return vodstore.OwnedResolver{
+		Store:      s.uploadStore(),
+		OwnerID:    ownerID,
+		IncludeAll: includeAll,
+		Fallback: dataset.LocalVODResolver{
+			ManifestPath: s.config.ManifestPath,
+			RawRoot:      s.config.RawRoot,
+		},
+	}
 }
 
 func (s *Server) handleLatestReport(w http.ResponseWriter, r *http.Request) {
@@ -2208,8 +2553,12 @@ func metricRoute(path string) string {
 		return "/api/health"
 	case path == "/api/vods":
 		return "/api/vods"
-	case strings.HasPrefix(path, "/api/vods/"):
+	case path == "/api/vods/upload":
+		return "/api/vods/upload"
+	case strings.HasPrefix(path, "/api/vods/") && strings.HasSuffix(path, "/video"):
 		return "/api/vods/{label}/video"
+	case strings.HasPrefix(path, "/api/vods/"):
+		return "/api/vods/{label}"
 	case path == "/api/analysis-runs":
 		return "/api/analysis-runs"
 	case strings.HasPrefix(path, "/api/analysis-runs/"):
@@ -2250,6 +2599,9 @@ func adminRouteList() []string {
 		"/api/admin/*",
 		"/api/health",
 		"/api/vods",
+		"/api/vods/upload",
+		"/api/vods/{label}",
+		"/api/vods/{label}/video",
 		"/api/analysis-runs",
 		"/api/reports",
 		"/api/evaluations",

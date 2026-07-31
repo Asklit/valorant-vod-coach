@@ -2002,6 +2002,16 @@ button {
   }
 }
 
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 300px minmax(0, 1fr);
@@ -2425,17 +2435,65 @@ button {
 
 .vod-card {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 110px 90px;
+	grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+	gap: 4px;
   width: 100%;
   min-height: 72px;
-  padding: 10px;
+	padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.035);
   color: var(--text);
   text-align: left;
+}
+
+.vod-card-open {
+	display: grid;
+	grid-template-columns: 48px minmax(0, 1fr) 110px 90px;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	min-height: 62px;
+	padding: 6px;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+}
+
+.vod-card-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding-right: 5px;
+}
+
+.vod-card-actions button {
+	display: inline-grid;
+	place-items: center;
+	width: 34px;
+	height: 34px;
+	padding: 0;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	background: rgba(255, 255, 255, 0.035);
+	color: var(--muted);
+}
+
+.vod-card-actions button:hover {
+	border-color: rgba(40, 215, 255, 0.44);
+	color: var(--cyan);
+}
+
+.vod-card-actions button.danger:hover {
+	border-color: rgba(255, 70, 85, 0.55);
+	color: var(--red);
+}
+
+.vod-card-actions button:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
 }
 
 .vod-card.active,
@@ -2504,6 +2562,268 @@ button {
 
 .product-correction-form {
   margin-bottom: 12px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.command-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 70, 85, 0.55);
+  border-radius: var(--radius);
+  background: rgba(255, 70, 85, 0.09);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.command-button:hover {
+  background: rgba(255, 70, 85, 0.16);
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 5, 8, 0.78);
+  backdrop-filter: blur(10px);
+  animation: modal-fade 160ms ease-out;
+}
+
+.upload-dialog {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  border: 1px solid rgba(255, 70, 85, 0.42);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.62);
+  animation: modal-enter 190ms ease-out;
+}
+
+.upload-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.upload-dialog h2 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  text-transform: uppercase;
+}
+
+.upload-dialog form {
+  display: grid;
+  gap: 15px;
+  padding: 18px;
+}
+
+.upload-dialog form > label,
+.upload-metadata-grid label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.upload-dialog label > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.upload-dialog input,
+.upload-dialog select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  outline: 0;
+}
+
+.upload-dialog input:focus,
+.upload-dialog select:focus {
+  border-color: rgba(40, 215, 255, 0.5);
+}
+
+.upload-file-field {
+  position: relative;
+  display: grid;
+  min-height: 130px;
+  align-content: center;
+  justify-items: center;
+  gap: 7px;
+  padding: 16px;
+  border: 1px dashed rgba(40, 215, 255, 0.4);
+  border-radius: var(--radius);
+  background: rgba(40, 215, 255, 0.035);
+  color: var(--cyan);
+  cursor: pointer;
+  text-align: center;
+}
+
+.upload-file-field:hover {
+  border-color: rgba(40, 215, 255, 0.72);
+  background: rgba(40, 215, 255, 0.07);
+}
+
+.upload-file-field > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text) !important;
+  font-size: 14px !important;
+}
+
+.upload-file-field small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.upload-file-field input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.upload-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.upload-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.upload-progress > div {
+  overflow: hidden;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.upload-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--red), var(--cyan));
+  transition: width 150ms ease;
+}
+
+.upload-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding-top: 3px;
+}
+
+.upload-dialog footer .run-button {
+  grid-column: auto;
+  width: auto;
+  min-width: 130px;
+}
+
+.confirm-dialog {
+	display: grid;
+	justify-items: center;
+	width: min(430px, 100%);
+	padding: 24px;
+	border: 1px solid rgba(255, 70, 85, 0.42);
+	border-radius: var(--radius);
+	background: var(--panel-strong);
+	box-shadow: 0 32px 100px rgba(0, 0, 0, 0.62);
+	text-align: center;
+	animation: modal-enter 190ms ease-out;
+}
+
+.confirm-dialog-icon {
+	display: grid;
+	place-items: center;
+	width: 48px;
+	height: 48px;
+	border: 1px solid rgba(255, 70, 85, 0.42);
+	border-radius: 50%;
+	background: rgba(255, 70, 85, 0.09);
+	color: var(--red);
+}
+
+.confirm-dialog h2 {
+	margin: 14px 0 8px;
+	font-size: 22px;
+	text-transform: uppercase;
+}
+
+.confirm-dialog p {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.55;
+}
+
+.confirm-dialog p strong {
+	color: var(--text);
+}
+
+.confirm-dialog footer {
+	display: flex;
+	justify-content: center;
+	gap: 9px;
+	width: 100%;
+	margin-top: 20px;
+}
+
+.danger-command {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	min-height: 40px;
+	padding: 0 14px;
+	border: 1px solid rgba(255, 70, 85, 0.68);
+	border-radius: var(--radius);
+	background: rgba(255, 70, 85, 0.13);
+	color: var(--red);
+	font-size: 12px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.danger-command:hover {
+	background: rgba(255, 70, 85, 0.22);
+}
+
+.danger-command:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 .quality-chip {
@@ -3215,13 +3535,26 @@ button {
   .analysis-explainer,
   .product-controls,
   .product-quality,
-  .vod-card {
-    grid-template-columns: 1fr;
-  }
+	  .vod-card-open {
+	    grid-template-columns: 1fr;
+	  }
+
+	.vod-card {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.vod-card-actions {
+		align-self: start;
+		padding-top: 8px;
+	}
 
   .metric-bar {
     grid-template-columns: 1fr 80px 34px;
   }
+
+	.upload-metadata-grid {
+		grid-template-columns: 1fr;
+	}
 
 	.guided-review-header,
 	.validated-row-head {
