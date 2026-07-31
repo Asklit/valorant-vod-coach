@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 10
+const AnalysisReportSchemaVersion = 11
 
 type Rank string
 
@@ -311,4 +311,5 @@ type AnalysisRunMetadata struct {
 	Analyzer    string `json:"analyzer"`
 	CoachEngine string `json:"coach_engine,omitempty"`
 	Mode        string `json:"mode"`
+	OwnerID     string `json:"owner_id,omitempty"`
 }

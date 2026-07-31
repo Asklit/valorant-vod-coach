@@ -47,12 +47,14 @@ type AuthUser = {
 
 type AuthResponse = {
   user: AuthUser;
-  token: string;
+  csrf_token: string;
 };
 
 type AuthSessionResponse = {
   authenticated: boolean;
   user?: AuthUser;
+  csrf_token?: string;
+  setup_required: boolean;
 };
 
 type VODItem = {
@@ -580,16 +582,16 @@ type AdminUsersResponse = {
 
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 const correctionTypes = ["false_detection", "map", "agent", "rank", "round_boundary", "finding_note", "event_note"];
-const authStorageKey = "vodcoach.auth";
-
 export function App() {
   const [page, setPage] = useState<PageID>("dashboard");
-  const [token, setToken] = useState(() => readStoredAuth()?.token ?? "");
-  const [user, setUser] = useState<AuthUser | null>(() => readStoredAuth()?.user ?? null);
+  const [csrfToken, setCSRFToken] = useState("");
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
+  const [authSetupToken, setAuthSetupToken] = useState("");
+  const [setupRequired, setSetupRequired] = useState(false);
 
   const [vods, setVods] = useState<VODItem[]>([]);
   const [counts, setCounts] = useState<VODListResponse["counts"] | null>(null);
@@ -633,12 +635,12 @@ export function App() {
 
   const authHeaders = useMemo<Record<string, string>>(() => {
     const headers: Record<string, string> = {};
-    if (!token) {
+    if (!csrfToken) {
       return headers;
     }
-    headers.Authorization = `Bearer ${token}`;
+    headers["X-CSRF-Token"] = csrfToken;
     return headers;
-  }, [token]);
+  }, [csrfToken]);
   const jsonHeaders = useMemo<Record<string, string>>(() => ({ ...authHeaders, "Content-Type": "application/json" }), [authHeaders]);
   const selectedVod = useMemo(() => vods.find((vod) => vod.label === selectedLabel) ?? null, [selectedLabel, vods]);
   const filteredVods = useMemo(() => {
@@ -706,10 +708,15 @@ export function App() {
       }
       const payload = (await response.json()) as AuthSessionResponse;
       if (!payload.authenticated || !payload.user) {
+        setSetupRequired(payload.setup_required);
+        if (payload.setup_required) {
+          setAuthMode("register");
+        }
         clearAuth();
         return;
       }
       setUser(payload.user);
+      setCSRFToken(payload.csrf_token ?? "");
     } catch {
       clearAuth();
     } finally {
@@ -724,15 +731,14 @@ export function App() {
       const response = await apiFetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail, password: authPassword, display_name: authName })
+        body: JSON.stringify({ email: authEmail, password: authPassword, display_name: authName, setup_token: authSetupToken })
       });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
       const payload = (await response.json()) as AuthResponse;
-      setToken(payload.token);
+      setCSRFToken(payload.csrf_token);
       setUser(payload.user);
-      window.localStorage.setItem(authStorageKey, JSON.stringify(payload));
     } catch (err) {
       setError(messageFromError(err));
     }
@@ -744,9 +750,8 @@ export function App() {
   }
 
   function clearAuth() {
-    setToken("");
+    setCSRFToken("");
     setUser(null);
-    window.localStorage.removeItem(authStorageKey);
   }
 
   async function loadBootstrap() {
@@ -1084,7 +1089,7 @@ export function App() {
 				const request = new XMLHttpRequest();
 				request.open("POST", apiURL("/api/vods/upload"));
 				request.withCredentials = true;
-				if (token) { request.setRequestHeader("Authorization", `Bearer ${token}`); }
+				if (csrfToken) { request.setRequestHeader("X-CSRF-Token", csrfToken); }
 				request.upload.onprogress = (event) => {
 					if (event.lengthComputable) { setUploadProgress(Math.round((event.loaded / event.total) * 100)); }
 				};
@@ -1179,11 +1184,14 @@ export function App() {
         authMode={authMode}
         authName={authName}
         authPassword={authPassword}
+        authSetupToken={authSetupToken}
         error={error}
         setAuthEmail={setAuthEmail}
         setAuthMode={setAuthMode}
         setAuthName={setAuthName}
         setAuthPassword={setAuthPassword}
+        setAuthSetupToken={setAuthSetupToken}
+        setupRequired={setupRequired}
         submitAuth={submitAuth}
       />
     );
@@ -1330,11 +1338,14 @@ function AuthScreen(props: {
   authMode: "login" | "register";
   authName: string;
   authPassword: string;
+  authSetupToken: string;
   error: string;
   setAuthEmail: (value: string) => void;
   setAuthMode: (value: "login" | "register") => void;
   setAuthName: (value: string) => void;
   setAuthPassword: (value: string) => void;
+  setAuthSetupToken: (value: string) => void;
+  setupRequired: boolean;
   submitAuth: () => void;
 }) {
   return (
@@ -1358,10 +1369,18 @@ function AuthScreen(props: {
           </button>
         </div>
         {props.authMode === "register" && (
-          <label>
-            <span>Name</span>
-            <input value={props.authName} onChange={(event) => props.setAuthName(event.target.value)} placeholder="Coach" />
-          </label>
+          <>
+            <label>
+              <span>Name</span>
+              <input value={props.authName} onChange={(event) => props.setAuthName(event.target.value)} placeholder="Coach" />
+            </label>
+            {props.setupRequired && (
+              <label>
+                <span>Installation key</span>
+                <input value={props.authSetupToken} onChange={(event) => props.setAuthSetupToken(event.target.value)} placeholder="Administrator setup token" type="password" />
+              </label>
+            )}
+          </>
         )}
         <label>
           <span>Email</span>
@@ -2324,13 +2343,4 @@ function devBackendBase() {
     return "http://127.0.0.1:8080";
   }
   return "";
-}
-
-function readStoredAuth(): AuthResponse | null {
-  try {
-    const raw = window.localStorage.getItem(authStorageKey);
-    return raw ? (JSON.parse(raw) as AuthResponse) : null;
-  } catch {
-    return null;
-  }
 }

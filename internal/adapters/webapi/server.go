@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,8 @@ type Config struct {
 	StaticDir                 string
 	AuthStorePath             string
 	AuthHashIterations        int
+	AuthRequestsPerMinute     int
+	BootstrapAdminToken       string
 	Catalog                   app.AnalysisCatalog
 	ReportCatalog             app.ReportCatalog
 	Locks                     app.LockManager
@@ -60,6 +63,7 @@ type Server struct {
 	jobs     *analysisJobStore
 	metrics  *serverMetrics
 	auth     *authSessionStore
+	authRate *authRateLimiter
 	users    *app.AuthStore
 	logs     *requestLogStore
 	logger   *slog.Logger
@@ -178,6 +182,7 @@ type AnalysisJobResponse struct {
 
 type analysisJob struct {
 	AnalysisJobResponse
+	OwnerID string
 }
 
 type analysisJobStore struct {
@@ -204,6 +209,7 @@ type AuthRegisterRequest struct {
 	Email       string `json:"email"`
 	Password    string `json:"password"`
 	DisplayName string `json:"display_name"`
+	SetupToken  string `json:"setup_token,omitempty"`
 }
 
 type AuthLoginRequest struct {
@@ -212,13 +218,15 @@ type AuthLoginRequest struct {
 }
 
 type AuthResponse struct {
-	User  app.PublicAuthUser `json:"user"`
-	Token string             `json:"token"`
+	User      app.PublicAuthUser `json:"user"`
+	CSRFToken string             `json:"csrf_token"`
 }
 
 type AuthSessionResponse struct {
 	Authenticated bool                `json:"authenticated"`
 	User          *app.PublicAuthUser `json:"user,omitempty"`
+	CSRFToken     string              `json:"csrf_token,omitempty"`
+	SetupRequired bool                `json:"setup_required"`
 }
 
 type AdminOverviewResponse struct {
@@ -395,17 +403,21 @@ func NewServer(config Config) *Server {
 	if config.AuthStorePath == "" {
 		config.AuthStorePath = filepath.Join(config.ProcessedRoot, "auth", "users.json")
 	}
+	if config.AuthRequestsPerMinute <= 0 {
+		config.AuthRequestsPerMinute = 30
+	}
 
 	server := &Server{
-		config:  config,
-		mux:     http.NewServeMux(),
-		jobs:    &analysisJobStore{jobs: map[string]*analysisJob{}},
-		metrics: newServerMetrics(time.Now().UTC()),
-		auth:    newAuthSessionStore(24 * time.Hour),
-		users:   &app.AuthStore{Path: config.AuthStorePath, Iterations: config.AuthHashIterations},
-		logs:    newRequestLogStore(200),
-		logger:  config.Logger,
-		tracer:  config.Tracer,
+		config:   config,
+		mux:      http.NewServeMux(),
+		jobs:     &analysisJobStore{jobs: map[string]*analysisJob{}},
+		metrics:  newServerMetrics(time.Now().UTC()),
+		auth:     newAuthSessionStore(24 * time.Hour),
+		authRate: newAuthRateLimiter(config.AuthRequestsPerMinute, time.Minute),
+		users:    &app.AuthStore{Path: config.AuthStorePath, Iterations: config.AuthHashIterations},
+		logs:     newRequestLogStore(200),
+		logger:   config.Logger,
+		tracer:   config.Tracer,
 	}
 	if server.logger == nil {
 		server.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -430,15 +442,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	recorder := &statusRecorder{ResponseWriter: w}
+	setSecurityHeaders(recorder.Header())
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		recorder.Header().Set("Cache-Control", "no-store")
+	}
 	if origin := r.Header.Get("Origin"); isAllowedDevOrigin(origin) {
 		recorder.Header().Set("Access-Control-Allow-Origin", origin)
 		recorder.Header().Set("Access-Control-Allow-Credentials", "true")
 		recorder.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		recorder.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
 		recorder.Header().Add("Vary", "Origin")
 	}
 	if r.Method == http.MethodOptions {
 		recorder.WriteHeader(http.StatusNoContent)
+		status := recorder.statusCode()
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+		s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
+		s.logRequest(ctx, r, route, status, time.Since(started))
+		return
+	}
+	if isUnsafeMethod(r.Method) && !s.isTrustedRequestOrigin(r) {
+		writeError(recorder, http.StatusForbidden, errors.New("untrusted request origin"))
 		status := recorder.statusCode()
 		span.SetAttributes(attribute.Int("http.response.status_code", status))
 		s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
@@ -454,6 +478,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.logRequest(ctx, r, route, status, time.Since(started))
 			return
 		}
+	}
+	if s.requiresCSRF(r) && !s.hasValidCSRFToken(r) {
+		writeError(recorder, http.StatusForbidden, errors.New("valid CSRF token required"))
+		status := recorder.statusCode()
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+		s.metrics.record(r.Method, r.URL.Path, status, time.Since(started))
+		s.logRequest(ctx, r, route, status, time.Since(started))
+		return
 	}
 	s.mux.ServeHTTP(recorder, r)
 	status := recorder.statusCode()
@@ -530,7 +562,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
-	s.mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(s.config.ProcessedRoot))))
+	s.mux.HandleFunc("GET /artifacts/", s.handleArtifact)
 
 	if s.config.StaticDir != "" {
 		fileServer := http.FileServer(http.Dir(s.config.StaticDir))
@@ -550,14 +582,14 @@ func (s *Server) routes() {
 }
 
 func (s *Server) registerPprofRoutes() {
-	s.mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-	s.mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-	s.mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-	s.mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-	s.mux.HandleFunc("POST /debug/pprof/symbol", pprof.Symbol)
-	s.mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	s.mux.HandleFunc("GET /debug/pprof/", s.adminHandler(pprof.Index))
+	s.mux.HandleFunc("GET /debug/pprof/cmdline", s.adminHandler(pprof.Cmdline))
+	s.mux.HandleFunc("GET /debug/pprof/profile", s.adminHandler(pprof.Profile))
+	s.mux.HandleFunc("GET /debug/pprof/symbol", s.adminHandler(pprof.Symbol))
+	s.mux.HandleFunc("POST /debug/pprof/symbol", s.adminHandler(pprof.Symbol))
+	s.mux.HandleFunc("GET /debug/pprof/trace", s.adminHandler(pprof.Trace))
 	for _, name := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
-		s.mux.Handle("GET /debug/pprof/"+name, pprof.Handler(name))
+		s.mux.Handle("GET /debug/pprof/"+name, s.adminHTTPHandler(pprof.Handler(name)))
 	}
 }
 
@@ -579,9 +611,11 @@ type readinessCheck struct {
 
 func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	checks := s.readinessChecks(r.Context())
+	publicChecks := make(map[string]string, len(checks))
 
 	ready := true
-	for _, check := range checks {
+	for name, check := range checks {
+		publicChecks[name] = check.Status
 		if check.Status == "failed" {
 			ready = false
 			break
@@ -599,7 +633,7 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		"status":         payloadStatus,
 		"schema_version": domain.AnalysisReportSchemaVersion,
 		"service":        "vod-web",
-		"checks":         checks,
+		"checks":         publicChecks,
 	})
 }
 
@@ -728,34 +762,62 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAuthRequest(w, r, "register") {
+		return
+	}
 	defer r.Body.Close()
 	var request AuthRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 64<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
+	userCount, err := s.authStore().UserCount(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	bootstrapAdmin := userCount == 0
+	if bootstrapAdmin {
+		configured := strings.TrimSpace(s.config.BootstrapAdminToken)
+		provided := strings.TrimSpace(request.SetupToken)
+		if configured == "" {
+			writeError(w, http.StatusServiceUnavailable, errors.New("administrator setup token is not configured"))
+			return
+		}
+		if len(provided) != len(configured) || subtle.ConstantTimeCompare([]byte(provided), []byte(configured)) != 1 {
+			writeError(w, http.StatusForbidden, errors.New("invalid administrator setup token"))
+			return
+		}
+	}
 	user, err := s.authStore().Register(r.Context(), app.AuthRegisterRequest{
-		Email:       request.Email,
-		Password:    request.Password,
-		DisplayName: request.DisplayName,
+		Email:          request.Email,
+		Password:       request.Password,
+		DisplayName:    request.DisplayName,
+		BootstrapAdmin: bootstrapAdmin,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	token, err := s.auth.create(user)
+	if previous := sessionToken(r); previous != "" {
+		s.auth.delete(previous)
+	}
+	session, err := s.auth.create(user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.setSessionCookie(w, r, token)
-	writeJSON(w, http.StatusCreated, AuthResponse{User: user, Token: token})
+	s.setSessionCookie(w, r, session.Token)
+	writeJSON(w, http.StatusCreated, AuthResponse{User: user, CSRFToken: session.CSRFToken})
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAuthRequest(w, r, "login") {
+		return
+	}
 	defer r.Body.Close()
 	var request AuthLoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 64<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -767,13 +829,16 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	token, err := s.auth.create(user)
+	if previous := sessionToken(r); previous != "" {
+		s.auth.delete(previous)
+	}
+	session, err := s.auth.create(user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.setSessionCookie(w, r, token)
-	writeJSON(w, http.StatusOK, AuthResponse{User: user, Token: token})
+	s.setSessionCookie(w, r, session.Token)
+	writeJSON(w, http.StatusOK, AuthResponse{User: user, CSRFToken: session.CSRFToken})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
@@ -785,12 +850,17 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.currentUser(r)
+	session, ok := s.currentSession(r)
 	if !ok {
-		writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: false})
+		count, err := s.authStore().UserCount(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: false, SetupRequired: count == 0})
 		return
 	}
-	writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: true, User: &user})
+	writeJSON(w, http.StatusOK, AuthSessionResponse{Authenticated: true, User: &session.User, CSRFToken: session.CSRFToken})
 }
 
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
@@ -892,19 +962,30 @@ func (s *Server) authStore() *app.AuthStore {
 }
 
 func (s *Server) currentUser(r *http.Request) (app.PublicAuthUser, bool) {
+	session, ok := s.currentSession(r)
+	if !ok {
+		return app.PublicAuthUser{}, false
+	}
+	return session.User, true
+}
+
+func (s *Server) currentSession(r *http.Request) (authSession, bool) {
 	token := sessionToken(r)
 	if token == "" || s.auth == nil {
-		return app.PublicAuthUser{}, false
+		return authSession{}, false
 	}
 	return s.auth.get(token)
 }
 
 func (s *Server) requiresAPIAuth(r *http.Request) bool {
 	path := r.URL.Path
+	if strings.HasPrefix(path, "/artifacts/") || strings.HasPrefix(path, "/debug/pprof/") {
+		return true
+	}
 	if !strings.HasPrefix(path, "/api/") {
 		return false
 	}
-	if strings.HasPrefix(path, "/api/auth/") || path == "/api/health" {
+	if path == "/api/auth/register" || path == "/api/auth/login" || path == "/api/auth/session" || path == "/api/health" {
 		return false
 	}
 	return true
@@ -923,22 +1004,7 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (app.Publi
 	return user, true
 }
 
-func bearerToken(r *http.Request) string {
-	header := strings.TrimSpace(r.Header.Get("Authorization"))
-	if header == "" {
-		return ""
-	}
-	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return ""
-	}
-	return parts[1]
-}
-
 func sessionToken(r *http.Request) string {
-	if token := bearerToken(r); token != "" {
-		return token
-	}
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
 		return ""
@@ -1020,6 +1086,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
 	vods, err := dataset.LoadManifest(s.config.ManifestPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("load manifest: %w", err))
@@ -1042,7 +1109,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		reports, err := s.listReportSummaries(r.Context(), asset.VOD.Label)
+		reports, err := s.listUserReportSummaries(r.Context(), user.ID, asset.VOD.Label)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1079,7 +1146,6 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
-	user, _ := s.currentUser(r)
 	uploads, err := s.uploadStore().List(r.Context(), user.ID, user.Role == app.AuthRoleAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("list uploaded VODs: %w", err))
@@ -1093,7 +1159,7 @@ func (s *Server) handleListVODs(w http.ResponseWriter, r *http.Request) {
 		if search != "" && !matchesUploadedSearch(vod, search) {
 			continue
 		}
-		reports, err := s.listReportSummaries(r.Context(), vod.Label)
+		reports, err := s.listUserReportSummaries(r.Context(), user.ID, vod.Label)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1199,12 +1265,9 @@ func (s *Server) handleUpdateUploadedVOD(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, errors.New("VOD label is required"))
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	defer r.Body.Close()
 	var request UpdateVODRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 64<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -1224,7 +1287,7 @@ func (s *Server) handleUpdateUploadedVOD(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	reports, err := s.listReportSummaries(r.Context(), label)
+	reports, err := s.listUserReportSummaries(r.Context(), user.ID, label)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1247,6 +1310,10 @@ func (s *Server) handleDeleteUploadedVOD(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := removeProcessedVOD(s.analysisRoot(asset.Upload.VOD.OwnerID), asset.Upload.VOD.Label); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -1372,7 +1439,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var request AnalyzeRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 1<<20); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -1395,7 +1462,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 			request.RunID = app.DefaultRunID(now)
 		}
 		jobID := newAnalysisJobID(request.RunID, now)
-		job := &analysisJob{AnalysisJobResponse: AnalysisJobResponse{
+		job := &analysisJob{OwnerID: user.ID, AnalysisJobResponse: AnalysisJobResponse{
 			JobID:        jobID,
 			RunID:        request.RunID,
 			VODLabel:     request.VODLabel,
@@ -1428,13 +1495,14 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAnalysisJob(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
 	jobID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/analysis-runs/"), "/")
 	if jobID == "" {
 		writeError(w, http.StatusBadRequest, errors.New("job id is required"))
 		return
 	}
 
-	job, ok := s.jobs.get(jobID)
+	job, ok := s.jobs.getForUser(jobID, user.ID, user.Role == app.AuthRoleAdmin)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("analysis job not found: %s", jobID))
 		return
@@ -1474,18 +1542,19 @@ func (s *Server) runAnalysisJob(jobID string, request AnalyzeRequest, durationSe
 
 func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, durationSeconds float64) (app.RunAnalysisResult, error) {
 	_, sampleTimeout := analysisTimeouts(durationSeconds)
+	processedRoot := s.analysisRoot(request.OwnerID)
 	runner := app.AnalysisRunner{
 		Resolver: s.vodResolver(request.OwnerID, request.IncludeAll),
 		Media: media.LocalProcessor{
 			FFprobePath:   s.config.FFprobePath,
 			FFmpegPath:    s.config.FFmpegPath,
-			ProcessedRoot: s.config.ProcessedRoot,
+			ProcessedRoot: processedRoot,
 			ProbeTimeout:  30 * time.Second,
 			SampleTimeout: sampleTimeout,
 		},
 		Analyzer: vision.LocalGameplayAnalyzer{TesseractPath: "tesseract"},
 		Reports: reportstore.LocalStore{
-			ProcessedRoot: s.config.ProcessedRoot,
+			ProcessedRoot: processedRoot,
 		},
 		Catalog: s.config.Catalog,
 		Locks:   s.config.Locks,
@@ -1499,6 +1568,7 @@ func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, d
 
 	return runner.Run(ctx, app.RunAnalysisRequest{
 		VODLabel:     request.VODLabel,
+		OwnerID:      request.OwnerID,
 		RunID:        request.RunID,
 		FPS:          request.FPS,
 		Start:        secondsDuration(request.StartSeconds),
@@ -1527,8 +1597,12 @@ func (s *Server) handleLatestReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
 		return
 	}
+	user, ok := s.requireVODAccess(w, r, label)
+	if !ok {
+		return
+	}
 
-	reportPath, err := s.resolveReportPath(r.Context(), label, "")
+	reportPath, err := s.resolveUserReportPath(r.Context(), user.ID, label, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1552,8 +1626,12 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
 		return
 	}
+	user, ok := s.requireVODAccess(w, r, label)
+	if !ok {
+		return
+	}
 
-	summaries, err := s.listReportSummaries(r.Context(), label)
+	summaries, err := s.listUserReportSummaries(r.Context(), user.ID, label)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1566,6 +1644,9 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvaluations(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
 	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
 	evaluations, err := s.listEvaluations(label)
 	if err != nil {
@@ -1583,6 +1664,9 @@ func (s *Server) handleEvaluations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvaluationAnnotations(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
 	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
 	annotations, err := s.listEvaluationAnnotations(label)
 	if err != nil {
@@ -1605,9 +1689,19 @@ func (s *Server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
 		return
 	}
+	user, ok := s.requireVODAccess(w, r, label)
+	if !ok {
+		return
+	}
 	reportRunID := strings.TrimSpace(r.URL.Query().Get("report_run_id"))
+	if reportRunID != "" {
+		if _, err := s.loadUserReportByID(r.Context(), user.ID, label, reportRunID); err != nil {
+			writeError(w, http.StatusNotFound, errors.New("report not found"))
+			return
+		}
+	}
 
-	set, saved, err := app.LoadManualCorrections(s.correctionsRoot(), label, reportRunID)
+	set, saved, err := app.LoadManualCorrections(s.correctionsRoot(user.ID), label, reportRunID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("load corrections: %w", err))
 		return
@@ -1624,7 +1718,7 @@ func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	defer r.Body.Close()
 
 	var request ManualCorrectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 256<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -1632,14 +1726,24 @@ func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, errors.New("vod_label is required"))
 		return
 	}
+	user, ok := s.requireVODAccess(w, r, request.VODLabel)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(request.ReportRunID) != "" {
+		if _, err := s.loadUserReportByID(r.Context(), user.ID, request.VODLabel, request.ReportRunID); err != nil {
+			writeError(w, http.StatusNotFound, errors.New("report not found"))
+			return
+		}
+	}
 
-	set, saved, err := app.AppendManualCorrection(r.Context(), s.correctionsRoot(), request.VODLabel, request.ReportRunID, domain.ManualCorrection{
+	set, saved, err := app.AppendManualCorrection(r.Context(), s.correctionsRoot(user.ID), request.VODLabel, request.ReportRunID, domain.ManualCorrection{
 		Type:             request.Type,
 		TargetID:         request.TargetID,
 		CorrectedValue:   request.CorrectedValue,
 		Comment:          request.Comment,
 		TimestampSeconds: request.TimestampSeconds,
-		Author:           request.Author,
+		Author:           user.Email,
 	}, time.Now().UTC())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1660,12 +1764,16 @@ func (s *Server) handleListCoachAssessments(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, errors.New("vod_label and report_run_id are required"))
 		return
 	}
-	report, err := s.loadReportByID(r.Context(), label, runID)
+	user, ok := s.requireVODAccess(w, r, label)
+	if !ok {
+		return
+	}
+	report, err := s.loadUserReportByID(r.Context(), user.ID, label, runID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	set, saved, err := app.LoadGuidedReviews(s.guidedReviewsRoot(), label, runID)
+	set, saved, err := app.LoadGuidedReviews(s.guidedReviewsRoot(user.ID), label, runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1676,7 +1784,7 @@ func (s *Server) handleListCoachAssessments(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleCreateCoachAssessment(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var request CoachAssessmentRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 256<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -1684,14 +1792,17 @@ func (s *Server) handleCreateCoachAssessment(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, errors.New("vod_label, report_run_id, and window_id are required"))
 		return
 	}
-	report, err := s.loadReportByID(r.Context(), request.VODLabel, request.ReportRunID)
+	user, ok := s.requireVODAccess(w, r, request.VODLabel)
+	if !ok {
+		return
+	}
+	report, err := s.loadUserReportByID(r.Context(), user.ID, request.VODLabel, request.ReportRunID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	user, _ := s.currentUser(r)
 	s.guidedMu.Lock()
-	set, saved, err := app.SaveGuidedAssessment(r.Context(), s.guidedReviewsRoot(), app.EvidenceCoachEngine{}, app.SaveGuidedAssessmentRequest{
+	set, saved, err := app.SaveGuidedAssessment(r.Context(), s.guidedReviewsRoot(user.ID), app.EvidenceCoachEngine{}, app.SaveGuidedAssessmentRequest{
 		Report: report, WindowID: request.WindowID, Answers: request.Answers, Author: user.Email, Now: time.Now().UTC(),
 	})
 	s.guidedMu.Unlock()
@@ -1705,7 +1816,7 @@ func (s *Server) handleCreateCoachAssessment(w http.ResponseWriter, r *http.Requ
 func (s *Server) handleCoachFeedback(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var request CoachFeedbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 64<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -1713,14 +1824,17 @@ func (s *Server) handleCoachFeedback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("vod_label, report_run_id, and window_id are required"))
 		return
 	}
-	report, err := s.loadReportByID(r.Context(), request.VODLabel, request.ReportRunID)
+	user, ok := s.requireVODAccess(w, r, request.VODLabel)
+	if !ok {
+		return
+	}
+	report, err := s.loadUserReportByID(r.Context(), user.ID, request.VODLabel, request.ReportRunID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	user, _ := s.currentUser(r)
 	s.guidedMu.Lock()
-	set, saved, err := app.SaveCoachFeedback(r.Context(), s.guidedReviewsRoot(), app.SaveCoachFeedbackRequest{
+	set, saved, err := app.SaveCoachFeedback(r.Context(), s.guidedReviewsRoot(user.ID), app.SaveCoachFeedbackRequest{
 		VODLabel: request.VODLabel, ReportRunID: request.ReportRunID, WindowID: request.WindowID,
 		Verdict: request.Verdict, Comment: request.Comment, Author: user.Email, Now: time.Now().UTC(),
 	})
@@ -1733,15 +1847,19 @@ func (s *Server) handleCoachFeedback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunEvaluation(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
 	defer r.Body.Close()
 
 	var request EvaluationRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeJSONRequest(w, r, &request, 64<<10); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
 
-	evaluation, saved, err := s.runEvaluation(r.Context(), request)
+	evaluation, saved, err := s.runEvaluation(r.Context(), user.ID, request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1762,8 +1880,12 @@ func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("expected /api/reports/{vod_label}/{run_id}"))
 		return
 	}
+	user, ok := s.requireVODAccess(w, r, parts[0])
+	if !ok {
+		return
+	}
 
-	reportPath, err := s.resolveReportPath(r.Context(), parts[0], parts[1])
+	reportPath, err := s.resolveUserReportPath(r.Context(), user.ID, parts[0], parts[1])
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1828,12 +1950,65 @@ func (s *Server) listReportSummaries(ctx context.Context, vodLabel string) ([]Re
 	return summaries, nil
 }
 
-func (s *Server) correctionsRoot() string {
-	return filepath.Join(s.config.ProcessedRoot, "corrections")
+func (s *Server) listUserReportSummaries(ctx context.Context, userID string, vodLabel string) ([]ReportSummary, error) {
+	if !isSafeResourceID(userID) {
+		return nil, errors.New("invalid user identifier")
+	}
+	combinedSummaries := make([]ReportSummary, 0)
+	if s.config.ReportCatalog != nil {
+		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, vodLabel)
+		if err != nil {
+			return nil, err
+		}
+		for _, summary := range catalogSummaries {
+			report, err := readReport(summary.JSONPath)
+			if err != nil || (report.Metadata.OwnerID != "" && report.Metadata.OwnerID != userID) {
+				continue
+			}
+			combinedSummaries = append(combinedSummaries, reportCatalogSummaryToAPI(summary))
+		}
+	}
+	owned, err := s.listReportsAtRoot(s.analysisRoot(userID), vodLabel)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := s.listReportsAtRoot(s.config.ProcessedRoot, vodLabel)
+	if err != nil {
+		return nil, err
+	}
+	combined := append(owned, legacy...)
+	seen := map[string]struct{}{}
+	summaries := make([]ReportSummary, 0, len(combinedSummaries)+len(combined))
+	for _, summary := range combinedSummaries {
+		if _, duplicate := seen[summary.RunID]; duplicate {
+			continue
+		}
+		seen[summary.RunID] = struct{}{}
+		summaries = append(summaries, summary)
+	}
+	for _, report := range combined {
+		if _, duplicate := seen[report.RunID]; duplicate {
+			continue
+		}
+		seen[report.RunID] = struct{}{}
+		summaries = append(summaries, report.Summary)
+	}
+	return summaries, nil
 }
 
-func (s *Server) guidedReviewsRoot() string {
-	return filepath.Join(s.config.ProcessedRoot, "coaching")
+func (s *Server) correctionsRoot(userID string) string {
+	return filepath.Join(s.userDataRoot(userID), "corrections")
+}
+
+func (s *Server) guidedReviewsRoot(userID string) string {
+	return filepath.Join(s.userDataRoot(userID), "coaching")
+}
+
+func (s *Server) userDataRoot(userID string) string {
+	if !isSafeResourceID(userID) {
+		return filepath.Join(s.config.ProcessedRoot, "users", "invalid")
+	}
+	return filepath.Join(s.config.ProcessedRoot, "users", userID, "data")
 }
 
 func (s *Server) loadReportByID(ctx context.Context, vodLabel string, reportRunID string) (domain.AnalysisReport, error) {
@@ -1847,6 +2022,24 @@ func (s *Server) loadReportByID(ctx context.Context, vodLabel string, reportRunI
 	report, err := readReport(path)
 	if err != nil {
 		return domain.AnalysisReport{}, fmt.Errorf("read report: %w", err)
+	}
+	return report, nil
+}
+
+func (s *Server) loadUserReportByID(ctx context.Context, userID string, vodLabel string, reportRunID string) (domain.AnalysisReport, error) {
+	path, err := s.resolveUserReportPath(ctx, userID, strings.TrimSpace(vodLabel), strings.TrimSpace(reportRunID))
+	if err != nil {
+		return domain.AnalysisReport{}, err
+	}
+	if path == "" {
+		return domain.AnalysisReport{}, fmt.Errorf("no report %s for %s", reportRunID, vodLabel)
+	}
+	report, err := readReport(path)
+	if err != nil {
+		return domain.AnalysisReport{}, fmt.Errorf("read report: %w", err)
+	}
+	if report.Metadata.OwnerID != "" && report.Metadata.OwnerID != userID {
+		return domain.AnalysisReport{}, errors.New("report not found")
 	}
 	return report, nil
 }
@@ -1877,12 +2070,34 @@ func coachAssessmentsResponse(report domain.AnalysisReport, set domain.GuidedRev
 }
 
 func (s *Server) resolveReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
+	vodLabel = strings.TrimSpace(vodLabel)
 	reportRunID = strings.TrimSpace(reportRunID)
+	if !isSafeResourceID(vodLabel) || (reportRunID != "" && !isSafeResourceID(reportRunID)) {
+		return "", errors.New("invalid report identifier")
+	}
 	if reportRunID != "" && s.config.ReportCatalog == nil {
 		return filepath.Join(s.config.ProcessedRoot, vodLabel, "reports", reportRunID, reportstore.JSONReportName), nil
 	}
 
 	summaries, err := s.listReportSummaries(ctx, vodLabel)
+	if err != nil {
+		return "", err
+	}
+	for _, summary := range summaries {
+		if reportRunID == "" || summary.RunID == reportRunID {
+			return summary.JSONPath, nil
+		}
+	}
+	return "", nil
+}
+
+func (s *Server) resolveUserReportPath(ctx context.Context, userID string, vodLabel string, reportRunID string) (string, error) {
+	vodLabel = strings.TrimSpace(vodLabel)
+	reportRunID = strings.TrimSpace(reportRunID)
+	if !isSafeResourceID(userID) || !isSafeResourceID(vodLabel) || (reportRunID != "" && !isSafeResourceID(reportRunID)) {
+		return "", errors.New("invalid report identifier")
+	}
+	summaries, err := s.listUserReportSummaries(ctx, userID, vodLabel)
 	if err != nil {
 		return "", err
 	}
@@ -1917,7 +2132,14 @@ func reportCatalogSummaryToAPI(summary app.ReportCatalogSummary) ReportSummary {
 }
 
 func (s *Server) listReports(vodLabel string) ([]reportIndexItem, error) {
-	root := filepath.Join(s.config.ProcessedRoot, vodLabel, "reports")
+	return s.listReportsAtRoot(s.config.ProcessedRoot, vodLabel)
+}
+
+func (s *Server) listReportsAtRoot(processedRoot string, vodLabel string) ([]reportIndexItem, error) {
+	if !isSafeResourceID(strings.TrimSpace(vodLabel)) {
+		return nil, errors.New("invalid VOD label")
+	}
+	root := filepath.Join(processedRoot, vodLabel, "reports")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2066,13 +2288,13 @@ func (s *Server) listEvaluationAnnotations(vodLabel string) ([]annotationIndexIt
 	return annotations, nil
 }
 
-func (s *Server) runEvaluation(ctx context.Context, request EvaluationRunRequest) (domain.GameplayEvaluationReport, app.SavedEvaluation, error) {
+func (s *Server) runEvaluation(ctx context.Context, userID string, request EvaluationRunRequest) (domain.GameplayEvaluationReport, app.SavedEvaluation, error) {
 	vodLabel := strings.TrimSpace(request.VODLabel)
 	if vodLabel == "" {
 		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, errors.New("vod_label is required")
 	}
 
-	reportPath, err := s.resolveEvaluationReportPath(ctx, vodLabel, request.ReportRunID)
+	reportPath, err := s.resolveEvaluationReportPath(ctx, userID, vodLabel, request.ReportRunID)
 	if err != nil {
 		return domain.GameplayEvaluationReport{}, app.SavedEvaluation{}, err
 	}
@@ -2112,8 +2334,8 @@ func (s *Server) runEvaluation(ctx context.Context, request EvaluationRunRequest
 	return evaluation, saved, nil
 }
 
-func (s *Server) resolveEvaluationReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
-	reportPath, err := s.resolveReportPath(ctx, vodLabel, reportRunID)
+func (s *Server) resolveEvaluationReportPath(ctx context.Context, userID string, vodLabel string, reportRunID string) (string, error) {
+	reportPath, err := s.resolveUserReportPath(ctx, userID, vodLabel, reportRunID)
 	if err != nil {
 		return "", err
 	}
@@ -2314,6 +2536,16 @@ func (s *analysisJobStore) get(jobID string) (AnalysisJobResponse, bool) {
 	return job.AnalysisJobResponse, true
 }
 
+func (s *analysisJobStore) getForUser(jobID string, ownerID string, includeAll bool) (AnalysisJobResponse, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	job, ok := s.jobs[jobID]
+	if !ok || (!includeAll && job.OwnerID != ownerID) {
+		return AnalysisJobResponse{}, false
+	}
+	return job.AnalysisJobResponse, true
+}
+
 func (s *analysisJobStore) snapshot(jobID string) AnalysisJobResponse {
 	job, ok := s.get(jobID)
 	if !ok {
@@ -2375,6 +2607,7 @@ type serverMetrics struct {
 
 type authSession struct {
 	Token     string
+	CSRFToken string
 	User      app.PublicAuthUser
 	ExpiresAt time.Time
 }
@@ -2407,33 +2640,39 @@ func newAuthSessionStore(ttl time.Duration) *authSessionStore {
 	return &authSessionStore{ttl: ttl, sessions: map[string]authSession{}}
 }
 
-func (s *authSessionStore) create(user app.PublicAuthUser) (string, error) {
+func (s *authSessionStore) create(user app.PublicAuthUser) (authSession, error) {
 	token, err := app.NewAuthToken()
 	if err != nil {
-		return "", err
+		return authSession{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[token] = authSession{
+	csrfToken, err := app.NewAuthToken()
+	if err != nil {
+		return authSession{}, err
+	}
+	session := authSession{
 		Token:     token,
+		CSRFToken: csrfToken,
 		User:      user,
 		ExpiresAt: time.Now().UTC().Add(s.ttl),
 	}
-	return token, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[token] = session
+	return session, nil
 }
 
-func (s *authSessionStore) get(token string) (app.PublicAuthUser, bool) {
+func (s *authSessionStore) get(token string) (authSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[token]
 	if !ok {
-		return app.PublicAuthUser{}, false
+		return authSession{}, false
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
 		delete(s.sessions, token)
-		return app.PublicAuthUser{}, false
+		return authSession{}, false
 	}
-	return session.User, true
+	return session, true
 }
 
 func (s *authSessionStore) delete(token string) {
@@ -2624,6 +2863,28 @@ func boolGauge(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) error {
+	if r.Body == nil {
+		return errors.New("request body is required")
+	}
+	if maxBytes <= 0 {
+		maxBytes = 1 << 20
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain exactly one JSON object")
+		}
+		return fmt.Errorf("request body must contain exactly one JSON object: %w", err)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

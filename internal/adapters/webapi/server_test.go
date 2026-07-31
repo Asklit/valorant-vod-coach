@@ -111,6 +111,10 @@ func TestServerUploadsStreamsAndAnalyzesOwnedVOD(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"run_id": "upload_analysis"`) {
 		t.Fatalf("analysis expected 200, got %d: %s", response.Code, response.Body.String())
 	}
+	processedUploadRoot := filepath.Join(fixture.outRoot, "users", token.user.ID, "analyses", uploaded.VOD.Label)
+	if _, err := os.Stat(processedUploadRoot); err != nil {
+		t.Fatalf("processed upload artifacts must exist before deletion: %v", err)
+	}
 
 	request = httptest.NewRequest(http.MethodPatch, "/api/vods/"+uploaded.VOD.Label, bytes.NewBufferString(`{"title":"Updated upload","rank":"ascendant","map":"Abyss","agent":"Jett"}`))
 	authorize(request, token)
@@ -127,7 +131,7 @@ func TestServerUploadsStreamsAndAnalyzesOwnedVOD(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"deleted": true`) {
 		t.Fatalf("delete expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(fixture.outRoot, uploaded.VOD.Label)); !os.IsNotExist(err) {
+	if _, err := os.Stat(processedUploadRoot); !os.IsNotExist(err) {
 		t.Fatalf("processed upload artifacts must be removed, got %v", err)
 	}
 }
@@ -218,7 +222,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 		t.Fatalf("unexpected analysis response:\n%s", got)
 	}
 
-	reportPath := filepath.Join(fixture.outRoot, "diamond_example", "reports", "api_test", "report.json")
+	reportPath := filepath.Join(fixture.outRoot, "users", token.user.ID, "analyses", "diamond_example", "reports", "api_test", "report.json")
 	if _, err := os.Stat(reportPath); err != nil {
 		t.Fatalf("expected report file: %v", err)
 	}
@@ -245,7 +249,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 10`) ||
+		!strings.Contains(got, `"schema_version": 11`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
 	}
@@ -547,6 +551,13 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
 	token := registerTestAdmin(t, server)
+	reportDir := filepath.Join(fixture.outRoot, "diamond_example", "reports", "api_test")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("mkdir report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "report.json"), []byte(`{"run_id":"api_test","vod":{"label":"diamond_example"}}`), 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
 
 	body := bytes.NewBufferString(`{
   "vod_label": "diamond_example",
@@ -571,7 +582,7 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 		t.Fatalf("unexpected correction response:\n%s", got)
 	}
 
-	correctionsPath := filepath.Join(fixture.outRoot, "corrections", "diamond_example", "api_test", app.ManualCorrectionsJSONName)
+	correctionsPath := filepath.Join(fixture.outRoot, "users", token.user.ID, "data", "corrections", "diamond_example", "api_test", app.ManualCorrectionsJSONName)
 	if _, err := os.Stat(correctionsPath); err != nil {
 		t.Fatalf("expected corrections file: %v", err)
 	}
@@ -658,7 +669,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
 
-	body := bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass","display_name":"Coach"}`)
+	body := bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass","display_name":"Coach","setup_token":"test-bootstrap-token"}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -670,7 +681,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &auth); err != nil {
 		t.Fatalf("decode auth response: %v", err)
 	}
-	if auth.Token == "" || auth.User.Role != app.AuthRoleAdmin {
+	if auth.CSRFToken == "" || auth.User.Role != app.AuthRoleAdmin {
 		t.Fatalf("unexpected auth response: %+v", auth)
 	}
 	sessionCookie := response.Result().Cookies()[0]
@@ -687,7 +698,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 		t.Fatalf("expected admin overview 200, got %d: %s", response.Code, response.Body.String())
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"user_count": 1`) ||
-		!strings.Contains(got, `"schema_version": 10`) ||
+		!strings.Contains(got, `"schema_version": 11`) ||
 		!strings.Contains(got, `"readiness"`) ||
 		!strings.Contains(got, `"vision_service"`) {
 		t.Fatalf("unexpected admin overview:\n%s", got)
@@ -695,6 +706,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 
 	request = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
 	request.AddCookie(sessionCookie)
+	request.Header.Set(csrfHeaderName, auth.CSRFToken)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -745,7 +757,7 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 10`) ||
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 11`) ||
 		!strings.Contains(got, `"analyzer": "valorant-hud-cv-v2"`) ||
 		!strings.Contains(got, `"model_review_configured": false`) ||
 		!strings.Contains(got, `"model_review_available": false`) ||
@@ -757,6 +769,7 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 func TestServerDiagnosticsEndpoints(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
@@ -785,6 +798,7 @@ func TestServerDiagnosticsEndpoints(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	authorize(request, token)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -812,7 +826,7 @@ func TestServerMetricsEndpoint(t *testing.T) {
 	}
 	got := response.Body.String()
 	for _, expected := range []string{
-		`vodcoach_info{schema_version="10",analyzer="valorant-hud-cv-v2"} 1`,
+		`vodcoach_info{schema_version="11",analyzer="valorant-hud-cv-v2"} 1`,
 		`vodcoach_model_review_configured 1`,
 		`vodcoach_http_requests_total{method="GET",route="/api/health",status="200"} 1`,
 		`vodcoach_analysis_jobs_total{status="completed"} 0`,
@@ -934,6 +948,7 @@ esac
 			FFprobePath:               ffprobePath,
 			FFmpegPath:                ffmpegPath,
 			AuthHashIterations:        4,
+			BootstrapAdminToken:       "test-bootstrap-token",
 		},
 		outRoot: outRoot,
 	}
@@ -949,15 +964,21 @@ func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, vodLabel stri
 	return c.summaries, nil
 }
 
-func registerTestAdmin(t *testing.T, server *Server) string {
+type testAuth struct {
+	cookie    *http.Cookie
+	csrfToken string
+	user      app.PublicAuthUser
+}
+
+func registerTestAdmin(t *testing.T, server *Server) testAuth {
 	t.Helper()
 	return registerTestAccount(t, server, "coach@example.com")
 }
 
-func registerTestAccount(t *testing.T, server *Server, email string) string {
+func registerTestAccount(t *testing.T, server *Server, email string) testAuth {
 	t.Helper()
 
-	body := bytes.NewBufferString(fmt.Sprintf(`{"email":%q,"password":"secret-pass","display_name":"Coach"}`, email))
+	body := bytes.NewBufferString(fmt.Sprintf(`{"email":%q,"password":"secret-pass","display_name":"Coach","setup_token":"test-bootstrap-token"}`, email))
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -969,13 +990,17 @@ func registerTestAccount(t *testing.T, server *Server, email string) string {
 	if err := json.Unmarshal(response.Body.Bytes(), &auth); err != nil {
 		t.Fatalf("decode auth response: %v", err)
 	}
-	if auth.Token == "" {
-		t.Fatalf("expected auth token: %+v", auth)
+	if auth.CSRFToken == "" {
+		t.Fatalf("expected CSRF token: %+v", auth)
 	}
-	return auth.Token
+	cookies := response.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected session cookie")
+	}
+	return testAuth{cookie: cookies[0], csrfToken: auth.CSRFToken, user: auth.User}
 }
 
-func uploadTestVOD(t *testing.T, server *Server, token string) UploadVODResponse {
+func uploadTestVOD(t *testing.T, server *Server, token testAuth) UploadVODResponse {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -1010,6 +1035,9 @@ func uploadTestVOD(t *testing.T, server *Server, token string) UploadVODResponse
 	return uploaded
 }
 
-func authorize(request *http.Request, token string) {
-	request.Header.Set("Authorization", "Bearer "+token)
+func authorize(request *http.Request, auth testAuth) {
+	request.AddCookie(auth.cookie)
+	if isUnsafeMethod(request.Method) {
+		request.Header.Set(csrfHeaderName, auth.csrfToken)
+	}
 }

@@ -25,10 +25,14 @@ func (e LockAlreadyHeldError) Error() string {
 	return fmt.Sprintf("analysis lock already held: %s", e.Key)
 }
 
-func analysisLockKey(vodLabel string) string {
+func analysisLockKey(ownerID string, vodLabel string) string {
+	owner := strings.TrimSpace(strings.ToLower(ownerID))
+	if owner == "" {
+		owner = "system"
+	}
 	cleaned := strings.TrimSpace(strings.ToLower(vodLabel))
 	if cleaned == "" {
 		cleaned = "unknown"
 	}
-	return "analysis:vod:" + cleaned
+	return "analysis:owner:" + owner + ":vod:" + cleaned
 }

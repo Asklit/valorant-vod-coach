@@ -19,9 +19,10 @@ func TestAuthStoreRegistersFirstUserAsAdmin(t *testing.T) {
 	}
 
 	admin, err := store.Register(context.Background(), AuthRegisterRequest{
-		Email:       "Coach@Example.com",
-		Password:    "secret-pass",
-		DisplayName: "Coach",
+		Email:          "Coach@Example.com",
+		Password:       "secret-pass",
+		DisplayName:    "Coach",
+		BootstrapAdmin: true,
 	})
 	if err != nil {
 		t.Fatalf("register admin: %v", err)
@@ -53,11 +54,23 @@ func TestAuthStoreRegistersFirstUserAsAdmin(t *testing.T) {
 	}
 }
 
+func TestAuthStoreRejectsImplicitFirstAdmin(t *testing.T) {
+	store := AuthStore{Path: filepath.Join(t.TempDir(), "users.json"), Iterations: 4}
+	_, err := store.Register(context.Background(), AuthRegisterRequest{
+		Email:    "player@example.com",
+		Password: "secret-pass",
+	})
+	if err == nil || !strings.Contains(err.Error(), "administrator setup") {
+		t.Fatalf("expected explicit administrator setup error, got %v", err)
+	}
+}
+
 func TestAuthStoreAuthenticatesUser(t *testing.T) {
 	store := AuthStore{Path: filepath.Join(t.TempDir(), "users.json"), Iterations: 4}
 	registered, err := store.Register(context.Background(), AuthRegisterRequest{
-		Email:    "player@example.com",
-		Password: "secret-pass",
+		Email:          "player@example.com",
+		Password:       "secret-pass",
+		BootstrapAdmin: true,
 	})
 	if err != nil {
 		t.Fatalf("register: %v", err)
