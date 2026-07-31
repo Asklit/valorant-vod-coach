@@ -46,6 +46,8 @@ func TestLocalStoreWritesJSONAndMarkdownReports(t *testing.T) {
 		!strings.Contains(string(rawMarkdown), "Gameplay Events") ||
 		!strings.Contains(string(rawMarkdown), "Model Review Tasks") ||
 		!strings.Contains(string(rawMarkdown), "Model Review Results") ||
+		!strings.Contains(string(rawMarkdown), "Evidence-First Coach Review") ||
+		!strings.Contains(string(rawMarkdown), "candidate_combat_spike") ||
 		!strings.Contains(string(rawMarkdown), "Combat review candidate") ||
 		!strings.Contains(string(rawMarkdown), "High-impact fight window") ||
 		!strings.Contains(string(rawMarkdown), "Baseline finding") ||
@@ -185,6 +187,13 @@ func sampleReport() domain.AnalysisReport {
 						{ArtifactType: "frame", Path: "frames/frame_000016.jpg", TimestampSeconds: 16, FrameIndex: 16},
 					},
 				},
+			},
+			CoachReview: &domain.CoachReview{
+				SchemaVersion: domain.CoachReviewSchemaVersion,
+				Engine: "evidence-coach-v1", Method: "guided assessment", Status: "guided_review_required",
+				Summary: "One moment requires confirmation.",
+				EvidenceQuality: domain.CoachEvidenceQuality{Score: .7, Level: "fair", MacroReviewReady: true, MicroReviewReady: true},
+				Decisions: []domain.CoachDecision{{ID: "coach_review_01", RuleID: "candidate_combat_spike", Assessment: "needs_confirmation", Title: "Confirm fight", Observation: "A visual spike was detected.", TimestampSeconds: 16, ClipPath: "/tmp/review.mp4"}},
 			},
 		},
 		Findings: []domain.Finding{

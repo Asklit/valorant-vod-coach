@@ -49,15 +49,16 @@ type Config struct {
 }
 
 type Server struct {
-	config  Config
-	mux     *http.ServeMux
-	jobs    *analysisJobStore
-	metrics *serverMetrics
-	auth    *authSessionStore
-	users   *app.AuthStore
-	logs    *requestLogStore
-	logger  *slog.Logger
-	tracer  trace.Tracer
+	config   Config
+	mux      *http.ServeMux
+	jobs     *analysisJobStore
+	metrics  *serverMetrics
+	auth     *authSessionStore
+	users    *app.AuthStore
+	logs     *requestLogStore
+	logger   *slog.Logger
+	tracer   trace.Tracer
+	guidedMu sync.Mutex
 }
 
 type VODItem struct {
@@ -257,6 +258,37 @@ type ManualCorrectionResponse struct {
 	JSONPath    string                    `json:"json_path"`
 }
 
+type CoachAssessmentRequest struct {
+	VODLabel    string            `json:"vod_label"`
+	ReportRunID string            `json:"report_run_id"`
+	WindowID    string            `json:"window_id"`
+	Answers     map[string]string `json:"answers"`
+}
+
+type CoachFeedbackRequest struct {
+	VODLabel    string `json:"vod_label"`
+	ReportRunID string `json:"report_run_id"`
+	WindowID    string `json:"window_id"`
+	Verdict     string `json:"verdict"`
+	Comment     string `json:"comment,omitempty"`
+}
+
+type CoachAssessmentsResponse struct {
+	VODLabel    string                          `json:"vod_label"`
+	ReportRunID string                          `json:"report_run_id"`
+	Progress    CoachReviewProgress             `json:"progress"`
+	Assessments []domain.GuidedReviewAssessment `json:"assessments"`
+	JSONPath    string                          `json:"json_path"`
+}
+
+type CoachReviewProgress struct {
+	Total         int `json:"total"`
+	Completed     int `json:"completed"`
+	Actionable    int `json:"actionable"`
+	Neutral       int `json:"neutral"`
+	NotApplicable int `json:"not_applicable"`
+}
+
 type ReportSummary struct {
 	SchemaVersion     int       `json:"schema_version"`
 	RunID             string    `json:"run_id"`
@@ -453,6 +485,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/evaluations", s.handleEvaluations)
 	s.mux.HandleFunc("GET /api/corrections", s.handleListCorrections)
 	s.mux.HandleFunc("POST /api/corrections", s.handleCreateCorrection)
+	s.mux.HandleFunc("GET /api/coach-assessments", s.handleListCoachAssessments)
+	s.mux.HandleFunc("POST /api/coach-assessments", s.handleCreateCoachAssessment)
+	s.mux.HandleFunc("POST /api/coach-feedback", s.handleCoachFeedback)
 	s.mux.HandleFunc("GET /api/reports", s.handleReports)
 	s.mux.HandleFunc("GET /api/reports/latest", s.handleLatestReport)
 	s.mux.HandleFunc("GET /api/reports/", s.handleReportByPath)
@@ -1273,6 +1308,85 @@ func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) handleListCoachAssessments(w http.ResponseWriter, r *http.Request) {
+	label := strings.TrimSpace(r.URL.Query().Get("vod_label"))
+	runID := strings.TrimSpace(r.URL.Query().Get("report_run_id"))
+	if label == "" || runID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label and report_run_id are required"))
+		return
+	}
+	report, err := s.loadReportByID(r.Context(), label, runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	set, saved, err := app.LoadGuidedReviews(s.guidedReviewsRoot(), label, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, coachAssessmentsResponse(report, set, saved))
+}
+
+func (s *Server) handleCreateCoachAssessment(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var request CoachAssessmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	if strings.TrimSpace(request.VODLabel) == "" || strings.TrimSpace(request.ReportRunID) == "" || strings.TrimSpace(request.WindowID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label, report_run_id, and window_id are required"))
+		return
+	}
+	report, err := s.loadReportByID(r.Context(), request.VODLabel, request.ReportRunID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	user, _ := s.currentUser(r)
+	s.guidedMu.Lock()
+	set, saved, err := app.SaveGuidedAssessment(r.Context(), s.guidedReviewsRoot(), app.EvidenceCoachEngine{}, app.SaveGuidedAssessmentRequest{
+		Report: report, WindowID: request.WindowID, Answers: request.Answers, Author: user.Email, Now: time.Now().UTC(),
+	})
+	s.guidedMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, coachAssessmentsResponse(report, set, saved))
+}
+
+func (s *Server) handleCoachFeedback(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var request CoachFeedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	if strings.TrimSpace(request.VODLabel) == "" || strings.TrimSpace(request.ReportRunID) == "" || strings.TrimSpace(request.WindowID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("vod_label, report_run_id, and window_id are required"))
+		return
+	}
+	report, err := s.loadReportByID(r.Context(), request.VODLabel, request.ReportRunID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	user, _ := s.currentUser(r)
+	s.guidedMu.Lock()
+	set, saved, err := app.SaveCoachFeedback(r.Context(), s.guidedReviewsRoot(), app.SaveCoachFeedbackRequest{
+		VODLabel: request.VODLabel, ReportRunID: request.ReportRunID, WindowID: request.WindowID,
+		Verdict: request.Verdict, Comment: request.Comment, Author: user.Email, Now: time.Now().UTC(),
+	})
+	s.guidedMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, coachAssessmentsResponse(report, set, saved))
+}
+
 func (s *Server) handleRunEvaluation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -1371,6 +1485,50 @@ func (s *Server) listReportSummaries(ctx context.Context, vodLabel string) ([]Re
 
 func (s *Server) correctionsRoot() string {
 	return filepath.Join(s.config.ProcessedRoot, "corrections")
+}
+
+func (s *Server) guidedReviewsRoot() string {
+	return filepath.Join(s.config.ProcessedRoot, "coaching")
+}
+
+func (s *Server) loadReportByID(ctx context.Context, vodLabel string, reportRunID string) (domain.AnalysisReport, error) {
+	path, err := s.resolveReportPath(ctx, strings.TrimSpace(vodLabel), strings.TrimSpace(reportRunID))
+	if err != nil {
+		return domain.AnalysisReport{}, err
+	}
+	if path == "" {
+		return domain.AnalysisReport{}, fmt.Errorf("no report %s for %s", reportRunID, vodLabel)
+	}
+	report, err := readReport(path)
+	if err != nil {
+		return domain.AnalysisReport{}, fmt.Errorf("read report: %w", err)
+	}
+	return report, nil
+}
+
+func coachAssessmentsResponse(report domain.AnalysisReport, set domain.GuidedReviewSet, saved app.SavedGuidedReviews) CoachAssessmentsResponse {
+	total := 0
+	if report.Gameplay != nil && report.Gameplay.CoachReview != nil {
+		total = len(report.Gameplay.CoachReview.Decisions)
+	}
+	progress := CoachReviewProgress{Total: total}
+	for _, assessment := range set.Assessments {
+		switch assessment.Result.Assessment {
+		case "validated_mistake", "validated_risk":
+			progress.Completed++
+			progress.Actionable++
+		case "validated_neutral":
+			progress.Completed++
+			progress.Neutral++
+		case "not_applicable":
+			progress.Completed++
+			progress.NotApplicable++
+		}
+	}
+	return CoachAssessmentsResponse{
+		VODLabel: set.VODLabel, ReportRunID: set.ReportRunID, Progress: progress,
+		Assessments: set.Assessments, JSONPath: saved.JSONPath,
+	}
 }
 
 func (s *Server) resolveReportPath(ctx context.Context, vodLabel string, reportRunID string) (string, error) {
@@ -1711,6 +1869,17 @@ func readReport(path string) (domain.AnalysisReport, error) {
 	var report domain.AnalysisReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return domain.AnalysisReport{}, err
+	}
+	if report.Gameplay != nil && report.Gameplay.CoachReview == nil {
+		review, err := (app.EvidenceCoachEngine{}).BuildReview(context.Background(), app.CoachReviewRequest{
+			VOD: report.VOD, Media: report.Media, Sample: report.Sample, Gameplay: *report.Gameplay,
+		})
+		if err != nil {
+			return domain.AnalysisReport{}, err
+		}
+		report.Gameplay.CoachReview = review
+		report.Gameplay.Coach = app.SummarizeCoachReview(review)
+		report.Metadata.CoachEngine = review.Engine
 	}
 	return report, nil
 }
@@ -2053,6 +2222,10 @@ func metricRoute(path string) string {
 		return "/api/evaluations"
 	case path == "/api/corrections":
 		return "/api/corrections"
+	case path == "/api/coach-assessments":
+		return "/api/coach-assessments"
+	case path == "/api/coach-feedback":
+		return "/api/coach-feedback"
 	case path == "/api/reports":
 		return "/api/reports"
 	case path == "/api/reports/latest":
@@ -2081,6 +2254,8 @@ func adminRouteList() []string {
 		"/api/reports",
 		"/api/evaluations",
 		"/api/corrections",
+		"/api/coach-assessments",
+		"/api/coach-feedback",
 		"/artifacts/*",
 	}
 }

@@ -141,6 +141,36 @@ func renderMarkdown(report domain.AnalysisReport) []byte {
 			fmt.Fprintf(&buf, "\n")
 		}
 
+		if report.Gameplay.CoachReview != nil {
+			review := report.Gameplay.CoachReview
+			fmt.Fprintf(&buf, "### Evidence-First Coach Review\n\n")
+			fmt.Fprintf(&buf, "- Engine: `%s`\n", review.Engine)
+			fmt.Fprintf(&buf, "- Method: %s\n", review.Method)
+			fmt.Fprintf(&buf, "- Status: `%s`\n", review.Status)
+			fmt.Fprintf(&buf, "- Evidence quality: `%s` %.0f%%\n", review.EvidenceQuality.Level, review.EvidenceQuality.Score*100)
+			fmt.Fprintf(&buf, "- Macro review ready: `%t`\n", review.EvidenceQuality.MacroReviewReady)
+			fmt.Fprintf(&buf, "- Micro review ready: `%t`\n", review.EvidenceQuality.MicroReviewReady)
+			fmt.Fprintf(&buf, "- Summary: %s\n\n", review.Summary)
+			if len(review.Limitations) > 0 {
+				fmt.Fprintf(&buf, "#### Evidence Limits\n\n")
+				for _, limitation := range review.Limitations {
+					fmt.Fprintf(&buf, "- %s\n", limitation)
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+			if len(review.Decisions) > 0 {
+				fmt.Fprintf(&buf, "#### Guided Decisions\n\n")
+				for _, decision := range review.Decisions {
+					fmt.Fprintf(&buf, "- %.3fs `%s` `%s`: %s - %s", decision.TimestampSeconds, decision.Assessment, decision.RuleID, decision.Title, decision.Observation)
+					if decision.ClipPath != "" {
+						fmt.Fprintf(&buf, " Clip: `%s`", decision.ClipPath)
+					}
+					fmt.Fprintf(&buf, "\n")
+				}
+				fmt.Fprintf(&buf, "\n")
+			}
+		}
+
 		if len(report.Gameplay.PhaseProfile) > 0 {
 			fmt.Fprintf(&buf, "### Phase Profile\n\n")
 			for _, phase := range report.Gameplay.PhaseProfile {

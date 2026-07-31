@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  ChevronRight,
   Clock3,
   Crosshair,
   Database,
@@ -10,6 +11,7 @@ import {
   FileText,
   Gauge,
   History,
+  Eye,
   Lightbulb,
   Link2,
   LogOut,
@@ -18,8 +20,11 @@ import {
   RefreshCw,
   Search,
   Shield,
+  ThumbsDown,
+  ThumbsUp,
   Timer,
-  Video
+  Video,
+  XCircle
 } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -132,6 +137,65 @@ type ReviewWindow = {
   evidence?: Finding["evidence"];
 };
 
+type CoachRecommendation = {
+  summary: string;
+  why_it_matters: string;
+  better_action: string;
+  drill: string;
+  checkpoint: string;
+};
+
+type CoachQuestion = {
+  id: string;
+  prompt: string;
+  required: boolean;
+  options: Array<{ value: string; label: string }>;
+};
+
+type CoachDecision = {
+  id: string;
+  rule_id: string;
+  window_id: string;
+  kind: string;
+  assessment: string;
+  severity: string;
+  title: string;
+  observation: string;
+  why_review: string;
+  confidence: number;
+  timestamp_seconds: number;
+  start_seconds: number;
+  end_seconds: number;
+  round_number?: number;
+  clip_path?: string;
+  clip_duration_seconds?: number;
+  evidence?: Finding["evidence"];
+  requirements?: Array<{ id: string; label: string; status: string; detail?: string }>;
+  questions?: CoachQuestion[];
+  recommendation?: CoachRecommendation;
+  tags?: string[];
+};
+
+type CoachReview = {
+  schema_version: number;
+  engine: string;
+  method: string;
+  status: string;
+  summary: string;
+  evidence_quality: {
+    score: number;
+    level: string;
+    frame_coverage: number;
+    hud_signal?: number;
+    minimap_signal?: number;
+    has_audio: boolean;
+    macro_review_ready: boolean;
+    micro_review_ready: boolean;
+  };
+  decisions: CoachDecision[];
+  limitations?: string[];
+};
+
 type CoachSummary = {
   verdict: string;
   confidence: number;
@@ -221,6 +285,7 @@ type GameplaySummary = {
   average_hud_signal?: number;
   peak_combat_score?: number;
   coach?: CoachSummary;
+  coach_review?: CoachReview;
   phase_profile?: PhaseStat[];
   round_segments?: RoundSegment[];
   gameplay_events?: GameplayEvent[];
@@ -277,6 +342,7 @@ type Report = {
   }>;
   metadata: {
     analyzer: string;
+    coach_engine?: string;
     mode: string;
   };
 };
@@ -376,6 +442,34 @@ type ManualCorrectionResponse = {
   json_path: string;
 };
 
+type GuidedReviewAssessment = {
+  id: string;
+  decision_id: string;
+  window_id: string;
+  answers: Record<string, string>;
+  result: CoachDecision;
+  author?: string;
+  created_at: string;
+  updated_at: string;
+  feedback?: { verdict: string; comment?: string; author?: string; updated_at: string };
+};
+
+type CoachReviewProgress = {
+  total: number;
+  completed: number;
+  actionable: number;
+  neutral: number;
+  not_applicable: number;
+};
+
+type CoachAssessmentsResponse = {
+  vod_label: string;
+  report_run_id: string;
+  progress: CoachReviewProgress;
+  assessments: GuidedReviewAssessment[];
+  json_path: string;
+};
+
 type AdminOverview = {
   generated_at: string;
   user: AuthUser;
@@ -466,6 +560,9 @@ export function App() {
   const [evaluationAnnotations, setEvaluationAnnotations] = useState<EvaluationAnnotationSummary[]>([]);
   const [manualCorrections, setManualCorrections] = useState<ManualCorrection[]>([]);
   const [manualCorrectionsPath, setManualCorrectionsPath] = useState("");
+	const [coachAssessments, setCoachAssessments] = useState<GuidedReviewAssessment[]>([]);
+	const [coachProgress, setCoachProgress] = useState<CoachReviewProgress | null>(null);
+	const [coachAssessmentsPath, setCoachAssessmentsPath] = useState("");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminMetrics, setAdminMetrics] = useState<AdminMetricsResponse | null>(null);
@@ -477,11 +574,11 @@ export function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [savingCorrection, setSavingCorrection] = useState(false);
+	const [savingCoachReview, setSavingCoachReview] = useState(false);
   const [error, setError] = useState("");
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
   const [fullVod, setFullVod] = useState(false);
-  const [modelReview, setModelReview] = useState(false);
   const [correctionType, setCorrectionType] = useState("false_detection");
   const [correctionTargetID, setCorrectionTargetID] = useState("");
   const [correctionValue, setCorrectionValue] = useState("");
@@ -506,7 +603,6 @@ export function App() {
       return rankOk && queryOk;
     });
   }, [query, rank, vods]);
-  const modelReviewAvailable = Boolean(backendHealth?.model_review_available);
   const latestReportSummary = reportHistory.find((item) => item.run_id === report?.run_id) ?? reportHistory[0] ?? null;
   const correctionTargets = useMemo(() => buildCorrectionTargets(report), [report]);
 
@@ -545,9 +641,13 @@ export function App() {
     if (!selectedLabel || !report?.run_id) {
       setManualCorrections([]);
       setManualCorrectionsPath("");
+		setCoachAssessments([]);
+		setCoachProgress(null);
+		setCoachAssessmentsPath("");
       return;
     }
     void loadManualCorrections(selectedLabel, report.run_id);
+	void loadCoachAssessments(selectedLabel, report.run_id);
   }, [selectedLabel, report?.run_id]);
 
   useEffect(() => {
@@ -722,6 +822,21 @@ export function App() {
     }
   }
 
+	async function loadCoachAssessments(label: string, runID: string) {
+		try {
+			const response = await fetch(apiURL(`/api/coach-assessments?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`), { headers: authHeaders });
+			if (!response.ok) { throw new Error(await readError(response)); }
+			const payload = (await response.json()) as CoachAssessmentsResponse;
+			setCoachAssessments(payload.assessments);
+			setCoachProgress(payload.progress);
+			setCoachAssessmentsPath(payload.json_path);
+		} catch {
+			setCoachAssessments([]);
+			setCoachProgress(null);
+			setCoachAssessmentsPath("");
+		}
+	}
+
   async function loadAdmin() {
     try {
       const [overview, metrics, logs, users] = await Promise.all([
@@ -765,7 +880,7 @@ export function App() {
           image_quality: 3,
           duration_seconds: fullVod ? 0 : runDuration,
           force: true,
-          model_review: modelReview && modelReviewAvailable,
+		  model_review: false,
           async: true
         })
       });
@@ -875,6 +990,44 @@ export function App() {
     }
   }
 
+	async function saveCoachAssessment(windowID: string, answers: Record<string, string>) {
+		if (!selectedVod || !report || savingCoachReview) { return; }
+		setSavingCoachReview(true);
+		setError("");
+		try {
+			const response = await fetch(apiURL("/api/coach-assessments"), {
+				method: "POST", headers: jsonHeaders,
+				body: JSON.stringify({ vod_label: selectedVod.label, report_run_id: report.run_id, window_id: windowID, answers })
+			});
+			if (!response.ok) { throw new Error(await readError(response)); }
+			const payload = (await response.json()) as CoachAssessmentsResponse;
+			setCoachAssessments(payload.assessments);
+			setCoachProgress(payload.progress);
+			setCoachAssessmentsPath(payload.json_path);
+		} catch (err) {
+			setError(messageFromError(err));
+		} finally {
+			setSavingCoachReview(false);
+		}
+	}
+
+	async function rateCoachRecommendation(windowID: string, verdict: string) {
+		if (!selectedVod || !report) { return; }
+		setError("");
+		try {
+			const response = await fetch(apiURL("/api/coach-feedback"), {
+				method: "POST", headers: jsonHeaders,
+				body: JSON.stringify({ vod_label: selectedVod.label, report_run_id: report.run_id, window_id: windowID, verdict })
+			});
+			if (!response.ok) { throw new Error(await readError(response)); }
+			const payload = (await response.json()) as CoachAssessmentsResponse;
+			setCoachAssessments(payload.assessments);
+			setCoachProgress(payload.progress);
+		} catch (err) {
+			setError(messageFromError(err));
+		}
+	}
+
   function selectVOD(label: string) {
     setSelectedLabel(label);
     setPage("review");
@@ -976,17 +1129,18 @@ export function App() {
           <ReviewPage
             analysisJob={analysisJob}
             analyzing={analyzing}
-            backendHealth={backendHealth}
+			coachAssessments={coachAssessments}
+			coachProgress={coachProgress}
             fullVod={fullVod}
-            modelReview={modelReview}
-            modelReviewAvailable={modelReviewAvailable}
             report={report}
+			rateCoachRecommendation={(windowID, verdict) => void rateCoachRecommendation(windowID, verdict)}
             runAnalysis={() => void runAnalysis()}
             runDuration={runDuration}
             runFps={runFps}
+			saveCoachAssessment={(windowID, answers) => void saveCoachAssessment(windowID, answers)}
+			savingCoachReview={savingCoachReview}
             selectedVod={selectedVod}
             setFullVod={setFullVod}
-            setModelReview={setModelReview}
             setRunDuration={setRunDuration}
             setRunFps={setRunFps}
             setPage={setPage}
@@ -996,6 +1150,9 @@ export function App() {
         )}
         {page === "reports" && (
           <ReportsPage
+			coachAssessments={coachAssessments}
+			coachAssessmentsPath={coachAssessmentsPath}
+			coachProgress={coachProgress}
             correctionComment={correctionComment}
             correctionTargetID={correctionTargetID}
             correctionTargets={correctionTargets}
@@ -1224,25 +1381,49 @@ function LibraryPage(props: {
 function ReviewPage(props: {
   analysisJob: AnalysisJobResponse | null;
   analyzing: boolean;
-  backendHealth: BackendHealth | null;
+	coachAssessments: GuidedReviewAssessment[];
+	coachProgress: CoachReviewProgress | null;
   fullVod: boolean;
-  modelReview: boolean;
-  modelReviewAvailable: boolean;
+	rateCoachRecommendation: (windowID: string, verdict: string) => void;
   report: Report | null;
   runAnalysis: () => void;
   runDuration: number;
   runFps: string;
+	saveCoachAssessment: (windowID: string, answers: Record<string, string>) => void;
+	savingCoachReview: boolean;
   selectedVod: VODItem | null;
   setFullVod: (value: boolean) => void;
-  setModelReview: (value: boolean) => void;
   setRunDuration: (value: number) => void;
   setRunFps: (value: string) => void;
   setPage: (page: PageID) => void;
   videoRef: RefObject<HTMLVideoElement | null>;
   seekVideo: (seconds: number) => void;
 }) {
-  const windows = props.report?.gameplay?.review_windows ?? [];
-  const focusAreas = props.report?.gameplay?.coach?.focus_areas ?? [];
+	const review = props.report?.gameplay?.coach_review;
+	const decisions = review?.decisions ?? [];
+	const [selectedDecisionID, setSelectedDecisionID] = useState("");
+	const [answers, setAnswers] = useState<Record<string, string>>({});
+	const selectedDecision = decisions.find((decision) => decision.id === selectedDecisionID) ?? decisions[0] ?? null;
+	const assessment = props.coachAssessments.find((item) => item.window_id === selectedDecision?.window_id) ?? null;
+	const result = assessment?.result ?? null;
+
+	useEffect(() => {
+		if (decisions.length === 0) { setSelectedDecisionID(""); return; }
+		if (!decisions.some((decision) => decision.id === selectedDecisionID)) {
+			const pending = decisions.find((decision) => !props.coachAssessments.some((item) => item.window_id === decision.window_id));
+			setSelectedDecisionID((pending ?? decisions[0]).id);
+		}
+	}, [props.report?.run_id, decisions.length]);
+
+	useEffect(() => {
+		setAnswers(assessment?.answers ?? {});
+	}, [selectedDecision?.window_id, assessment?.updated_at]);
+
+	function chooseDecision(decision: CoachDecision) {
+		setSelectedDecisionID(decision.id);
+		props.seekVideo(decision.timestamp_seconds);
+	}
+
   return (
     <>
       <PageHeader eyebrow="Review" title={props.selectedVod?.title ?? "Select a VOD"} detail={props.selectedVod ? `${props.selectedVod.rank} / ${props.selectedVod.duration_text}` : "Choose a VOD from Library."} />
@@ -1275,10 +1456,6 @@ function ReviewPage(props: {
               <input checked={props.fullVod} onChange={(event) => props.setFullVod(event.target.checked)} type="checkbox" />
               <span>Full VOD</span>
             </label>
-            <label className={props.modelReviewAvailable ? "toggle-control" : "toggle-control disabled"}>
-              <input checked={props.modelReview && props.modelReviewAvailable} disabled={!props.modelReviewAvailable} onChange={(event) => props.setModelReview(event.target.checked)} type="checkbox" />
-              <span>Model review</span>
-            </label>
             <button className="run-button" disabled={!props.selectedVod || props.selectedVod.local_status !== "downloaded" || props.analyzing} onClick={props.runAnalysis} type="button">
               <Play size={18} fill="currentColor" />
               {props.analyzing ? "Analyzing" : props.fullVod ? "Run full VOD" : "Run analysis"}
@@ -1296,46 +1473,91 @@ function ReviewPage(props: {
         <section className="surface">
           <div className="surface-heading">
             <div>
-              <p className="eyebrow">Coach output</p>
-              <h2>{props.report?.run_id ?? "No report"}</h2>
+				<p className="eyebrow">Guided review queue</p>
+				<h2>{props.coachProgress ? `${props.coachProgress.completed} / ${props.coachProgress.total} complete` : props.report?.run_id ?? "No report"}</h2>
             </div>
-            <span className="success-chip">
-              <CheckCircle2 size={14} />
-              {props.backendHealth?.analyzer ?? "baseline"}
-            </span>
+			{review && <span className={`quality-chip quality-${review.evidence_quality.level}`}><Eye size={14} />{Math.round(review.evidence_quality.score * 100)}% evidence</span>}
           </div>
-          {props.report ? (
-            <>
-              <div className="stat-grid compact-stats">
-                <Metric compact icon={<Timer size={17} />} label="Frames" value={String(props.report.sample.frame_count)} detail={`${props.report.sample.fps} fps`} />
-                <Metric compact icon={<Activity size={17} />} label="Windows" value={String(windows.length)} detail="review" />
-                <Metric compact icon={<Clock3 size={17} />} label="Rounds" value={String(props.report.gameplay?.round_segment_count ?? 0)} detail="estimated" />
-              </div>
-              <div className="focus-stack">
-                {focusAreas.slice(0, 3).map((area) => (
-                  <article className={`focus-card priority-${area.priority}`} key={area.id}>
-                    <span>{area.priority} / {area.category}</span>
-                    <h3>{area.title}</h3>
-                    <p>{area.detail}</p>
-                  </article>
-                ))}
-                {focusAreas.length === 0 && <EmptyState title="No focus areas" detail="Run a gameplay analysis report." />}
-              </div>
-              <button className="secondary-action" onClick={() => props.setPage("reports")} type="button">
-                <FileText size={16} />
-                Open full report
-              </button>
-            </>
+		  {review ? (
+			<>
+			  <div className="review-progress" aria-label="Guided review progress"><i style={{ width: `${review.decisions.length ? ((props.coachProgress?.completed ?? 0) / review.decisions.length) * 100 : 0}%` }} /></div>
+			  <p className="review-contract-copy">{review.summary}</p>
+			  <div className="coach-queue">
+				{decisions.map((decision) => {
+				  const saved = props.coachAssessments.find((item) => item.window_id === decision.window_id);
+				  return (
+					<button className={selectedDecision?.id === decision.id ? "coach-queue-row active" : "coach-queue-row"} key={decision.id} onClick={() => chooseDecision(decision)} type="button">
+					  <span className={`queue-status assessment-${saved?.result.assessment ?? "pending"}`}>{saved ? <CheckCircle2 size={15} /> : <Clock3 size={15} />}</span>
+					  <span><strong>{decision.title}</strong><small>{decision.kind.replaceAll("_", " ")} / {formatSeconds(decision.timestamp_seconds)}{decision.round_number ? ` / R${decision.round_number}` : ""}</small></span>
+					  <ChevronRight size={16} />
+					</button>
+				  );
+				})}
+			  </div>
+			  <button className="secondary-action" onClick={() => props.setPage("reports")} type="button"><FileText size={16} />Open validated report</button>
+			</>
           ) : (
-            <EmptyState title="No report selected" detail="Run analysis or pick a report from history." />
+			<EmptyState title="No evidence-first report" detail={props.report ? "This report has no gameplay windows. Run a full VOD analysis." : "Run analysis or pick a report from history."} />
           )}
         </section>
       </div>
+
+	  {selectedDecision && (
+		<section className="surface guided-review-workspace">
+		  <div className="guided-review-header">
+			<div>
+			  <p className="eyebrow">Evidence check / {selectedDecision.rule_id}</p>
+			  <h2>{result?.title ?? selectedDecision.title}</h2>
+			  <p>{result?.observation ?? selectedDecision.observation}</p>
+			</div>
+			<button className="seek-button" onClick={() => props.seekVideo(selectedDecision.timestamp_seconds)} type="button"><Play size={14} fill="currentColor" />{formatSeconds(selectedDecision.timestamp_seconds)}</button>
+		  </div>
+
+		  <div className="guided-review-columns">
+			<form className="coach-questionnaire" onSubmit={(event) => { event.preventDefault(); props.saveCoachAssessment(selectedDecision.window_id, answers); }}>
+			  <div className="questionnaire-heading"><span>Confirm only visible facts</span><strong>{Object.keys(answers).length} answered</strong></div>
+			  {(selectedDecision.questions ?? []).map((question) => (
+				<fieldset key={question.id}>
+				  <legend>{question.prompt}</legend>
+				  <div className="answer-options">
+					{question.options.map((option) => (
+					  <button className={answers[question.id] === option.value ? "active" : ""} key={option.value} onClick={() => setAnswers((current) => ({ ...current, [question.id]: option.value }))} type="button">{option.label}</button>
+					))}
+				  </div>
+				</fieldset>
+			  ))}
+			  <button className="run-button coach-submit" disabled={props.savingCoachReview || Object.keys(answers).length === 0} type="submit"><CheckCircle2 size={17} />{props.savingCoachReview ? "Evaluating" : assessment ? "Update assessment" : "Generate assessment"}</button>
+			</form>
+
+			<div className={`coach-assessment-output assessment-${result?.assessment ?? "pending"}`}>
+			  {result ? (
+				<>
+				  <div className="assessment-title"><span>{result.assessment.replaceAll("_", " ")} / {Math.round(result.confidence * 100)}%</span><h3>{result.title}</h3><p>{result.observation}</p></div>
+				  {result.recommendation ? (
+					<div className="recommendation-body">
+					  <section><span>Correction</span><strong>{result.recommendation.summary}</strong><p>{result.recommendation.why_it_matters}</p></section>
+					  <section><span>Better action</span><p>{result.recommendation.better_action}</p></section>
+					  <section><span>Drill</span><p>{result.recommendation.drill}</p></section>
+					  <blockquote>{result.recommendation.checkpoint}</blockquote>
+					  <div className="coach-feedback"><span>Was this useful?</span><button className={assessment?.feedback?.verdict === "useful" ? "active" : ""} title="Useful" onClick={() => props.rateCoachRecommendation(selectedDecision.window_id, "useful")} type="button"><ThumbsUp size={16} /></button><button className={assessment?.feedback?.verdict === "not_useful" ? "active" : ""} title="Not useful" onClick={() => props.rateCoachRecommendation(selectedDecision.window_id, "not_useful")} type="button"><ThumbsDown size={16} /></button><button className={assessment?.feedback?.verdict === "incorrect" ? "active danger" : "danger"} title="Incorrect" onClick={() => props.rateCoachRecommendation(selectedDecision.window_id, "incorrect")} type="button"><XCircle size={16} /></button></div>
+					</div>
+				  ) : <div className="neutral-result"><CheckCircle2 size={20} /><p>{result.why_review}</p></div>}
+				</>
+			  ) : (
+				<div className="assessment-placeholder"><Eye size={28} /><h3>No conclusion yet</h3><p>{selectedDecision.why_review}</p></div>
+			  )}
+			</div>
+		  </div>
+		</section>
+	  )}
     </>
   );
 }
 
 function ReportsPage(props: {
+	coachAssessments: GuidedReviewAssessment[];
+	coachAssessmentsPath: string;
+	coachProgress: CoachReviewProgress | null;
   correctionComment: string;
   correctionTargetID: string;
   correctionTargets: Array<{ id: string; label: string }>;
@@ -1361,6 +1583,7 @@ function ReportsPage(props: {
   seekVideo: (seconds: number) => void;
 }) {
   const windows = props.report?.gameplay?.review_windows ?? [];
+	const actionable = props.coachAssessments.filter((item) => item.result.recommendation);
   return (
     <>
       <PageHeader eyebrow="Reports" title="Review evidence and corrections" detail={props.report ? `Run ${props.report.run_id}` : "No report selected."} />
@@ -1425,28 +1648,26 @@ function ReportsPage(props: {
           </div>
         </section>
 
-        <section className="surface">
+        <section className="surface validated-coaching">
           <div className="surface-heading">
             <div>
-              <p className="eyebrow">Findings</p>
-              <h2>{props.report?.findings.length ?? 0} items</h2>
+			  <p className="eyebrow">Validated coaching</p>
+			  <h2>{props.coachProgress?.actionable ?? 0} actionable / {props.coachProgress?.completed ?? 0} reviewed</h2>
             </div>
             <Lightbulb size={19} />
           </div>
-          <div className="finding-list product-findings">
-            {(props.report?.findings ?? []).slice(0, 8).map((finding) => (
-              <article className={`finding severity-${finding.severity}`} key={finding.id}>
-                <div className="finding-head">
-                  <div>
-                    <span>{finding.severity} / {finding.category}</span>
-                    <h3>{finding.title}</h3>
-                  </div>
-                </div>
-                <p>{finding.detail}</p>
-              </article>
-            ))}
-            {!props.report?.findings.length && <EmptyState title="No findings" detail="The selected report has no findings." />}
-          </div>
+		  <div className="validated-list">
+			{actionable.map((item) => (
+			  <article className={`validated-row severity-${item.result.severity}`} key={item.id}>
+				<div className="validated-row-head"><div><span>{item.result.rule_id} / {Math.round(item.result.confidence * 100)}%</span><h3>{item.result.title}</h3></div><button className="seek-button" onClick={() => props.seekVideo(item.result.timestamp_seconds)} type="button"><Play size={13} fill="currentColor" />{formatSeconds(item.result.timestamp_seconds)}</button></div>
+				<strong>{item.result.recommendation?.summary}</strong>
+				<p>{item.result.recommendation?.better_action}</p>
+				<small>Drill: {item.result.recommendation?.drill}</small>
+			  </article>
+			))}
+			{actionable.length === 0 && <EmptyState title="No validated findings" detail="Complete guided reviews on the Review page. Automatic candidates are not presented as mistakes." />}
+		  </div>
+		  {props.coachAssessmentsPath && <div className="artifact-actions compact"><a href={artifactURL(props.coachAssessmentsPath)} target="_blank" rel="noreferrer"><FileJson2 size={13} />Coaching JSON</a></div>}
         </section>
 
         <section className="surface">

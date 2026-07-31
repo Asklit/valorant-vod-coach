@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/asklit/valorant-vod-coach/internal/app"
+	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
 
 func TestServerListsVODs(t *testing.T) {
@@ -130,7 +131,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 8`) ||
+		!strings.Contains(got, `"schema_version": 9`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
 	}
@@ -474,6 +475,71 @@ func TestServerCreatesAndListsManualCorrections(t *testing.T) {
 	}
 }
 
+func TestServerCreatesCoachAssessmentAndFeedback(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
+
+	gameplay := domain.GameplaySummary{
+		SampledFrames: 10, AnalyzedFrames: 10, AverageHUDSignal: .3, AverageMinimapSignal: .3,
+		ReviewWindows: []domain.ReviewWindow{{ID: "combat_001", Kind: "combat_spike", Score: .8, PeakSeconds: 42}},
+	}
+	review, err := (app.EvidenceCoachEngine{}).BuildReview(context.Background(), app.CoachReviewRequest{
+		Media: domain.MediaSummary{HasAudio: true}, Sample: domain.FrameSampleSummary{FPSValue: 1}, Gameplay: gameplay,
+	})
+	if err != nil {
+		t.Fatalf("build coach review: %v", err)
+	}
+	gameplay.CoachReview = review
+	report := domain.AnalysisReport{
+		SchemaVersion: domain.AnalysisReportSchemaVersion, RunID: "coach_run", VOD: domain.VOD{Label: "diamond_example"}, Gameplay: &gameplay,
+	}
+	reportDir := filepath.Join(fixture.outRoot, "diamond_example", "reports", "coach_run")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("mkdir report: %v", err)
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "report.json"), raw, 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{
+  "vod_label":"diamond_example", "report_run_id":"coach_run", "window_id":"combat_001",
+  "answers":{"fight_occurred":"yes","outcome":"death","tradeable":"no","utility_available":"yes","utility_used":"no","crosshair_ready":"yes","escape_route":"no"}
+}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/coach-assessments", body)
+	authorize(request, token)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Body.String(); !strings.Contains(got, `"rule_id": "combat_untradeable_contact"`) ||
+		!strings.Contains(got, `"actionable": 1`) || !strings.Contains(got, `"author": "coach@example.com"`) {
+		t.Fatalf("unexpected assessment response:\n%s", got)
+	}
+
+	body = bytes.NewBufferString(`{"vod_label":"diamond_example","report_run_id":"coach_run","window_id":"combat_001","verdict":"useful"}`)
+	request = httptest.NewRequest(http.MethodPost, "/api/coach-feedback", body)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"verdict": "useful"`) {
+		t.Fatalf("unexpected feedback response %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/coach-assessments?vod_label=diamond_example&report_run_id=coach_run", nil)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"completed": 1`) {
+		t.Fatalf("unexpected assessment list %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -503,7 +569,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 		t.Fatalf("expected admin overview 200, got %d: %s", response.Code, response.Body.String())
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"user_count": 1`) ||
-		!strings.Contains(got, `"schema_version": 8`) ||
+		!strings.Contains(got, `"schema_version": 9`) ||
 		!strings.Contains(got, `"readiness"`) ||
 		!strings.Contains(got, `"vision_service"`) {
 		t.Fatalf("unexpected admin overview:\n%s", got)
@@ -557,7 +623,7 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 8`) ||
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 9`) ||
 		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
 		!strings.Contains(got, `"model_review_configured": false`) ||
 		!strings.Contains(got, `"model_review_available": false`) ||
@@ -624,7 +690,7 @@ func TestServerMetricsEndpoint(t *testing.T) {
 	}
 	got := response.Body.String()
 	for _, expected := range []string{
-		`vodcoach_info{schema_version="8",analyzer="visual-heuristic-gameplay"} 1`,
+		`vodcoach_info{schema_version="9",analyzer="visual-heuristic-gameplay"} 1`,
 		`vodcoach_model_review_configured 1`,
 		`vodcoach_http_requests_total{method="GET",route="/api/health",status="200"} 1`,
 		`vodcoach_analysis_jobs_total{status="completed"} 0`,
