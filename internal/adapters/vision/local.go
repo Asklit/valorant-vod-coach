@@ -124,7 +124,6 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	summary.RoundSegments = roundSegments
 	summary.RoundSegmentCount = len(roundSegments)
 	summary.GameplayEvents = buildGameplayEvents(observations, windows, roundSegments, summary)
-	summary.Coach = buildCoachSummary(request, summary, phaseProfile, windows)
 	summary.FrameObservations = observations
 
 	return GameplayResult{
@@ -622,7 +621,7 @@ func buildHighImpactWindows(observations []domain.FrameObservation, maxWindows i
 			Severity:       severity,
 			Title:          "High-impact fight window",
 			Summary:        fmt.Sprintf("Visual intensity peaked at %s with motion %.2f and center activity %.2f.", formatClock(candidate.TimestampSeconds), candidate.MotionScore, candidate.CenterActivity),
-			Recommendation: "Review crosshair height before contact, whether the duel was isolated or tradeable, and whether utility or repositioning was available before the fight.",
+			Recommendation: "Confirm that a fight occurred, then complete the visible-context rubric before treating this window as a coaching finding.",
 			StartSeconds:   round3(start),
 			EndSeconds:     round3(end),
 			PeakSeconds:    candidate.TimestampSeconds,
@@ -694,7 +693,7 @@ func buildPassiveWindows(observations []domain.FrameObservation, maxWindows int,
 			Severity:       domain.FindingSeverityLow,
 			Title:          "Low-activity decision window",
 			Summary:        fmt.Sprintf("The POV stayed visually stable from %s to %s.", formatClock(first.TimestampSeconds), formatClock(last.TimestampSeconds)),
-			Recommendation: "Check whether the hold had a clear purpose: teammate spacing, minimap info, utility plan, fallback timing, and whether rotating would have created more value.",
+			Recommendation: "Confirm that this is active gameplay, then record the purpose, information gain, team timing, and available safe space.",
 			StartSeconds:   first.TimestampSeconds,
 			EndSeconds:     last.TimestampSeconds,
 			PeakSeconds:    peak.TimestampSeconds,
@@ -746,7 +745,7 @@ func buildRotationWindows(observations []domain.FrameObservation, maxWindows int
 			Severity:       domain.FindingSeverityLow,
 			Title:          "Rotation or reposition window",
 			Summary:        fmt.Sprintf("POV movement spiked at %s without matching combat intensity.", formatClock(candidate.TimestampSeconds)),
-			Recommendation: "Check whether the movement was based on minimap information and whether the route preserved trade distance, sound discipline, and timing with teammates.",
+			Recommendation: "Confirm that this is a rotation, then record its information trigger, objective pressure, teammate spacing, and sound discipline.",
 			StartSeconds:   round3(start),
 			EndSeconds:     round3(end),
 			PeakSeconds:    candidate.TimestampSeconds,
@@ -769,24 +768,10 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 			Category:       "gameplay_review",
 			Title:          "Gameplay review windows are ready",
 			Detail:         fmt.Sprintf("Analyzed %d/%d sampled frames and selected %d gameplay review windows from visual motion, HUD, minimap, and center-screen signals.", summary.AnalyzedFrames, summary.SampledFrames, summary.ReviewWindowCount),
-			Recommendation: "Start with the listed fight windows, then inspect low-activity windows for rotation timing, teammate spacing, and information usage.",
+			Recommendation: "Open the guided review queue and confirm visible context. Candidate windows are not gameplay mistakes until the evidence rubric is complete.",
 			Confidence:     confidenceFromCoverage(summary),
 			Tags:           []string{"vision", "review-windows"},
 		},
-	}
-
-	if summary.Coach != nil && len(summary.Coach.FocusAreas) > 0 {
-		primary := summary.Coach.FocusAreas[0]
-		findings = append(findings, domain.Finding{
-			ID:             "gameplay_coach_priorities_ready",
-			Severity:       domain.FindingSeverityInfo,
-			Category:       "coach_summary",
-			Title:          "Coach priorities generated",
-			Detail:         fmt.Sprintf("Primary focus: %s. %s", primary.Title, primary.Detail),
-			Recommendation: firstPracticeRecommendation(summary.Coach.PracticePlan),
-			Confidence:     summary.Coach.Confidence,
-			Tags:           []string{"coach", "practice-plan"},
-		})
 	}
 
 	if len(summary.RoundSegments) > 0 {
@@ -810,7 +795,7 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 			Category:       "fight_selection",
 			Title:          "High-impact fight windows detected",
 			Detail:         fmt.Sprintf("Detected %d high-intensity windows. Peaks: %s.", len(combatWindows), formatWindowPeaks(combatWindows, 4)),
-			Recommendation: "For each peak, review the 8 seconds before contact: crosshair placement, first-shot readiness, escape route, trade setup, and whether utility should have been used before swinging.",
+			Recommendation: "Use each peak as navigation only. Confirm the fight outcome and visible decision context in the guided rubric before generating advice.",
 			Confidence:     windowConfidence(combatWindows),
 			Evidence:       windowEvidence(combatWindows, 4),
 			Tags:           []string{"fight", "micro"},
@@ -825,7 +810,7 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 			Category:       "round_pacing",
 			Title:          "Low-activity decision windows detected",
 			Detail:         fmt.Sprintf("Detected %d stable POV windows. These are useful for checking whether the player was holding space with intent or losing tempo.", len(passiveWindows)),
-			Recommendation: "Compare these windows against teammate positions and objective state: if no teammate can trade or the minimap gives new info, decide faster between holding, grouping, or rotating.",
+			Recommendation: "Use the guided rubric to exclude buy phases and edits, then confirm purpose, information gain, team alignment, and safer available actions.",
 			Confidence:     windowConfidence(passiveWindows),
 			Evidence:       windowEvidence(passiveWindows, 3),
 			Tags:           []string{"macro", "tempo"},
@@ -872,147 +857,6 @@ func buildGameplayFindings(request app.ObservationRequest, summary domain.Gamepl
 	}
 
 	return findings
-}
-
-func buildCoachSummary(request app.ObservationRequest, summary domain.GameplaySummary, phases []domain.PhaseStat, windows []domain.ReviewWindow) *domain.CoachSummary {
-	coverage := requestedCoverageSeconds(request)
-	combatWindows := windowsByKind(windows, "combat_spike")
-	decisionWindows := windowsByKind(windows, "low_activity")
-	rotationWindows := windowsByKind(windows, "rotation_spike")
-
-	focus := make([]domain.CoachFocusArea, 0, 5)
-	if len(combatWindows) > 0 {
-		focus = append(focus, domain.CoachFocusArea{
-			ID:        "fight_selection",
-			Priority:  priorityFromScore(maxWindowScore(combatWindows)),
-			Category:  "micro",
-			Title:     "Fight selection and first-contact discipline",
-			Detail:    fmt.Sprintf("%d fight windows need review around crosshair placement, isolation, tradeability, and utility before contact.", len(combatWindows)),
-			Score:     round4(maxWindowScore(combatWindows)),
-			WindowIDs: windowIDs(combatWindows, 5),
-		})
-	}
-	if len(decisionWindows) > 0 {
-		focus = append(focus, domain.CoachFocusArea{
-			ID:        "tempo_decisions",
-			Priority:  priorityFromScore(0.46 + phaseRatio(phases, "hold")*0.45),
-			Category:  "macro",
-			Title:     "Tempo and low-activity decisions",
-			Detail:    fmt.Sprintf("%d stable POV windows are useful for checking whether holds, waits, and rotations had a clear information reason.", len(decisionWindows)),
-			Score:     round4(0.46 + phaseRatio(phases, "hold")*0.45),
-			WindowIDs: windowIDs(decisionWindows, 4),
-		})
-	}
-	if len(rotationWindows) > 0 {
-		focus = append(focus, domain.CoachFocusArea{
-			ID:        "rotation_timing",
-			Priority:  priorityFromScore(0.42 + phaseRatio(phases, "rotate")*0.5),
-			Category:  "macro",
-			Title:     "Rotation timing and pathing",
-			Detail:    fmt.Sprintf("%d movement spikes should be checked against minimap info, teammate spacing, and sound discipline.", len(rotationWindows)),
-			Score:     round4(0.42 + phaseRatio(phases, "rotate")*0.5),
-			WindowIDs: windowIDs(rotationWindows, 4),
-		})
-	}
-	if summary.AverageMinimapSignal > 0 && summary.AverageMinimapSignal < 0.12 {
-		focus = append(focus, domain.CoachFocusArea{
-			ID:       "minimap_review_quality",
-			Priority: "medium",
-			Category: "capture_quality",
-			Title:    "Minimap-dependent coaching is limited",
-			Detail:   "The minimap region has weak signal, so macro feedback should be manually verified from the video player and contact sheet.",
-			Score:    round4(1 - summary.AverageMinimapSignal),
-		})
-	}
-	if coverage > 0 && coverage < 120 {
-		focus = append(focus, domain.CoachFocusArea{
-			ID:       "coverage_too_short",
-			Priority: "medium",
-			Category: "coverage",
-			Title:    "Sample is short for full coaching",
-			Detail:   "This run is useful for pipeline validation, but full-match priorities need a longer sample or full VOD mode.",
-			Score:    0.7,
-		})
-	}
-
-	sort.SliceStable(focus, func(i, j int) bool {
-		left := priorityRank(focus[i].Priority)
-		right := priorityRank(focus[j].Priority)
-		if left == right {
-			return focus[i].Score > focus[j].Score
-		}
-		return left < right
-	})
-
-	return &domain.CoachSummary{
-		Verdict:         coachVerdict(coverage, summary, focus),
-		Confidence:      confidenceFromCoverage(summary),
-		CoverageSeconds: round3(coverage),
-		FocusAreas:      focus,
-		PracticePlan:    buildPracticePlan(focus),
-	}
-}
-
-func coachVerdict(coverage float64, summary domain.GameplaySummary, focus []domain.CoachFocusArea) string {
-	if summary.AnalyzedFrames == 0 {
-		return "No visual gameplay review could be produced because the sampled frames were unreadable."
-	}
-	if len(focus) == 0 {
-		return fmt.Sprintf("Reviewed %s of footage and found no dominant risk pattern; use selected windows for manual validation.", formatCoverage(coverage))
-	}
-	return fmt.Sprintf("Reviewed %s of footage. Start with %s, then validate the selected evidence windows in the video player.", formatCoverage(coverage), strings.ToLower(focus[0].Title))
-}
-
-func buildPracticePlan(focus []domain.CoachFocusArea) []domain.PracticeTask {
-	tasks := make([]domain.PracticeTask, 0, min(3, len(focus)))
-	for _, area := range focus {
-		switch area.ID {
-		case "fight_selection":
-			tasks = append(tasks, domain.PracticeTask{
-				ID:      "duel_review_loop",
-				Title:   "Duel review loop",
-				Detail:  "For each fight window, pause 3 seconds before contact and write whether the duel was isolated, tradeable, utility-supported, or avoidable.",
-				Cadence: "after each VOD",
-				Tags:    []string{"fight", "micro"},
-			})
-		case "tempo_decisions":
-			tasks = append(tasks, domain.PracticeTask{
-				ID:      "tempo_checkpoint",
-				Title:   "Tempo checkpoint",
-				Detail:  "For each low-activity window, identify the exact information that justified waiting; if none exists, choose a faster rotate, regroup, or space-taking option.",
-				Cadence: "3 windows per review",
-				Tags:    []string{"macro", "tempo"},
-			})
-		case "rotation_timing":
-			tasks = append(tasks, domain.PracticeTask{
-				ID:      "rotation_pathing_check",
-				Title:   "Rotation pathing check",
-				Detail:  "For each movement spike, compare route timing with minimap state and teammate distance; flag routes that create untradeable solo timing.",
-				Cadence: "after each map side",
-				Tags:    []string{"rotation", "timing"},
-			})
-		case "minimap_review_quality":
-			tasks = append(tasks, domain.PracticeTask{
-				ID:      "capture_quality_check",
-				Title:   "Capture quality check",
-				Detail:  "Use uncropped 1080p recordings with visible minimap, timer, score, ammo, and abilities before trusting macro or economy feedback.",
-				Cadence: "before dataset runs",
-				Tags:    []string{"capture", "minimap"},
-			})
-		case "coverage_too_short":
-			tasks = append(tasks, domain.PracticeTask{
-				ID:      "full_vod_pass",
-				Title:   "Full VOD pass",
-				Detail:  "Run a 1 fps full VOD pass before treating priorities as stable across the match.",
-				Cadence: "once per VOD",
-				Tags:    []string{"coverage"},
-			})
-		}
-		if len(tasks) >= 3 {
-			break
-		}
-	}
-	return tasks
 }
 
 func buildGameplayEvents(observations []domain.FrameObservation, windows []domain.ReviewWindow, segments []domain.RoundSegment, summary domain.GameplaySummary) []domain.GameplayEvent {
@@ -1326,68 +1170,6 @@ func roundSegmentConfidence(segments []domain.RoundSegment) float64 {
 		total += segment.Confidence
 	}
 	return round4(total / float64(len(segments)))
-}
-
-func maxWindowScore(windows []domain.ReviewWindow) float64 {
-	if len(windows) == 0 {
-		return 0
-	}
-	best := windows[0].Score
-	for _, window := range windows[1:] {
-		best = math.Max(best, window.Score)
-	}
-	return best
-}
-
-func windowIDs(windows []domain.ReviewWindow, limit int) []string {
-	ids := make([]string, 0, min(limit, len(windows)))
-	for index, window := range windows {
-		if index >= limit {
-			break
-		}
-		ids = append(ids, window.ID)
-	}
-	return ids
-}
-
-func phaseRatio(phases []domain.PhaseStat, phase string) float64 {
-	for _, stat := range phases {
-		if stat.Phase == phase {
-			return stat.Ratio
-		}
-	}
-	return 0
-}
-
-func priorityFromScore(score float64) string {
-	switch {
-	case score >= 0.64:
-		return "high"
-	case score >= 0.42:
-		return "medium"
-	default:
-		return "low"
-	}
-}
-
-func priorityRank(priority string) int {
-	switch priority {
-	case "high":
-		return 0
-	case "medium":
-		return 1
-	case "low":
-		return 2
-	default:
-		return 3
-	}
-}
-
-func firstPracticeRecommendation(tasks []domain.PracticeTask) string {
-	if len(tasks) == 0 {
-		return "Review the highest scoring gameplay windows and add manual notes for false positives before comparing another VOD."
-	}
-	return tasks[0].Detail
 }
 
 func formatCoverage(seconds float64) string {

@@ -40,6 +40,7 @@ type AnalysisRunner struct {
 	Resolver VODResolver
 	Media    MediaProcessor
 	Analyzer ObservationAnalyzer
+	Coach    CoachEngine
 	Reviewer ModelReviewer
 	Reports  ReportStore
 	Catalog  AnalysisCatalog
@@ -224,6 +225,22 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 		}
 	}
 	if observations.Gameplay != nil {
+		coach := r.Coach
+		if coach == nil {
+			coach = EvidenceCoachEngine{}
+		}
+		coachReview, err := coach.BuildReview(ctx, CoachReviewRequest{
+			VOD:      vod,
+			Media:    probe.Summary,
+			Sample:   sample.Summary,
+			Gameplay: *observations.Gameplay,
+		})
+		if err != nil {
+			return RunAnalysisResult{}, err
+		}
+		observations.Gameplay.CoachReview = coachReview
+		observations.Gameplay.Coach = SummarizeCoachReview(coachReview)
+
 		observations.Gameplay.ModelReviewTasks = BuildModelReviewTasks(vod, observations.Gameplay)
 		observations.Gameplay.ModelReviewTaskCount = len(observations.Gameplay.ModelReviewTasks)
 		if request.ModelReview && r.Reviewer == nil {
@@ -272,6 +289,9 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	sortTimeline(report.Timeline)
 	if observations.Metadata.Analyzer != "" {
 		report.Metadata = observations.Metadata
+	}
+	if report.Gameplay != nil && report.Gameplay.CoachReview != nil {
+		report.Metadata.CoachEngine = report.Gameplay.CoachReview.Engine
 	}
 
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)

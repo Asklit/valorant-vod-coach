@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const AnalysisReportSchemaVersion = 8
+const AnalysisReportSchemaVersion = 9
 
 type Rank string
 
@@ -104,6 +104,7 @@ type GameplaySummary struct {
 	AverageHUDSignal     float64            `json:"average_hud_signal,omitempty"`
 	PeakCombatScore      float64            `json:"peak_combat_score,omitempty"`
 	Coach                *CoachSummary      `json:"coach,omitempty"`
+	CoachReview          *CoachReview       `json:"coach_review,omitempty"`
 	PhaseProfile         []PhaseStat        `json:"phase_profile,omitempty"`
 	RoundSegments        []RoundSegment     `json:"round_segments,omitempty"`
 	GameplayEvents       []GameplayEvent    `json:"gameplay_events,omitempty"`
@@ -270,6 +271,7 @@ type AnalysisReport struct {
 }
 
 type AnalysisRunMetadata struct {
-	Analyzer string `json:"analyzer"`
-	Mode     string `json:"mode"`
+	Analyzer    string `json:"analyzer"`
+	CoachEngine string `json:"coach_engine,omitempty"`
+	Mode        string `json:"mode"`
 }
