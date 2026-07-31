@@ -245,7 +245,7 @@ func TestServerRunsAnalysisAndReturnsLatestReport(t *testing.T) {
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"run_id": "api_test"`) ||
 		!strings.Contains(got, `"frame_count": 2`) ||
-		!strings.Contains(got, `"schema_version": 9`) ||
+		!strings.Contains(got, `"schema_version": 10`) ||
 		!strings.Contains(got, `"contact_sheet"`) {
 		t.Fatalf("unexpected report list response:\n%s", got)
 	}
@@ -687,7 +687,7 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 		t.Fatalf("expected admin overview 200, got %d: %s", response.Code, response.Body.String())
 	}
 	if got := response.Body.String(); !strings.Contains(got, `"user_count": 1`) ||
-		!strings.Contains(got, `"schema_version": 9`) ||
+		!strings.Contains(got, `"schema_version": 10`) ||
 		!strings.Contains(got, `"readiness"`) ||
 		!strings.Contains(got, `"vision_service"`) {
 		t.Fatalf("unexpected admin overview:\n%s", got)
@@ -745,8 +745,8 @@ func TestServerHealthIncludesAnalyzerContract(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 	}
-	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 9`) ||
-		!strings.Contains(got, `"analyzer": "visual-heuristic-gameplay"`) ||
+	if got := response.Body.String(); !strings.Contains(got, `"schema_version": 10`) ||
+		!strings.Contains(got, `"analyzer": "valorant-hud-cv-v2"`) ||
 		!strings.Contains(got, `"model_review_configured": false`) ||
 		!strings.Contains(got, `"model_review_available": false`) ||
 		!strings.Contains(got, `"configured": false`) {
@@ -812,7 +812,7 @@ func TestServerMetricsEndpoint(t *testing.T) {
 	}
 	got := response.Body.String()
 	for _, expected := range []string{
-		`vodcoach_info{schema_version="9",analyzer="visual-heuristic-gameplay"} 1`,
+		`vodcoach_info{schema_version="10",analyzer="valorant-hud-cv-v2"} 1`,
 		`vodcoach_model_review_configured 1`,
 		`vodcoach_http_requests_total{method="GET",route="/api/health",status="200"} 1`,
 		`vodcoach_analysis_jobs_total{status="completed"} 0`,

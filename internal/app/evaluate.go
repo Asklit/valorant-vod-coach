@@ -27,6 +27,12 @@ func EvaluateGameplayEvents(request GameplayEvaluationRequest) (domain.GameplayE
 	if strings.TrimSpace(request.Annotations.VODLabel) != "" && request.Annotations.VODLabel != request.Report.VOD.Label {
 		return domain.GameplayEvaluationReport{}, fmt.Errorf("annotation VOD %q does not match report VOD %q", request.Annotations.VODLabel, request.Report.VOD.Label)
 	}
+	if strings.TrimSpace(request.Annotations.ReportRunID) != "" && request.Annotations.ReportRunID != request.Report.RunID {
+		return domain.GameplayEvaluationReport{}, fmt.Errorf("annotation report run %q does not match report run %q", request.Annotations.ReportRunID, request.Report.RunID)
+	}
+	if err := validateEvaluationAnnotations(request.Report, request.Annotations); err != nil {
+		return domain.GameplayEvaluationReport{}, err
+	}
 
 	generatedAt := request.GeneratedAt
 	if generatedAt.IsZero() {
@@ -54,7 +60,7 @@ func EvaluateGameplayEvents(request GameplayEvaluationRequest) (domain.GameplayE
 		return labels[i].TimestampSeconds < labels[j].TimestampSeconds
 	})
 
-	predictions := evaluatedEvents(request.Report.Gameplay.GameplayEvents, labels)
+	predictions := evaluatedEvents(request.Report.Gameplay.GameplayEvents, request.Annotations)
 	matches, missed, falsePositive := matchEvaluationLabels(labels, predictions, toleranceSeconds)
 
 	report := domain.GameplayEvaluationReport{
@@ -65,21 +71,76 @@ func EvaluateGameplayEvents(request GameplayEvaluationRequest) (domain.GameplayE
 		ReportRunID:      request.Report.RunID,
 		ToleranceSeconds: round4(toleranceSeconds),
 		Overall:          buildEvaluationMetrics(len(labels), len(predictions), len(matches)),
-		ByType:           buildTypeMetrics(labels, predictions, matches),
+		ByType:           buildTypeMetrics(labels, predictions, matches, request.Annotations.EvaluatedTypes),
 		Matches:          matches,
 		MissedLabels:     missed,
 		FalsePositives:   falsePositive,
 		Notes: []string{
 			"Gameplay event evaluation matches manual labels to predicted gameplay_events within the configured timestamp tolerance.",
-			"Current visual heuristic events are candidates, not OCR-confirmed kills, deaths, score changes, or round boundaries.",
+			"CPU HUD and OCR signals select evidence windows; combat and macro events remain candidates until guided context is confirmed.",
 		},
 	}
 	return report, nil
 }
 
-func evaluatedEvents(events []domain.GameplayEvent, labels []domain.EvaluationLabel) []domain.GameplayEvent {
+func validateEvaluationAnnotations(report domain.AnalysisReport, annotations domain.EvaluationAnnotationSet) error {
+	if annotations.SchemaVersion != 0 && annotations.SchemaVersion != 1 {
+		return fmt.Errorf("unsupported annotation schema version %d", annotations.SchemaVersion)
+	}
+	if annotations.ToleranceSeconds < 0 {
+		return fmt.Errorf("annotation tolerance_seconds must not be negative")
+	}
+	if len(annotations.Labels) == 0 && len(annotations.EvaluatedTypes) == 0 {
+		return fmt.Errorf("annotations must contain labels or evaluated_types")
+	}
+	if annotations.Sample != nil {
+		sample := annotations.Sample
+		if sample.DurationSeconds <= 0 || sample.FPS <= 0 || sample.StartSeconds < 0 {
+			return fmt.Errorf("annotation sample requires non-negative start_seconds and positive duration_seconds and fps")
+		}
+		if math.Abs(sample.StartSeconds-report.Sample.StartSeconds) > 0.001 ||
+			math.Abs(sample.DurationSeconds-report.Sample.DurationSeconds) > 0.001 ||
+			math.Abs(sample.FPS-report.Sample.FPSValue) > 0.001 {
+			return fmt.Errorf("annotation sample start=%.3f duration=%.3f fps=%.3f does not match report sample start=%.3f duration=%.3f fps=%.3f",
+				sample.StartSeconds, sample.DurationSeconds, sample.FPS,
+				report.Sample.StartSeconds, report.Sample.DurationSeconds, report.Sample.FPSValue,
+			)
+		}
+	}
+	for _, evaluatedType := range annotations.EvaluatedTypes {
+		if strings.TrimSpace(evaluatedType) == "" {
+			return fmt.Errorf("evaluated_types must not contain an empty value")
+		}
+	}
+	seenIDs := map[string]struct{}{}
+	for index, label := range annotations.Labels {
+		id := strings.TrimSpace(label.ID)
+		if id == "" {
+			return fmt.Errorf("annotation label %d requires an id", index)
+		}
+		if _, duplicate := seenIDs[id]; duplicate {
+			return fmt.Errorf("annotation label id %q is duplicated", id)
+		}
+		seenIDs[id] = struct{}{}
+		if strings.TrimSpace(label.Type) == "" && strings.TrimSpace(label.Category) == "" {
+			return fmt.Errorf("annotation label %q requires a type or category", id)
+		}
+		if label.TimestampSeconds < 0 {
+			return fmt.Errorf("annotation label %q timestamp_seconds must not be negative", id)
+		}
+	}
+	return nil
+}
+
+func evaluatedEvents(events []domain.GameplayEvent, annotations domain.EvaluationAnnotationSet) []domain.GameplayEvent {
 	wanted := map[string]struct{}{}
-	for _, label := range labels {
+	for _, evaluatedType := range annotations.EvaluatedTypes {
+		key := canonicalEvaluationType(evaluatedType)
+		if key != "" && key != "unknown" {
+			wanted[key] = struct{}{}
+		}
+	}
+	for _, label := range annotations.Labels {
 		key := labelMetricKey(label)
 		if key != "" {
 			wanted[key] = struct{}{}
@@ -154,7 +215,7 @@ func labelMatchesEvent(label domain.EvaluationLabel, event domain.GameplayEvent)
 	return false
 }
 
-func buildTypeMetrics(labels []domain.EvaluationLabel, predictions []domain.GameplayEvent, matches []domain.EvaluationMatch) []domain.EvaluationTypeMetrics {
+func buildTypeMetrics(labels []domain.EvaluationLabel, predictions []domain.GameplayEvent, matches []domain.EvaluationMatch, evaluatedTypes []string) []domain.EvaluationTypeMetrics {
 	type counts struct {
 		labels      int
 		predictions int
@@ -173,6 +234,9 @@ func buildTypeMetrics(labels []domain.EvaluationLabel, predictions []domain.Game
 
 	for _, label := range labels {
 		ensure(labelMetricKey(label)).labels++
+	}
+	for _, evaluatedType := range evaluatedTypes {
+		ensure(canonicalEvaluationType(evaluatedType))
 	}
 	for _, event := range predictions {
 		ensure(eventMetricKey(event)).predictions++
@@ -234,8 +298,10 @@ func canonicalEvaluationType(value string) string {
 	value = strings.ReplaceAll(value, "-", "_")
 	value = strings.ReplaceAll(value, " ", "_")
 	switch value {
-	case "combat", "combat_spike", "combat_candidate", "fight", "fight_selection", "bad_fight", "death", "kill", "duel":
+	case "combat", "combat_spike", "combat_candidate", "fight", "fight_selection", "bad_fight", "kill", "duel":
 		return "combat_candidate"
+	case "death", "death_review", "death_state", "death_state_confirmed":
+		return "death_state_confirmed"
 	case "rotation", "rotation_spike", "rotation_candidate", "rotate", "bad_rotate", "macro_rotation":
 		return "rotation_candidate"
 	case "tempo", "tempo_candidate", "low_activity", "hold", "passive", "pacing":

@@ -226,9 +226,12 @@ Run a gameplay event quality evaluation:
 
 ```sh
 go run ./cmd/vodctl eval run \
-  --report data/processed/iron_spudbud_01/reports/gameplay_events_smoke/report.json \
-  --annotations ml/evals/gameplay_events.example.json \
-  --run-id gameplay-events-example \
+  --report data/processed/gold_remortius_01/reports/cpu_cv_gold_180_v1/report.json \
+  --annotations ml/evals/gold_remortius_01.first_180s.v1.json \
+  --run-id cpu_cv_gold_180_v1 \
+  --min-precision 0.95 \
+  --min-recall 0.95 \
+  --min-f1 0.95 \
   --force
 ```
 

@@ -74,6 +74,27 @@ func TestEvidenceCoachLeavesIncompleteAssessmentPending(t *testing.T) {
 	}
 }
 
+func TestEvidenceCoachAssessesConfirmedDeathContext(t *testing.T) {
+	engine := EvidenceCoachEngine{}
+	decision := decisionForWindow(domain.ReviewWindow{ID: "death_001", Kind: "death_review", Score: 0.98}, domain.CoachEvidenceQuality{Score: 0.8})
+	if decision.ID == "" || len(decision.Questions) == 0 {
+		t.Fatalf("expected death review decision: %+v", decision)
+	}
+	result, err := engine.AssessDecision(context.Background(), CoachAssessmentRequest{
+		Decision: decision,
+		Answers: map[string]string{
+			"death_confirmed": "yes", "tradeable": "no", "utility_available": "no",
+			"utility_used": "not_available", "crosshair_ready": "yes", "escape_route": "no",
+		},
+	})
+	if err != nil {
+		t.Fatalf("assess death: %v", err)
+	}
+	if result.RuleID != "combat_untradeable_contact" || result.Assessment != "validated_risk" || result.Recommendation == nil {
+		t.Fatalf("unexpected death assessment: %+v", result)
+	}
+}
+
 func TestEvidenceCoachTempoRuleProducesActionAndDrill(t *testing.T) {
 	engine := EvidenceCoachEngine{}
 	decision := decisionForWindow(domain.ReviewWindow{ID: "decision_001", Kind: "low_activity", Score: 0.7}, domain.CoachEvidenceQuality{Score: 0.7})

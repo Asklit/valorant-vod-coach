@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "vod_label": "gold_remortius_01",
+  "report_run_id": "cpu_cv_gold_180_v1",
+  "tolerance_seconds": 3,
+  "evaluated_types": [
+    "round",
+    "combat",
+    "death",
+    "rotation"
+  ],
+  "sample": {
+    "start_seconds": 0,
+    "duration_seconds": 180,
+    "fps": 1
+  },
+  "labels": [
+    {
+      "id": "round_start_001",
+      "type": "round_start",
+      "timestamp_seconds": 0,
+      "round_number": 1,
+      "description": "Buy phase at the beginning of round one."
+    },
+    {
+      "id": "fight_001",
+      "type": "fight",
+      "timestamp_seconds": 52,
+      "round_number": 1,
+      "description": "Close-range site fight with damage feedback, kill marker, and three killfeed rows."
+    },
+    {
+      "id": "round_start_002",
+      "type": "round_start",
+      "timestamp_seconds": 82,
+      "round_number": 2,
+      "description": "Visible buy phase at the beginning of round two."
+    },
+    {
+      "id": "fight_002",
+      "type": "fight",
+      "timestamp_seconds": 137,
+      "round_number": 2,
+      "description": "Site contact with damage arc and three contemporaneous killfeed rows."
+    }
+  ]
+}

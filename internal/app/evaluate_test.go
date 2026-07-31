@@ -42,7 +42,7 @@ func TestEvaluateGameplayEventsMatchesLabels(t *testing.T) {
 		Labels: []domain.EvaluationLabel{
 			{
 				ID:               "label_fight_001",
-				Type:             "death",
+				Type:             "fight",
 				TimestampSeconds: 12,
 				Description:      "Bad first contact.",
 			},
@@ -83,6 +83,35 @@ func TestEvaluateGameplayEventsMatchesLabels(t *testing.T) {
 	}
 }
 
+func TestEvaluateGameplayEventsKeepsDeathSeparateAndCountsZeroLabelFalsePositive(t *testing.T) {
+	report := domain.AnalysisReport{
+		RunID: "analysis_01",
+		VOD:   domain.VOD{Label: "gold_example"},
+		Gameplay: &domain.GameplaySummary{GameplayEvents: []domain.GameplayEvent{
+			{ID: "event_combat_001", Type: "combat_candidate", TimestampSeconds: 10},
+			{ID: "event_death_001", Type: "death_state_confirmed", TimestampSeconds: 30},
+		}},
+	}
+	annotations := domain.EvaluationAnnotationSet{
+		VODLabel:       "gold_example",
+		EvaluatedTypes: []string{"combat", "death"},
+		Labels: []domain.EvaluationLabel{
+			{ID: "label_fight_001", Type: "fight", TimestampSeconds: 10},
+		},
+	}
+
+	result, err := EvaluateGameplayEvents(GameplayEvaluationRequest{Report: report, Annotations: annotations})
+	if err != nil {
+		t.Fatalf("evaluate gameplay events: %v", err)
+	}
+	if result.Overall.Precision != 0.5 || result.Overall.Recall != 1 || result.Overall.F1 != 0.6667 {
+		t.Fatalf("zero-label death false positive must reduce overall quality: %+v", result.Overall)
+	}
+	if len(result.ByType) != 2 || result.ByType[1].Type != "death_state_confirmed" || result.ByType[1].Metrics.PredictionCount != 1 {
+		t.Fatalf("expected explicit zero-label death metrics: %+v", result.ByType)
+	}
+}
+
 func TestEvaluateGameplayEventsRejectsVODMismatch(t *testing.T) {
 	_, err := EvaluateGameplayEvents(GameplayEvaluationRequest{
 		Report: domain.AnalysisReport{
@@ -93,5 +122,28 @@ func TestEvaluateGameplayEventsRejectsVODMismatch(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected VOD mismatch error")
+	}
+}
+
+func TestEvaluateGameplayEventsRejectsFixtureProvenanceMismatch(t *testing.T) {
+	report := domain.AnalysisReport{
+		RunID: "run_a",
+		VOD:   domain.VOD{Label: "vod_a"},
+		Sample: domain.FrameSampleSummary{
+			StartSeconds:    0,
+			DurationSeconds: 180,
+			FPSValue:        1,
+		},
+		Gameplay: &domain.GameplaySummary{},
+	}
+
+	tests := []domain.EvaluationAnnotationSet{
+		{SchemaVersion: 1, VODLabel: "vod_a", ReportRunID: "run_b", EvaluatedTypes: []string{"combat"}},
+		{SchemaVersion: 1, VODLabel: "vod_a", EvaluatedTypes: []string{"combat"}, Sample: &domain.EvaluationSample{StartSeconds: 0, DurationSeconds: 60, FPS: 1}},
+	}
+	for _, annotations := range tests {
+		if _, err := EvaluateGameplayEvents(GameplayEvaluationRequest{Report: report, Annotations: annotations}); err == nil {
+			t.Fatalf("expected provenance mismatch for %+v", annotations)
+		}
 	}
 }

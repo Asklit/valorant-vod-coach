@@ -1,223 +1,122 @@
 # Benchmarks
 
-Date: 2026-07-21
+Last measured: 2026-07-31
 
-The goal of benchmarking is to replace guesses with measured latency, throughput, artifact size, and model cost.
+The default product path uses local CPU processing only: ffmpeg for sampling,
+VALORANT-specific temporal CV for HUD events, and staged Tesseract OCR for
+semantic overlay confirmation. It needs neither a paid API nor a local GPU.
 
-The first benchmark suite is intentionally simple: it measures the media pipeline on the already downloaded VODs. GPU and VLM benchmarks will be added after the Python `vision-service` exists.
+## Quality Method
 
-## What We Measure
+Quality is measured against reviewed, versioned fixtures in `ml/evals`.
+An annotation fixture binds itself to a VOD label, report run, sample range,
+sampling FPS, timestamp tolerance, and the event types being evaluated.
 
-### Phase 0: Media Baseline
+`evaluated_types` is important for negative coverage. For example, declaring
+`death` with no death labels means that any predicted death is still counted as
+a false positive. Death and fight are separate classes.
 
-Available now through `scripts/benchmark_video.sh`.
+The evaluator reports:
 
-- local file size;
-- `ffprobe` wall time;
-- video duration, codec, resolution, and stream metadata;
-- frame extraction wall time;
-- requested sampling FPS;
-- number of extracted frames;
-- derived frame artifact size.
+- overall and per-type precision, recall, and F1;
+- matched labels and timestamp deltas;
+- missed labels;
+- false-positive events.
 
-This tells us how expensive the deterministic part of the pipeline is before OCR or AI.
-
-### Phase 1: Detection Baseline
-
-Available for gameplay event candidates through `vodctl eval run`; OCR-specific fields are added later.
-
-- HUD/minimap visibility detection time;
-- OCR time per frame crop;
-- OCR confidence distribution;
-- timer/score extraction accuracy;
-- round boundary precision/recall;
-- death window precision/recall.
-- gameplay event precision/recall/F1 against manual labels;
-- missed labels and false-positive candidate events.
-
-### Phase 2: VLM Baseline
-
-Added after the Python `vision-service` exists.
-
-- model name and version;
-- prompt version;
-- selected windows per VOD;
-- input frames or clip seconds per request;
-- active GPU seconds;
-- wall time;
-- VRAM use;
-- retry count;
-- model output validity;
-- estimated cost per VOD.
-
-Cost formula:
-
-```text
-cost_per_vod = active_gpu_seconds * gpu_price_per_second
-```
-
-### Phase 3: End-to-End Workflow
-
-Added after Temporal workflow exists.
-
-- total processing wall time;
-- per-stage timings;
-- workflow retries;
-- event publication latency;
-- report generation latency;
-- report reproducibility from saved artifacts;
-- dashboard/tracing coverage.
-
-## Benchmark Modes
-
-Use the same VODs for all modes so the results are comparable.
-
-| Mode | Purpose | Expected Cost | Expected Quality |
-| --- | --- | --- | --- |
-| `fast` | deterministic metadata, sampling, OCR, simple heuristics | lowest | useful but shallow |
-| `standard` | full coarse scan plus selected VLM windows | medium | target product default |
-| `deep` | denser full-match representation plus selected VLM review | highest | experimental quality ceiling |
-
-The default architecture assumes `standard = hybrid` until benchmarks prove another strategy is better.
-
-## Current Script
-
-Preview what would run:
+Generate the current Gold benchmark report:
 
 ```sh
-./scripts/benchmark_video.sh --rank diamond --limit 1 --print-only
-```
-
-Probe all downloaded VODs:
-
-```sh
-./scripts/benchmark_video.sh --metadata-only
-```
-
-Run a quick extraction benchmark on one VOD:
-
-```sh
-./scripts/benchmark_video.sh --rank diamond --limit 1 --sample-seconds 180 --fps 1
-```
-
-The Go CLI can also extract a reusable artifact for one VOD:
-
-```sh
-go run ./cmd/vodctl video sample --vod diamond_crazies_01 --duration 60s --fps 1
-```
-
-Run a named benchmark so multiple commands append to the same result folder:
-
-```sh
-./scripts/benchmark_video.sh --run-id media-smoke --label iron_spudbud_01 --sample-seconds 60 --fps 1
-./scripts/benchmark_video.sh --run-id media-smoke --label diamond_crazies_01 --sample-seconds 60 --fps 1
-./scripts/benchmark_video.sh --run-id media-smoke --label radiant_valorantdaily_fade_01 --sample-seconds 60 --fps 1
-```
-
-Run a heavier extraction benchmark on one VOD:
-
-```sh
-./scripts/benchmark_video.sh --label diamond_crazies_01 --sample-seconds 600 --fps 2
-```
-
-Run a gameplay event quality evaluation:
-
-```sh
-go run ./cmd/vodctl eval run \
-  --report data/processed/iron_spudbud_01/reports/gameplay_events_smoke/report.json \
-  --annotations ml/evals/gameplay_events.example.json \
-  --run-id gameplay-events-example \
+go run ./cmd/vodctl analyze run \
+  --vod gold_remortius_01 \
+  --fps 1 \
+  --duration 180s \
+  --run-id cpu_cv_gold_180_v1 \
   --force
 ```
 
-Results are written under:
+Run the regression gate:
 
-```text
-data/processed/benchmarks/<run_id>/
-data/processed/evaluations/<run_id>/
+```sh
+go run ./cmd/vodctl eval run \
+  --report data/processed/gold_remortius_01/reports/cpu_cv_gold_180_v1/report.json \
+  --annotations ml/evals/gold_remortius_01.first_180s.v1.json \
+  --run-id cpu_cv_gold_180_v1 \
+  --min-precision 0.95 \
+  --min-recall 0.95 \
+  --min-f1 0.95 \
+  --force
 ```
 
-The generated `results.tsv` is intentionally simple so it can later be imported into PostgreSQL or ClickHouse.
+The command exits non-zero when a configured threshold is missed, so the same
+command can be used in CI after benchmark media is provisioned.
 
-## Result Columns
+## Current Quality Result
 
-`results.tsv` currently contains:
+Environment: Apple Silicon development machine, Turkish HUD, first 180 seconds
+of `gold_remortius_01`, 1 FPS, 3-second matching tolerance.
 
-- `run_id`
-- `phase`
-- `status`
-- `rank`
-- `label`
-- `video_id`
-- `file_path`
-- `file_size_bytes`
-- `manifest_duration`
-- `sample_seconds`
-- `sample_fps`
-- `wall_seconds`
-- `frame_count`
-- `artifact_bytes`
-- `notes`
+| Fixture | Labels | Predictions | Matches | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `gold_remortius_01.first_180s.v1` | 4 | 4 | 4 | 1.00 | 1.00 | 1.00 |
 
-## Interpretation Rules
+The labels cover two buy-phase round starts and two visible fights. `death` and
+`rotation` are explicitly evaluated zero-label classes; neither produced a
+false positive.
 
-- Do not compare VODs without checking resolution and codec.
-- Do not use YouTube title rank as ground truth when `rank_source=search_metadata`.
-- Keep failed benchmark rows; failure rate is part of the benchmark.
-- Treat first-run results separately from warm-cache results.
-- GPU estimates are not accepted as project facts until measured by Phase 2.
-- Treat current visual gameplay events as candidates, not confirmed kills, deaths, or round boundaries.
+This is a regression score for one short segment, not a population-quality
+claim. Release-level quality requires reviewed fixtures across rank buckets,
+maps, agents, HUD languages, resolutions, spectator states, and full matches.
 
-## Benchmark Matrix
+## Current Latency Result
 
-Start with this small matrix:
+The same 180-second report completed in 24.3 seconds after analysis started:
 
-| Rank Bucket | VOD Count | Media Baseline | Detection Baseline | VLM Baseline |
-| --- | ---: | --- | --- | --- |
-| Low: Iron/Bronze/Silver | 3 | yes | later | later |
-| Mid: Gold/Platinum/Diamond | 3 | yes | later | later |
-| High: Ascendant/Immortal/Radiant | 3 | yes | later | later |
+| Metric | Result |
+| --- | ---: |
+| sampled/analyzed frames | 180 / 180 |
+| staged OCR frames | 83 |
+| selected review windows | 2 |
+| detected round segments | 2 |
+| frame artifacts | 26.2 MiB |
+| report artifacts | 0.2 MiB |
+| wall time | 24.3 s |
+| processing speed | 7.4x realtime |
 
-Then expand to all 18 downloaded VODs after the pipeline is stable.
+The number includes extraction, CV, OCR, clip generation, and report writing on
+this machine. It is a preliminary local measurement; codec, resolution, disk
+cache, and CPU materially affect it.
 
-## Initial Local Measurements
+## Media Baseline
 
-Environment:
+The reusable media benchmark remains available through
+`scripts/benchmark_video.sh`:
 
-- date: 2026-07-21;
-- dataset: 18 downloaded YouTube VODs;
-- script: `scripts/benchmark_video.sh`;
-- media tools: local `ffprobe` and `ffmpeg`;
-- frame sampling: first 60 seconds, 1 fps, JPEG quality `-q:v 3`.
+```sh
+./scripts/benchmark_video.sh --metadata-only
+./scripts/benchmark_video.sh --rank diamond --limit 1 --sample-seconds 180 --fps 1
+```
 
-Probe baseline:
+Initial 60-second, 1 FPS extraction measurements from 2026-07-21 were:
 
-| Run ID | Scope | Status | Probe Wall Time |
-| --- | --- | --- | --- |
-| `media-probe-all-20260721` | all 18 VODs | 18/18 ok | 0.03-0.07s per VOD |
+| Rank | Label | Wall Time | Frames | Artifact Size |
+| --- | --- | ---: | ---: | ---: |
+| iron | `iron_spudbud_01` | 5.56 s | 60 | 12.1 MB |
+| diamond | `diamond_crazies_01` | 1.80 s | 60 | 10.8 MB |
+| radiant | `radiant_valorantdaily_fade_01` | 4.88 s | 60 | 9.9 MB |
 
-Frame sampling smoke:
+Raw benchmark outputs are intentionally ignored by Git and are written under
+`data/processed/benchmarks` and `data/processed/evaluations`.
 
-| Rank | Label | Source Size | Sample | Wall Time | Frames | Artifact Size | Decode Speed |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| iron | `iron_spudbud_01` | 1.13 GB | 60s at 1 fps | 5.56s | 60 | 12.1 MB | 10.8x realtime |
-| diamond | `diamond_crazies_01` | 1.30 GB | 60s at 1 fps | 1.80s | 60 | 10.8 MB | 33.3x realtime |
-| radiant | `radiant_valorantdaily_fade_01` | 0.91 GB | 60s at 1 fps | 4.88s | 60 | 9.9 MB | 12.3x realtime |
+## Release Gate Expansion
 
-Early interpretation:
+The next quality corpus must add, in order:
 
-- The media probe stage is negligible compared with extraction and future OCR/VLM work.
-- Frame extraction speed varies materially by source encoding, resolution, and local decode path.
-- Extrapolating from this tiny smoke sample, full-match 1 fps extraction for a 35 minute VOD might land around 1-3.5 minutes locally, but this is only a first approximation.
-- These numbers do not estimate AI cost yet. GPU/VLM cost remains unproven until Phase 2 benchmarks exist.
+1. one full VOD with round/fight/death/rotation labels;
+2. one fixture for each low, middle, and high rank bucket;
+3. English and Turkish HUD fixtures at minimum;
+4. 720p, 1080p, and non-16:9 capture compatibility cases;
+5. negative fixtures for menus, scoreboard usage, post-round reports, pauses,
+   and edited videos.
 
-Gameplay event evaluation smoke:
-
-| Run ID | Report | Labels | Predictions | Matches | Precision | Recall | F1 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `gameplay-events-example` | `gameplay_events_smoke` | 3 | 4 | 3 | 0.75 | 1.00 | 0.86 |
-
-Interpretation:
-
-- This is a harness smoke test with example labels, not a validated quality score for the algorithm.
-- Real quality claims require manually reviewed labels across multiple VODs and ranks.
+No quality percentage should be presented to users until this broader corpus
+passes a documented release threshold.
