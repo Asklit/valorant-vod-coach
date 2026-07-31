@@ -26,6 +26,7 @@ func main() {
 	visionURL := flag.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "optional vision-service base URL; can also be set through VISION_SERVICE_URL")
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "optional Postgres URL for report metadata and outbox persistence")
 	redisURL := flag.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks")
+	bootstrapAdminToken := flag.String("bootstrap-admin-token", os.Getenv("VODCOACH_BOOTSTRAP_TOKEN"), "one-time token required to create the first administrator")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
@@ -59,20 +60,21 @@ func main() {
 	}
 
 	server := webapi.NewServer(webapi.Config{
-		ManifestPath:   *manifestPath,
-		RawRoot:        *rawRoot,
-		UploadRoot:     *uploadRoot,
-		MaxUploadBytes: *maxUploadBytes,
-		ProcessedRoot:  *processedRoot,
-		FFprobePath:    *ffprobePath,
-		FFmpegPath:     *ffmpegPath,
-		VisionURL:      *visionURL,
-		StaticDir:      *staticDir,
-		Catalog:        catalog,
-		ReportCatalog:  reportCatalog,
-		Locks:          locks,
-		Logger:         obs.Logger,
-		Tracer:         obs.Tracer,
+		ManifestPath:        *manifestPath,
+		RawRoot:             *rawRoot,
+		UploadRoot:          *uploadRoot,
+		MaxUploadBytes:      *maxUploadBytes,
+		ProcessedRoot:       *processedRoot,
+		FFprobePath:         *ffprobePath,
+		FFmpegPath:          *ffmpegPath,
+		VisionURL:           *visionURL,
+		BootstrapAdminToken: *bootstrapAdminToken,
+		StaticDir:           *staticDir,
+		Catalog:             catalog,
+		ReportCatalog:       reportCatalog,
+		Locks:               locks,
+		Logger:              obs.Logger,
+		Tracer:              obs.Tracer,
 	})
 
 	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "vision_configured", *visionURL != "")

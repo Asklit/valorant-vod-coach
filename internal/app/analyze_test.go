@@ -224,7 +224,7 @@ func TestAnalysisRunnerUsesLockManagerWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run analysis: %v", err)
 	}
-	if locks.key != "analysis:vod:diamond_example" {
+	if locks.key != "analysis:owner:system:vod:diamond_example" {
 		t.Fatalf("unexpected lock key: %q", locks.key)
 	}
 	if !locks.released {

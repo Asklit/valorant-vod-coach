@@ -32,9 +32,10 @@ type AuthStore struct {
 }
 
 type AuthRegisterRequest struct {
-	Email       string
-	Password    string
-	DisplayName string
+	Email          string
+	Password       string
+	DisplayName    string
+	BootstrapAdmin bool
 }
 
 type AuthLoginRequest struct {
@@ -92,10 +93,13 @@ func (s *AuthStore) Register(ctx context.Context, request AuthRegisterRequest) (
 			return PublicAuthUser{}, fmt.Errorf("user already exists: %s", email)
 		}
 	}
+	if len(file.Users) == 0 && !request.BootstrapAdmin {
+		return PublicAuthUser{}, errors.New("administrator setup is required")
+	}
 
 	now := s.now()
 	role := AuthRoleUser
-	if len(file.Users) == 0 {
+	if len(file.Users) == 0 && request.BootstrapAdmin {
 		role = AuthRoleAdmin
 	}
 	passwordHash, err := hashPassword(password, s.iterations())

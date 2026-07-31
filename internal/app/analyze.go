@@ -50,6 +50,7 @@ type AnalysisRunner struct {
 
 type RunAnalysisRequest struct {
 	VODLabel     string
+	OwnerID      string
 	RunID        string
 	SampleName   string
 	FPS          string
@@ -156,7 +157,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 
 	if r.Locks != nil {
-		lock, err := r.Locks.Acquire(ctx, analysisLockKey(vodLabel), defaultAnalysisLockTTL)
+		lock, err := r.Locks.Acquire(ctx, analysisLockKey(request.OwnerID, vodLabel), defaultAnalysisLockTTL)
 		if err != nil {
 			return RunAnalysisResult{}, err
 		}
@@ -293,6 +294,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	if report.Gameplay != nil && report.Gameplay.CoachReview != nil {
 		report.Metadata.CoachEngine = report.Gameplay.CoachReview.Engine
 	}
+	report.Metadata.OwnerID = strings.TrimSpace(request.OwnerID)
 
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)
 	if err != nil {
@@ -340,11 +342,11 @@ func (BaselineObservationAnalyzer) AnalyzeObservations(ctx context.Context, requ
 			ID:             "baseline_ingestion_ready",
 			Severity:       domain.FindingSeverityInfo,
 			Category:       "pipeline",
-				Title:          "Analysis evidence is prepared",
-				Detail:         "The pipeline loaded the VOD, probed media metadata, sampled frames, generated review artifacts, and wrote a reproducible report.",
-				Recommendation: "Review capture compatibility and the selected evidence sequence before validating coaching findings.",
-				Confidence:     1,
-				Tags:           []string{"pipeline", "evidence"},
+			Title:          "Analysis evidence is prepared",
+			Detail:         "The pipeline loaded the VOD, probed media metadata, sampled frames, generated review artifacts, and wrote a reproducible report.",
+			Recommendation: "Review capture compatibility and the selected evidence sequence before validating coaching findings.",
+			Confidence:     1,
+			Tags:           []string{"pipeline", "evidence"},
 		},
 		{
 			ID:             "baseline_ai_not_enabled",
