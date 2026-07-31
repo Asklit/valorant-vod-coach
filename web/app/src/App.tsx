@@ -9,12 +9,14 @@ import {
   Database,
   FileJson2,
   FileText,
+	FileVideo2,
   Gauge,
   History,
   Eye,
   Lightbulb,
   Link2,
   LogOut,
+	Pencil,
   Play,
   Radar,
   RefreshCw,
@@ -23,10 +25,13 @@ import {
   ThumbsDown,
   ThumbsUp,
   Timer,
+	Trash2,
+	Upload,
   Video,
-  XCircle
+	X,
+	XCircle
 } from "lucide-react";
-import type { ReactNode, RefObject } from "react";
+import type { FormEvent, ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type PageID = "dashboard" | "library" | "review" | "reports" | "admin";
@@ -69,7 +74,24 @@ type VODItem = {
   latest_report_id?: string;
   latest_generated?: string;
   latest_report_path?: string;
+	map?: string;
+	agent?: string;
+	owner_id?: string;
+	source_type: "curated" | "upload";
+	uploaded_at?: string;
 };
+
+type UploadVODInput = {
+	file: File;
+	title: string;
+	rank: string;
+	map: string;
+	agent: string;
+};
+
+type UploadVODResponse = { vod: VODItem };
+
+type UpdateVODInput = Omit<UploadVODInput, "file">;
 
 type VODListResponse = {
   generated_at: string;
@@ -574,7 +596,10 @@ export function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [savingCorrection, setSavingCorrection] = useState(false);
-	const [savingCoachReview, setSavingCoachReview] = useState(false);
+  const [savingCoachReview, setSavingCoachReview] = useState(false);
+	const [uploadingVod, setUploadingVod] = useState(false);
+	const [uploadProgress, setUploadProgress] = useState(0);
+	const [mutatingVod, setMutatingVod] = useState("");
   const [error, setError] = useState("");
   const [runDuration, setRunDuration] = useState(180);
   const [runFps, setRunFps] = useState("1");
@@ -607,10 +632,6 @@ export function App() {
   const correctionTargets = useMemo(() => buildCorrectionTargets(report), [report]);
 
   useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
     void loadSession();
   }, []);
 
@@ -658,7 +679,7 @@ export function App() {
 
   async function loadSession() {
     try {
-      const response = await fetch(apiURL("/api/auth/session"), { headers: authHeaders });
+      const response = await apiFetch("/api/auth/session", { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -679,7 +700,7 @@ export function App() {
     setError("");
     try {
       const path = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
-      const response = await fetch(apiURL(path), {
+      const response = await apiFetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: authEmail, password: authPassword, display_name: authName })
@@ -697,9 +718,7 @@ export function App() {
   }
 
   async function logout() {
-    if (token) {
-      await fetch(apiURL("/api/auth/logout"), { method: "POST", headers: authHeaders }).catch(() => undefined);
-    }
+    await apiFetch("/api/auth/logout", { method: "POST", headers: authHeaders }).catch(() => undefined);
     clearAuth();
   }
 
@@ -715,7 +734,7 @@ export function App() {
 
   async function loadBackendHealth() {
     try {
-      const response = await fetch(apiURL("/api/health"));
+      const response = await apiFetch("/api/health");
       if (response.ok) {
         setBackendHealth((await response.json()) as BackendHealth);
       }
@@ -728,7 +747,7 @@ export function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(apiURL("/api/vods"), { headers: authHeaders });
+      const response = await apiFetch("/api/vods", { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -746,7 +765,7 @@ export function App() {
   async function loadReports(label: string, options: { preferredRunID?: string; preferGameplay?: boolean } = {}) {
     setLoadingReport(true);
     try {
-      const response = await fetch(apiURL(`/api/reports?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/reports?vod_label=${encodeURIComponent(label)}`, { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -773,7 +792,7 @@ export function App() {
   async function loadReport(label: string, runID: string) {
     setLoadingReport(true);
     try {
-      const response = await fetch(apiURL(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/reports/${encodeURIComponent(label)}/${encodeURIComponent(runID)}`, { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -788,7 +807,7 @@ export function App() {
 
   async function loadEvaluations(label: string) {
     try {
-      const response = await fetch(apiURL(`/api/evaluations?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/evaluations?vod_label=${encodeURIComponent(label)}`, { headers: authHeaders });
       if (response.ok) {
         setEvaluationHistory(((await response.json()) as EvaluationListResponse).evaluations);
       }
@@ -799,7 +818,7 @@ export function App() {
 
   async function loadEvaluationAnnotations(label: string) {
     try {
-      const response = await fetch(apiURL(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`, { headers: authHeaders });
       if (response.ok) {
         setEvaluationAnnotations(((await response.json()) as EvaluationAnnotationListResponse).annotations);
       }
@@ -810,7 +829,7 @@ export function App() {
 
   async function loadManualCorrections(label: string, runID: string) {
     try {
-      const response = await fetch(apiURL(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`, { headers: authHeaders });
       if (response.ok) {
         const payload = (await response.json()) as ManualCorrectionResponse;
         setManualCorrections(payload.corrections);
@@ -824,7 +843,7 @@ export function App() {
 
 	async function loadCoachAssessments(label: string, runID: string) {
 		try {
-			const response = await fetch(apiURL(`/api/coach-assessments?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`), { headers: authHeaders });
+			const response = await apiFetch(`/api/coach-assessments?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`, { headers: authHeaders });
 			if (!response.ok) { throw new Error(await readError(response)); }
 			const payload = (await response.json()) as CoachAssessmentsResponse;
 			setCoachAssessments(payload.assessments);
@@ -855,7 +874,7 @@ export function App() {
   }
 
   async function fetchJSON<T>(path: string): Promise<T> {
-    const response = await fetch(apiURL(path), { headers: authHeaders });
+    const response = await apiFetch(path, { headers: authHeaders });
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -870,7 +889,7 @@ export function App() {
     setAnalysisJob(null);
     setError("");
     try {
-      const response = await fetch(apiURL("/api/analysis-runs"), {
+      const response = await apiFetch("/api/analysis-runs", {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
@@ -900,7 +919,7 @@ export function App() {
   async function pollAnalysisJob(jobID: string, analyzedLabel: string) {
     for (;;) {
       await sleep(1600);
-      const response = await fetch(apiURL(`/api/analysis-runs/${encodeURIComponent(jobID)}`), { headers: authHeaders });
+      const response = await apiFetch(`/api/analysis-runs/${encodeURIComponent(jobID)}`, { headers: authHeaders });
       if (!response.ok) {
         throw new Error(await readError(response));
       }
@@ -927,7 +946,7 @@ export function App() {
     setEvaluating(true);
     setError("");
     try {
-      const response = await fetch(apiURL("/api/evaluation-runs"), {
+      const response = await apiFetch("/api/evaluation-runs", {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
@@ -962,7 +981,7 @@ export function App() {
     setError("");
     try {
       const currentTime = videoRef.current?.currentTime;
-      const response = await fetch(apiURL("/api/corrections"), {
+      const response = await apiFetch("/api/corrections", {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
@@ -995,7 +1014,7 @@ export function App() {
 		setSavingCoachReview(true);
 		setError("");
 		try {
-			const response = await fetch(apiURL("/api/coach-assessments"), {
+			const response = await apiFetch("/api/coach-assessments", {
 				method: "POST", headers: jsonHeaders,
 				body: JSON.stringify({ vod_label: selectedVod.label, report_run_id: report.run_id, window_id: windowID, answers })
 			});
@@ -1015,7 +1034,7 @@ export function App() {
 		if (!selectedVod || !report) { return; }
 		setError("");
 		try {
-			const response = await fetch(apiURL("/api/coach-feedback"), {
+			const response = await apiFetch("/api/coach-feedback", {
 				method: "POST", headers: jsonHeaders,
 				body: JSON.stringify({ vod_label: selectedVod.label, report_run_id: report.run_id, window_id: windowID, verdict })
 			});
@@ -1025,6 +1044,93 @@ export function App() {
 			setCoachProgress(payload.progress);
 		} catch (err) {
 			setError(messageFromError(err));
+		}
+	}
+
+	async function uploadVOD(input: UploadVODInput): Promise<boolean> {
+		if (uploadingVod) { return false; }
+		setUploadingVod(true);
+		setUploadProgress(0);
+		setError("");
+		try {
+			const form = new FormData();
+			form.append("title", input.title);
+			form.append("rank", input.rank);
+			form.append("map", input.map);
+			form.append("agent", input.agent);
+			form.append("file", input.file, input.file.name);
+			const payload = await new Promise<UploadVODResponse>((resolve, reject) => {
+				const request = new XMLHttpRequest();
+				request.open("POST", apiURL("/api/vods/upload"));
+				request.withCredentials = true;
+				if (token) { request.setRequestHeader("Authorization", `Bearer ${token}`); }
+				request.upload.onprogress = (event) => {
+					if (event.lengthComputable) { setUploadProgress(Math.round((event.loaded / event.total) * 100)); }
+				};
+				request.onerror = () => reject(new Error("Upload connection failed"));
+				request.onload = () => {
+					let body: unknown;
+					try { body = JSON.parse(request.responseText); } catch { body = null; }
+					if (request.status < 200 || request.status >= 300) {
+						const apiError = body as { error?: string } | null;
+						reject(new Error(apiError?.error || `Upload failed with status ${request.status}`));
+						return;
+					}
+					resolve(body as UploadVODResponse);
+				};
+				request.send(form);
+			});
+			setUploadProgress(100);
+			await loadVods();
+			setSelectedLabel(payload.vod.label);
+			return true;
+		} catch (err) {
+			setError(messageFromError(err));
+			return false;
+		} finally {
+			setUploadingVod(false);
+		}
+	}
+
+	async function updateVOD(label: string, input: UpdateVODInput): Promise<boolean> {
+		if (mutatingVod) { return false; }
+		setMutatingVod(label);
+		setError("");
+		try {
+			const response = await apiFetch(`/api/vods/${encodeURIComponent(label)}`, {
+				method: "PATCH",
+				headers: jsonHeaders,
+				body: JSON.stringify(input)
+			});
+			if (!response.ok) { throw new Error(await readError(response)); }
+			await loadVods();
+			return true;
+		} catch (err) {
+			setError(messageFromError(err));
+			return false;
+		} finally {
+			setMutatingVod("");
+		}
+	}
+
+	async function deleteVOD(label: string): Promise<boolean> {
+		if (mutatingVod) { return false; }
+		setMutatingVod(label);
+		setError("");
+		try {
+			const response = await apiFetch(`/api/vods/${encodeURIComponent(label)}`, {
+				method: "DELETE",
+				headers: authHeaders
+			});
+			if (!response.ok) { throw new Error(await readError(response)); }
+			if (selectedLabel === label) { setSelectedLabel(""); }
+			await loadVods();
+			return true;
+		} catch (err) {
+			setError(messageFromError(err));
+			return false;
+		} finally {
+			setMutatingVod("");
 		}
 	}
 
@@ -1113,8 +1219,9 @@ export function App() {
           />
         )}
         {page === "library" && (
-          <LibraryPage
-            filteredVods={filteredVods}
+		  <LibraryPage
+			deleteVOD={deleteVOD}
+			filteredVods={filteredVods}
             loading={loading}
             query={query}
             rank={rank}
@@ -1122,7 +1229,12 @@ export function App() {
             selectedLabel={selectedLabel}
             selectVOD={selectVOD}
             setQuery={setQuery}
-            setRank={setRank}
+			setRank={setRank}
+			mutatingVod={mutatingVod}
+			updateVOD={updateVOD}
+			uploading={uploadingVod}
+			uploadProgress={uploadProgress}
+			uploadVOD={uploadVOD}
           />
         )}
         {page === "review" && (
@@ -1329,8 +1441,10 @@ function DashboardPage(props: {
 }
 
 function LibraryPage(props: {
+	deleteVOD: (label: string) => Promise<boolean>;
   filteredVods: VODItem[];
   loading: boolean;
+	mutatingVod: string;
   query: string;
   rank: string;
   refresh: () => void;
@@ -1338,10 +1452,65 @@ function LibraryPage(props: {
   selectVOD: (label: string) => void;
   setQuery: (value: string) => void;
   setRank: (value: string) => void;
+	updateVOD: (label: string, input: UpdateVODInput) => Promise<boolean>;
+	uploading: boolean;
+	uploadProgress: number;
+	uploadVOD: (input: UploadVODInput) => Promise<boolean>;
 }) {
+	const [showUpload, setShowUpload] = useState(false);
+	const [uploadTitle, setUploadTitle] = useState("");
+	const [uploadRank, setUploadRank] = useState("diamond");
+	const [uploadMap, setUploadMap] = useState("");
+	const [uploadAgent, setUploadAgent] = useState("");
+	const [uploadFile, setUploadFile] = useState<File | null>(null);
+	const [editingVod, setEditingVod] = useState<VODItem | null>(null);
+	const [deletingVod, setDeletingVod] = useState<VODItem | null>(null);
+	const [editTitle, setEditTitle] = useState("");
+	const [editRank, setEditRank] = useState("diamond");
+	const [editMap, setEditMap] = useState("");
+	const [editAgent, setEditAgent] = useState("");
+
+	async function submitUpload(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!uploadFile || !uploadTitle.trim()) { return; }
+		const success = await props.uploadVOD({
+			file: uploadFile, title: uploadTitle.trim(), rank: uploadRank,
+			map: uploadMap.trim(), agent: uploadAgent.trim()
+		});
+		if (!success) { return; }
+		setShowUpload(false);
+		setUploadTitle("");
+		setUploadMap("");
+		setUploadAgent("");
+		setUploadFile(null);
+	}
+
+	function openEdit(vod: VODItem) {
+		setEditingVod(vod);
+		setEditTitle(vod.title);
+		setEditRank(vod.rank);
+		setEditMap(vod.map ?? "");
+		setEditAgent(vod.agent ?? "");
+	}
+
+	async function submitEdit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!editingVod || !editTitle.trim()) { return; }
+		const success = await props.updateVOD(editingVod.label, {
+			title: editTitle.trim(), rank: editRank, map: editMap.trim(), agent: editAgent.trim()
+		});
+		if (success) { setEditingVod(null); }
+	}
+
+	async function confirmDelete() {
+		if (!deletingVod) { return; }
+		const success = await props.deleteVOD(deletingVod.label);
+		if (success) { setDeletingVod(null); }
+	}
+
   return (
     <>
-      <PageHeader eyebrow="Library" title="VOD library" detail="Pick a downloaded match and move into review." action={<IconButton icon={<RefreshCw size={17} />} onClick={props.refresh} title="Refresh" />} />
+	  <PageHeader eyebrow="Library" title="VOD library" detail="Pick a match and move into review." action={<div className="page-actions"><button className="command-button" onClick={() => setShowUpload(true)} type="button"><Upload size={16} />Upload VOD</button><IconButton icon={<RefreshCw size={17} />} onClick={props.refresh} title="Refresh" /></div>} />
       <section className="surface">
         <div className="library-toolbar">
           <div className="search-box product-search">
@@ -1361,19 +1530,79 @@ function LibraryPage(props: {
             <EmptyState title="Loading VODs" detail="Dataset scan is running." />
           ) : (
             props.filteredVods.map((vod) => (
-              <button className={props.selectedLabel === vod.label ? "vod-card active" : "vod-card"} key={vod.label} onClick={() => props.selectVOD(vod.label)} type="button">
-                <span className={`rank-sigil rank-${vod.rank}`}>{vod.rank.slice(0, 3)}</span>
-                <div>
-                  <strong>{vod.title}</strong>
-                  <small>{vod.channel} / {vod.duration_text} / {vod.label}</small>
-                </div>
-                <em className={vod.local_status === "downloaded" ? "ready" : ""}>{vod.local_status}</em>
-                <span>{vod.report_count} reports</span>
-              </button>
+              <article className={props.selectedLabel === vod.label ? "vod-card active" : "vod-card"} key={vod.label}>
+				<button className="vod-card-open" onClick={() => props.selectVOD(vod.label)} type="button">
+				  <span className={`rank-sigil rank-${vod.rank}`}>{vod.rank.slice(0, 3)}</span>
+				  <div>
+					<strong>{vod.title}</strong>
+					<small>{vod.source_type === "upload" ? [vod.agent, vod.map, vod.rank, vod.duration_text].filter(Boolean).join(" / ") : `${vod.channel} / ${vod.duration_text} / ${vod.label}`}</small>
+				  </div>
+				  <em className={vod.local_status === "downloaded" ? "ready" : ""}>{vod.local_status}</em>
+				  <span>{vod.report_count} reports</span>
+				</button>
+				{vod.source_type === "upload" && (
+				  <div className="vod-card-actions">
+					<button disabled={Boolean(props.mutatingVod)} onClick={() => openEdit(vod)} title="Edit VOD" type="button"><Pencil size={16} /></button>
+					<button className="danger" disabled={Boolean(props.mutatingVod)} onClick={() => setDeletingVod(vod)} title="Delete VOD" type="button"><Trash2 size={16} /></button>
+				  </div>
+				)}
+              </article>
             ))
           )}
         </div>
       </section>
+
+	  {showUpload && (
+		<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !props.uploading) { setShowUpload(false); } }}>
+		  <section aria-labelledby="upload-title" aria-modal="true" className="upload-dialog" role="dialog">
+			<header><div><p className="eyebrow">New review</p><h2 id="upload-title">Upload VOD</h2></div><button className="icon-button" disabled={props.uploading} onClick={() => setShowUpload(false)} title="Close upload" type="button"><X size={18} /></button></header>
+			<form onSubmit={submitUpload}>
+			  <label className="upload-file-field">
+				<FileVideo2 size={25} />
+				<span>{uploadFile?.name ?? "Select video file"}</span>
+				<small>{uploadFile ? `${(uploadFile.size / 1024 / 1024).toFixed(1)} MB` : "MP4, MKV, WebM, MOV"}</small>
+				<input accept="video/mp4,video/x-matroska,video/webm,video/quicktime,.mp4,.mkv,.webm,.mov" disabled={props.uploading} onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} type="file" />
+			  </label>
+			  <label><span>Title</span><input disabled={props.uploading} maxLength={160} onChange={(event) => setUploadTitle(event.target.value)} placeholder="Ranked game — Bind" required value={uploadTitle} /></label>
+			  <div className="upload-metadata-grid">
+				<label><span>Rank</span><select disabled={props.uploading} onChange={(event) => setUploadRank(event.target.value)} value={uploadRank}>{ranks.filter((item) => item !== "all").map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+				<label><span>Map</span><input disabled={props.uploading} maxLength={64} onChange={(event) => setUploadMap(event.target.value)} placeholder="Bind" value={uploadMap} /></label>
+				<label><span>Agent</span><input disabled={props.uploading} maxLength={64} onChange={(event) => setUploadAgent(event.target.value)} placeholder="Sova" value={uploadAgent} /></label>
+			  </div>
+			  {props.uploading && <div className="upload-progress"><div><i style={{ width: `${props.uploadProgress}%` }} /></div><span>{props.uploadProgress < 100 ? `${props.uploadProgress}% uploading` : "Validating video"}</span></div>}
+			  <footer><button className="secondary-action" disabled={props.uploading} onClick={() => setShowUpload(false)} type="button">Cancel</button><button className="run-button" disabled={props.uploading || !uploadFile || !uploadTitle.trim()} type="submit"><Upload size={17} />{props.uploading ? "Uploading" : "Upload"}</button></footer>
+			</form>
+		  </section>
+		</div>
+	  )}
+
+	  {editingVod && (
+		<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !props.mutatingVod) { setEditingVod(null); } }}>
+		  <section aria-labelledby="edit-vod-title" aria-modal="true" className="upload-dialog manage-vod-dialog" role="dialog">
+			<header><div><p className="eyebrow">Library</p><h2 id="edit-vod-title">Edit VOD</h2></div><button className="icon-button" disabled={Boolean(props.mutatingVod)} onClick={() => setEditingVod(null)} title="Close" type="button"><X size={18} /></button></header>
+			<form onSubmit={submitEdit}>
+			  <label><span>Title</span><input disabled={Boolean(props.mutatingVod)} maxLength={160} onChange={(event) => setEditTitle(event.target.value)} required value={editTitle} /></label>
+			  <div className="upload-metadata-grid">
+				<label><span>Rank</span><select disabled={Boolean(props.mutatingVod)} onChange={(event) => setEditRank(event.target.value)} value={editRank}>{ranks.filter((item) => item !== "all").map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+				<label><span>Map</span><input disabled={Boolean(props.mutatingVod)} maxLength={64} onChange={(event) => setEditMap(event.target.value)} value={editMap} /></label>
+				<label><span>Agent</span><input disabled={Boolean(props.mutatingVod)} maxLength={64} onChange={(event) => setEditAgent(event.target.value)} value={editAgent} /></label>
+			  </div>
+			  <footer><button className="secondary-action" disabled={Boolean(props.mutatingVod)} onClick={() => setEditingVod(null)} type="button">Cancel</button><button className="run-button" disabled={Boolean(props.mutatingVod) || !editTitle.trim()} type="submit"><CheckCircle2 size={17} />{props.mutatingVod ? "Saving" : "Save"}</button></footer>
+			</form>
+		  </section>
+		</div>
+	  )}
+
+	  {deletingVod && (
+		<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !props.mutatingVod) { setDeletingVod(null); } }}>
+		  <section aria-labelledby="delete-vod-title" aria-modal="true" className="confirm-dialog" role="alertdialog">
+			<div className="confirm-dialog-icon"><Trash2 size={22} /></div>
+			<h2 id="delete-vod-title">Delete VOD?</h2>
+			<p><strong>{deletingVod.title}</strong> and its generated review artifacts will be permanently removed.</p>
+			<footer><button className="secondary-action" disabled={Boolean(props.mutatingVod)} onClick={() => setDeletingVod(null)} type="button">Cancel</button><button className="danger-command" disabled={Boolean(props.mutatingVod)} onClick={() => void confirmDelete()} type="button"><Trash2 size={16} />{props.mutatingVod ? "Deleting" : "Delete"}</button></footer>
+		  </section>
+		</div>
+	  )}
     </>
   );
 }
@@ -2044,6 +2273,10 @@ function apiURL(path: string) {
   const explicitBase = import.meta.env.VITE_API_BASE as string | undefined;
   const base = explicitBase || devBackendBase();
   return `${base}${path}`;
+}
+
+function apiFetch(path: string, init: RequestInit = {}) {
+  return fetch(apiURL(path), { ...init, credentials: "include" });
 }
 
 function devBackendBase() {

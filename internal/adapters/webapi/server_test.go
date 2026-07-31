@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +48,90 @@ func TestServerListsVODs(t *testing.T) {
 	}
 }
 
+func TestServerUploadsStreamsAndAnalyzesOwnedVOD(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for name, value := range map[string]string{"title": "My Bind review", "rank": "diamond", "map": "Bind", "agent": "Sova"} {
+		if err := writer.WriteField(name, value); err != nil {
+			t.Fatalf("write field: %v", err)
+		}
+	}
+	file, err := writer.CreateFormFile("file", "ranked.mp4")
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := file.Write([]byte("fake uploaded video")); err != nil {
+		t.Fatalf("write upload: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/vods/upload", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	authorize(request, token)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	var uploaded UploadVODResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	if uploaded.VOD.SourceType != "upload" || uploaded.VOD.Map != "Bind" || uploaded.VOD.Agent != "Sova" || uploaded.VOD.Label == "" {
+		t.Fatalf("unexpected upload: %+v", uploaded.VOD)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/vods", nil)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"source_type": "upload"`) {
+		t.Fatalf("uploaded VOD missing from library %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, uploaded.VOD.VideoURL, nil)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "fake uploaded video" {
+		t.Fatalf("stream expected uploaded content, got %d: %q", response.Code, response.Body.String())
+	}
+
+	analysisBody := bytes.NewBufferString(fmt.Sprintf(`{"vod_label":%q,"run_id":"upload_analysis","fps":"1","duration_seconds":5,"force":true}`, uploaded.VOD.Label))
+	request = httptest.NewRequest(http.MethodPost, "/api/analysis-runs", analysisBody)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"run_id": "upload_analysis"`) {
+		t.Fatalf("analysis expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPatch, "/api/vods/"+uploaded.VOD.Label, bytes.NewBufferString(`{"title":"Updated upload","rank":"ascendant","map":"Abyss","agent":"Jett"}`))
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title": "Updated upload"`) || !strings.Contains(response.Body.String(), `"rank": "ascendant"`) {
+		t.Fatalf("update expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/vods/"+uploaded.VOD.Label, nil)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"deleted": true`) {
+		t.Fatalf("delete expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(fixture.outRoot, uploaded.VOD.Label)); !os.IsNotExist(err) {
+		t.Fatalf("processed upload artifacts must be removed, got %v", err)
+	}
+}
+
 func TestServerRequiresAuthForProductAPI(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -62,16 +148,18 @@ func TestServerRequiresAuthForProductAPI(t *testing.T) {
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected public video 200, got %d: %s", response.Code, response.Body.String())
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected private video 401, got %d: %s", response.Code, response.Body.String())
 	}
 }
 
 func TestServerServesLocalVODVideo(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
+	token := registerTestAdmin(t, server)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/vods/diamond_example/video", nil)
+	authorize(request, token)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -80,6 +168,32 @@ func TestServerServesLocalVODVideo(t *testing.T) {
 	}
 	if got := response.Body.String(); got != "fake video" {
 		t.Fatalf("unexpected video response body: %q", got)
+	}
+}
+
+func TestServerPreventsAccessToAnotherUsersUpload(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	registerTestAdmin(t, server)
+	ownerToken := registerTestAccount(t, server, "owner@example.com")
+	otherToken := registerTestAccount(t, server, "other@example.com")
+	uploaded := uploadTestVOD(t, server, ownerToken)
+
+	request := httptest.NewRequest(http.MethodGet, uploaded.VOD.VideoURL, nil)
+	authorize(request, otherToken)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("other user stream expected 404, got %d: %s", response.Code, response.Body.String())
+	}
+
+	body := bytes.NewBufferString(fmt.Sprintf(`{"vod_label":%q,"run_id":"forbidden_upload","fps":"1","duration_seconds":5}`, uploaded.VOD.Label))
+	request = httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	authorize(request, otherToken)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("other user analysis expected 404, got %d: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -559,9 +673,13 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	if auth.Token == "" || auth.User.Role != app.AuthRoleAdmin {
 		t.Fatalf("unexpected auth response: %+v", auth)
 	}
+	sessionCookie := response.Result().Cookies()[0]
+	if sessionCookie.Name != sessionCookieName || !sessionCookie.HttpOnly || sessionCookie.SameSite != http.SameSiteLaxMode || sessionCookie.MaxAge <= 0 {
+		t.Fatalf("unexpected session cookie: %+v", sessionCookie)
+	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/admin/overview", nil)
-	request.Header.Set("Authorization", "Bearer "+auth.Token)
+	request.AddCookie(sessionCookie)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
@@ -576,12 +694,16 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
-	request.Header.Set("Authorization", "Bearer "+auth.Token)
+	request.AddCookie(sessionCookie)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected logout 200, got %d: %s", response.Code, response.Body.String())
+	}
+	cleared := response.Result().Cookies()[0]
+	if cleared.Name != sessionCookieName || cleared.MaxAge >= 0 {
+		t.Fatalf("expected cleared session cookie: %+v", cleared)
 	}
 
 	body = bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass"}`)
@@ -829,8 +951,13 @@ func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, vodLabel stri
 
 func registerTestAdmin(t *testing.T, server *Server) string {
 	t.Helper()
+	return registerTestAccount(t, server, "coach@example.com")
+}
 
-	body := bytes.NewBufferString(`{"email":"coach@example.com","password":"secret-pass","display_name":"Coach"}`)
+func registerTestAccount(t *testing.T, server *Server, email string) string {
+	t.Helper()
+
+	body := bytes.NewBufferString(fmt.Sprintf(`{"email":%q,"password":"secret-pass","display_name":"Coach"}`, email))
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/register", body)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -846,6 +973,41 @@ func registerTestAdmin(t *testing.T, server *Server) string {
 		t.Fatalf("expected auth token: %+v", auth)
 	}
 	return auth.Token
+}
+
+func uploadTestVOD(t *testing.T, server *Server, token string) UploadVODResponse {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for name, value := range map[string]string{"title": "Private VOD", "rank": "diamond", "map": "Bind", "agent": "Sova"} {
+		if err := writer.WriteField(name, value); err != nil {
+			t.Fatalf("write field: %v", err)
+		}
+	}
+	file, err := writer.CreateFormFile("file", "private.mp4")
+	if err != nil {
+		t.Fatalf("create upload file: %v", err)
+	}
+	if _, err := file.Write([]byte("private uploaded video")); err != nil {
+		t.Fatalf("write upload file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close upload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/vods/upload", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	authorize(request, token)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	var uploaded UploadVODResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	return uploaded
 }
 
 func authorize(request *http.Request, token string) {

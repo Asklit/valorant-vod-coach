@@ -18,6 +18,8 @@ import (
 func main() {
 	manifestPath := flag.String("manifest", "data/manifests/vods.tsv", "path to TSV manifest")
 	rawRoot := flag.String("raw-root", "data/raw/youtube", "root directory for downloaded videos")
+	uploadRoot := flag.String("upload-root", "data/raw/uploads", "root directory for user-uploaded videos")
+	maxUploadBytes := flag.Int64("max-upload-bytes", 6<<30, "maximum uploaded video size in bytes")
 	processedRoot := flag.String("processed-root", "data/processed", "root directory for generated artifacts")
 	ffprobePath := flag.String("ffprobe", "ffprobe", "ffprobe executable path")
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable path")
@@ -57,18 +59,20 @@ func main() {
 	}
 
 	server := webapi.NewServer(webapi.Config{
-		ManifestPath:  *manifestPath,
-		RawRoot:       *rawRoot,
-		ProcessedRoot: *processedRoot,
-		FFprobePath:   *ffprobePath,
-		FFmpegPath:    *ffmpegPath,
-		VisionURL:     *visionURL,
-		StaticDir:     *staticDir,
-		Catalog:       catalog,
-		ReportCatalog: reportCatalog,
-		Locks:         locks,
-		Logger:        obs.Logger,
-		Tracer:        obs.Tracer,
+		ManifestPath:   *manifestPath,
+		RawRoot:        *rawRoot,
+		UploadRoot:     *uploadRoot,
+		MaxUploadBytes: *maxUploadBytes,
+		ProcessedRoot:  *processedRoot,
+		FFprobePath:    *ffprobePath,
+		FFmpegPath:     *ffmpegPath,
+		VisionURL:      *visionURL,
+		StaticDir:      *staticDir,
+		Catalog:        catalog,
+		ReportCatalog:  reportCatalog,
+		Locks:          locks,
+		Logger:         obs.Logger,
+		Tracer:         obs.Tracer,
 	})
 
 	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "vision_configured", *visionURL != "")
