@@ -52,6 +52,7 @@ Rules:
 cmd/
   vodctl/                         # CLI entrypoint for local operations
   vod-web/                        # local Go HTTP API and optional static UI server
+  vod-worker/                     # Temporal worker for durable full-VOD analysis
   vod-outbox-relay/               # PostgreSQL outbox to Kafka relay
   vod-clickhouse-sink/            # Kafka event sink into ClickHouse
 
@@ -63,11 +64,15 @@ internal/
     media/                        # ffprobe/ffmpeg probing and frame sampling
     postgres/                     # PostgreSQL migrations, metadata persistence, outbox access
     redislock/                    # Redis-backed analysis locks
+    redissession/                 # Redis-backed secure browser sessions
+    redisrate/                    # atomic Redis authentication rate limiter
     kafka/                        # Kafka outbox event producer
     clickhouse/                   # ClickHouse HTTP migrations and event inserts
     report/                       # local JSON/Markdown report persistence
     vision/                       # local visual heuristic analyzer
     visionservice/                # HTTP client for Python model-review service
+    localanalysis/                # owner-scoped local pipeline dependency composition
+    temporalworkflow/             # Temporal workflow, activities, launcher, dispatcher
     webapi/                       # local HTTP API for React UI, auth sessions, and admin diagnostics
   platform/                       # config/logging/observability/runtime helpers
 
@@ -88,7 +93,7 @@ data/
 tests/
   integration/                    # integration/e2e tests that need real services or tools
 web/
-  app/                            # React/TypeScript/Vite MVP UI
+  app/                            # React/TypeScript/Vite product UI
 ml/
   vision-service/                 # Python model-review service boundary
   evals/                          # manual quality-evaluation label fixtures

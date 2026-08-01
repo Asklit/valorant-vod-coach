@@ -2,19 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redisrate"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redissession"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/temporalworkflow"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/webapi"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
+	"go.temporal.io/sdk/client"
 )
 
 func main() {
@@ -30,12 +36,18 @@ func main() {
 	postgresMigrationsDir := flag.String("postgres-migrations-dir", "deployments/migrations/postgres", "directory containing PostgreSQL migrations")
 	migratePostgres := flag.Bool("migrate-postgres", true, "apply pending PostgreSQL migrations at startup")
 	redisURL := flag.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks")
+	temporalAddress := flag.String("temporal-address", os.Getenv("TEMPORAL_ADDRESS"), "optional Temporal frontend address for durable analysis workflows")
+	temporalNamespace := flag.String("temporal-namespace", envString("TEMPORAL_NAMESPACE", client.DefaultNamespace), "Temporal namespace")
+	temporalTaskQueue := flag.String("temporal-task-queue", envString("TEMPORAL_TASK_QUEUE", temporalworkflow.DefaultTaskQueue), "Temporal analysis task queue")
 	bootstrapAdminToken := flag.String("bootstrap-admin-token", os.Getenv("VODCOACH_BOOTSTRAP_TOKEN"), "one-time token required to create the first administrator")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
 
-	obs, err := observability.Setup(context.Background(), observability.Config{ServiceName: "vod-web"}, os.Stderr)
+	serviceCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	obs, err := observability.Setup(serviceCtx, observability.Config{ServiceName: "vod-web"}, os.Stderr)
 	if err != nil {
 		log.Fatalf("setup observability: %v", err)
 	}
@@ -49,13 +61,13 @@ func main() {
 	var userDataStore app.UserDataStore
 	dependencies := map[string]app.HealthChecker{}
 	if *databaseURL != "" {
-		db, err := postgres.Open(context.Background(), *databaseURL)
+		db, err := postgres.Open(serviceCtx, *databaseURL)
 		if err != nil {
 			log.Fatalf("open postgres: %v", err)
 		}
 		defer db.Close()
 		if *migratePostgres {
-			applied, err := postgres.ApplyMigrations(context.Background(), db, *postgresMigrationsDir)
+			applied, err := postgres.ApplyMigrations(serviceCtx, db, *postgresMigrationsDir)
 			if err != nil {
 				log.Fatalf("apply PostgreSQL migrations: %v", err)
 			}
@@ -89,6 +101,32 @@ func main() {
 		authRateLimiter = redisrate.Limiter{Client: sessionStore.Client}
 		dependencies["redis"] = sessionStore
 	}
+	var workflowLauncher app.AnalysisWorkflowLauncher
+	if *temporalAddress != "" {
+		if jobStore == nil {
+			log.Fatal("Temporal workflows require DATABASE_URL for the durable job read model")
+		}
+		temporalClient, err := client.Dial(client.Options{
+			HostPort:  *temporalAddress,
+			Namespace: *temporalNamespace,
+		})
+		if err != nil {
+			log.Fatalf("connect to Temporal: %v", err)
+		}
+		defer temporalClient.Close()
+		workflowLauncher = temporalworkflow.Launcher{Client: temporalClient, TaskQueue: *temporalTaskQueue}
+		dependencies["temporal"] = temporalworkflow.HealthChecker{Client: temporalClient}
+	}
+	if workflowLauncher != nil {
+		dispatcher := temporalworkflow.Dispatcher{
+			Launcher: workflowLauncher,
+			Jobs:     jobStore,
+			OnError: func(err error) {
+				obs.Logger.Warn("reconcile queued workflows", "error", err)
+			},
+		}
+		go dispatcher.Run(serviceCtx)
+	}
 
 	server := webapi.NewServer(webapi.Config{
 		ManifestPath:        *manifestPath,
@@ -111,13 +149,40 @@ func main() {
 		JobStore:            jobStore,
 		Dependencies:        dependencies,
 		Locks:               locks,
+		WorkflowLauncher:    workflowLauncher,
 		Logger:              obs.Logger,
 		Tracer:              obs.Tracer,
 	})
 
-	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "vision_configured", *visionURL != "")
+	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "temporal_enabled", *temporalAddress != "", "vision_configured", *visionURL != "")
 	fmt.Fprintf(os.Stdout, "vod-web listening on http://localhost%s\n", *addr)
-	if err := http.ListenAndServe(*addr, server); err != nil {
-		log.Fatal(err)
+	httpServer := &http.Server{
+		Addr:              *addr,
+		Handler:           server,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- httpServer.ListenAndServe()
+	}()
+	select {
+	case err := <-serverErrors:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			obs.Logger.Error("vod-web stopped unexpectedly", "error", err)
+		}
+	case <-serviceCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			obs.Logger.Error("shutdown vod-web", "error", err)
+		}
+	}
+}
+
+func envString(name string, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

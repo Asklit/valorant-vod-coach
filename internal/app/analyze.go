@@ -45,6 +45,7 @@ type AnalysisRunner struct {
 	Reports  ReportStore
 	Catalog  AnalysisCatalog
 	Locks    LockManager
+	Progress AnalysisProgressReporter
 	Clock    func() time.Time
 }
 
@@ -157,6 +158,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 
 	if r.Locks != nil {
+		r.reportProgress(ctx, "locking", "Waiting for analysis lock", 2)
 		lock, err := r.Locks.Acquire(ctx, analysisLockKey(request.OwnerID, vodLabel), defaultAnalysisLockTTL)
 		if err != nil {
 			return RunAnalysisResult{}, err
@@ -169,16 +171,19 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 		sampleName = "analysis_" + runID
 	}
 
+	r.reportProgress(ctx, "resolving", "Resolving VOD source", 5)
 	vod, videoPath, err := r.Resolver.ResolveVOD(ctx, vodLabel)
 	if err != nil {
 		return RunAnalysisResult{}, err
 	}
 
+	r.reportProgress(ctx, "probing", "Reading media metadata", 10)
 	probe, err := r.Media.ProbeMedia(ctx, vod, videoPath)
 	if err != nil {
 		return RunAnalysisResult{}, err
 	}
 
+	r.reportProgress(ctx, "sampling", "Extracting timeline evidence", 20)
 	sample, err := r.Media.SampleFrames(ctx, vod, videoPath, FrameSampleRequest{
 		Name:         sampleName,
 		FPS:          request.FPS,
@@ -190,6 +195,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	if err != nil {
 		return RunAnalysisResult{}, err
 	}
+	r.reportProgress(ctx, "analyzing", "Analyzing HUD and gameplay signals", 55)
 
 	analyzer := r.Analyzer
 	if analyzer == nil {
@@ -208,6 +214,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 
 	if observations.Gameplay != nil && len(observations.Gameplay.ReviewWindows) > 0 {
+		r.reportProgress(ctx, "clips", "Building evidence clips", 72)
 		if extractor, ok := r.Media.(ReviewClipExtractor); ok {
 			clips, err := extractor.ExtractReviewClips(ctx, vod, videoPath, ReviewClipRequest{
 				RunID:      runID,
@@ -226,6 +233,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 		}
 	}
 	if observations.Gameplay != nil {
+		r.reportProgress(ctx, "coaching", "Building evidence-first review", 82)
 		coach := r.Coach
 		if coach == nil {
 			coach = EvidenceCoachEngine{}
@@ -248,6 +256,7 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 			return RunAnalysisResult{}, fmt.Errorf("model review requested but model reviewer is not configured")
 		}
 		if request.ModelReview && len(observations.Gameplay.ModelReviewTasks) > 0 {
+			r.reportProgress(ctx, "model_review", "Reviewing selected evidence windows", 88)
 			review, err := r.Reviewer.ReviewModelTasks(ctx, ModelReviewRequest{
 				RunID: runID,
 				VOD:   vod,
@@ -296,11 +305,13 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 	report.Metadata.OwnerID = strings.TrimSpace(request.OwnerID)
 
+	r.reportProgress(ctx, "saving", "Saving structured report", 94)
 	saved, err := r.Reports.SaveReport(ctx, report, request.Overwrite)
 	if err != nil {
 		return RunAnalysisResult{}, err
 	}
 	if r.Catalog != nil {
+		r.reportProgress(ctx, "persisting", "Persisting report snapshot and events", 98)
 		if err := r.Catalog.SaveAnalysisResult(ctx, PersistAnalysisRequest{
 			Report: report,
 			Saved:  saved,
@@ -310,6 +321,13 @@ func (r AnalysisRunner) Run(ctx context.Context, request RunAnalysisRequest) (Ru
 	}
 
 	return RunAnalysisResult{Report: report, Saved: saved}, nil
+}
+
+func (r AnalysisRunner) reportProgress(ctx context.Context, stage string, message string, percent int) {
+	if r.Progress == nil {
+		return
+	}
+	r.Progress.ReportAnalysisProgress(ctx, AnalysisProgress{Stage: stage, Message: message, Percent: percent})
 }
 
 func markCompletedModelTasks(tasks []domain.ModelReviewTask, runs []domain.ModelReviewRun) {

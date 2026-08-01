@@ -3,6 +3,7 @@ package webapi
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 	"time"
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
-	"github.com/asklit/valorant-vod-coach/internal/adapters/media"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/localanalysis"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
@@ -61,6 +62,8 @@ type Config struct {
 	UploadCatalog             app.UploadCatalog
 	UserDataStore             app.UserDataStore
 	Locks                     app.LockManager
+	AnalysisExecutor          app.AnalysisExecutor
+	WorkflowLauncher          app.AnalysisWorkflowLauncher
 	Logger                    *slog.Logger
 	Tracer                    trace.Tracer
 }
@@ -76,6 +79,8 @@ type Server struct {
 	logs     *requestLogStore
 	logger   *slog.Logger
 	tracer   trace.Tracer
+	executor app.AnalysisExecutor
+	workflow app.AnalysisWorkflowLauncher
 	guidedMu sync.Mutex
 	uploadMu sync.Mutex
 }
@@ -173,19 +178,35 @@ type EvaluationRunResponse struct {
 }
 
 type AnalysisJobResponse struct {
-	JobID        string                 `json:"job_id"`
-	RunID        string                 `json:"run_id"`
-	VODLabel     string                 `json:"vod_label"`
-	Status       string                 `json:"status"`
-	Message      string                 `json:"message,omitempty"`
-	CreatedAt    time.Time              `json:"created_at"`
-	StartedAt    *time.Time             `json:"started_at,omitempty"`
-	FinishedAt   *time.Time             `json:"finished_at,omitempty"`
-	Error        string                 `json:"error,omitempty"`
-	Report       *domain.AnalysisReport `json:"report,omitempty"`
-	ReportJSON   string                 `json:"report_json,omitempty"`
-	ReportMD     string                 `json:"report_md,omitempty"`
-	ArtifactBase string                 `json:"artifact_base"`
+	JobID                 string                 `json:"job_id"`
+	RunID                 string                 `json:"run_id"`
+	VODLabel              string                 `json:"vod_label"`
+	Status                string                 `json:"status"`
+	Stage                 string                 `json:"stage"`
+	ProgressPercent       int                    `json:"progress_percent"`
+	Message               string                 `json:"message,omitempty"`
+	CreatedAt             time.Time              `json:"created_at"`
+	StartedAt             *time.Time             `json:"started_at,omitempty"`
+	FinishedAt            *time.Time             `json:"finished_at,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
+	Attempts              int                    `json:"attempts"`
+	MaxAttempts           int                    `json:"max_attempts"`
+	CancellationRequested bool                   `json:"cancellation_requested"`
+	Report                *domain.AnalysisReport `json:"report,omitempty"`
+	ReportJSON            string                 `json:"report_json,omitempty"`
+	ReportMD              string                 `json:"report_md,omitempty"`
+	ArtifactBase          string                 `json:"artifact_base"`
+}
+
+type AnalysisJobListResponse struct {
+	Jobs       []AnalysisJobResponse `json:"jobs"`
+	NextBefore *time.Time            `json:"next_before,omitempty"`
+	NextCursor string                `json:"next_cursor,omitempty"`
+}
+
+type analysisJobCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
 }
 
 type analysisJobStore struct {
@@ -424,6 +445,8 @@ func NewServer(config Config) *Server {
 		logs:     newRequestLogStore(200),
 		logger:   config.Logger,
 		tracer:   config.Tracer,
+		executor: config.AnalysisExecutor,
+		workflow: config.WorkflowLauncher,
 	}
 	if server.logger == nil {
 		server.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -439,6 +462,20 @@ func NewServer(config Config) *Server {
 	}
 	if server.jobs == nil {
 		server.jobs = &analysisJobStore{jobs: map[string]app.AnalysisJob{}}
+	}
+	if server.executor == nil {
+		server.executor = localanalysis.Service{Config: localanalysis.Config{
+			ManifestPath:  config.ManifestPath,
+			RawRoot:       config.RawRoot,
+			UploadRoot:    config.UploadRoot,
+			ProcessedRoot: config.ProcessedRoot,
+			FFprobePath:   config.FFprobePath,
+			FFmpegPath:    config.FFmpegPath,
+			VisionURL:     config.VisionURL,
+			UploadCatalog: config.UploadCatalog,
+			Catalog:       config.Catalog,
+			Locks:         config.Locks,
+		}}
 	}
 	if server.tracer == nil {
 		server.tracer = trace.NewNoopTracerProvider().Tracer("vod-web")
@@ -568,7 +605,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/vods/{label}", s.handleDeleteUploadedVOD)
 	s.mux.HandleFunc("GET /api/vods/", s.handleVODVideo)
 	s.mux.HandleFunc("POST /api/analysis-runs", s.handleAnalyze)
+	s.mux.HandleFunc("GET /api/analysis-runs", s.handleAnalysisJobs)
 	s.mux.HandleFunc("GET /api/analysis-runs/", s.handleAnalysisJob)
+	s.mux.HandleFunc("DELETE /api/analysis-runs/{jobID}", s.handleCancelAnalysisJob)
 	s.mux.HandleFunc("GET /api/evaluation-annotations", s.handleEvaluationAnnotations)
 	s.mux.HandleFunc("POST /api/evaluation-runs", s.handleRunEvaluation)
 	s.mux.HandleFunc("GET /api/evaluations", s.handleEvaluations)
@@ -1507,45 +1546,68 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("VOD %q is unavailable", request.VODLabel))
 		return
 	}
+	now := time.Now().UTC()
+	if strings.TrimSpace(request.RunID) == "" {
+		request.RunID = app.DefaultRunID(now)
+	}
+	jobRequest := app.AnalysisJobRequest{
+		SchemaVersion: app.AnalysisJobRequestSchemaVersion,
+		VODLabel:      request.VODLabel, OwnerID: request.OwnerID, RunID: request.RunID,
+		FPS: request.FPS, StartSeconds: request.StartSeconds, DurationSeconds: durationSeconds,
+		ImageQuality: request.ImageQuality, Force: request.Force, ModelReview: request.ModelReview,
+		IncludeAllVODs: request.IncludeAll,
+	}
 
 	if request.Async {
-		now := time.Now().UTC()
-		if strings.TrimSpace(request.RunID) == "" {
-			request.RunID = app.DefaultRunID(now)
-		}
 		jobID := newAnalysisJobID(request.RunID, now)
-		requestJSON, err := json.Marshal(request)
+		requestJSON, err := json.Marshal(jobRequest)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		job := app.AnalysisJob{
 			ID: jobID, OwnerID: user.ID, RunID: request.RunID, VODLabel: request.VODLabel,
-			Status: app.AnalysisJobQueued, Message: "Analysis job queued", Request: requestJSON,
+			Status: app.AnalysisJobQueued, Stage: "queued", Message: "Analysis job queued", Request: requestJSON,
 			MaxAttempts: 3, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := s.jobs.CreateAnalysisJob(r.Context(), job); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		go s.runAnalysisJob(job, request, durationSeconds)
+		if s.workflow != nil {
+			if err := s.workflow.StartAnalysisWorkflow(r.Context(), job.ID, jobRequest); err != nil {
+				job.Message = "Waiting for workflow service"
+				job.UpdatedAt = time.Now().UTC()
+				if updateErr := s.jobs.UpdateAnalysisJob(context.Background(), job); updateErr != nil {
+					s.logger.Error("record pending workflow dispatch", "job_id", job.ID, "error", updateErr)
+				}
+				s.logger.Warn("workflow dispatch deferred", "job_id", job.ID, "error", err)
+			}
+		} else {
+			go s.runAnalysisJob(job, jobRequest)
+		}
 		writeJSON(w, http.StatusAccepted, analysisJobResponse(job))
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), localanalysis.OverallTimeout(durationSeconds))
 	defer cancel()
 
-	result, err := s.runLocalAnalysis(ctx, request, durationSeconds)
+	execution, err := s.executor.RunAnalysis(ctx, jobRequest, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	report, err := readReport(execution.ReportJSONPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("load completed report: %w", err))
+		return
+	}
 
 	writeJSON(w, http.StatusOK, AnalyzeResponse{
-		Report:       result.Report,
-		ReportJSON:   result.Saved.JSONPath,
-		ReportMD:     result.Saved.MarkdownPath,
+		Report:       report,
+		ReportJSON:   execution.ReportJSONPath,
+		ReportMD:     execution.ReportMDPath,
 		ArtifactBase: "/artifacts/",
 	})
 }
@@ -1570,9 +1632,108 @@ func (s *Server) handleAnalysisJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, analysisJobResponse(job))
 }
 
-func (s *Server) runAnalysisJob(job app.AnalysisJob, request AnalyzeRequest, durationSeconds float64) {
+func (s *Server) handleAnalysisJobs(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	limit := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, errors.New("limit must be between 1 and 100"))
+			return
+		}
+		limit = parsed
+	}
+	var before *time.Time
+	beforeID := ""
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		if strings.TrimSpace(r.URL.Query().Get("before")) != "" {
+			writeError(w, http.StatusBadRequest, errors.New("cursor and before cannot be combined"))
+			return
+		}
+		cursor, err := decodeAnalysisJobCursor(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		createdAt := cursor.CreatedAt.UTC()
+		before = &createdAt
+		beforeID = cursor.ID
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("before")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("before must be an RFC3339 timestamp"))
+			return
+		}
+		parsed = parsed.UTC()
+		before = &parsed
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status != "" && !isAnalysisJobStatus(status) {
+		writeError(w, http.StatusBadRequest, errors.New("status must be queued, running, completed, failed, or cancelled"))
+		return
+	}
+	includeAll := user.Role == app.AuthRoleAdmin && r.URL.Query().Get("scope") == "all"
+	jobs, err := s.jobs.ListAnalysisJobs(r.Context(), app.AnalysisJobListFilter{
+		OwnerID: user.ID, VODLabel: strings.TrimSpace(r.URL.Query().Get("vod_label")),
+		Status: status, IncludeAll: includeAll, Limit: limit, Before: before, BeforeID: beforeID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	response := AnalysisJobListResponse{Jobs: make([]AnalysisJobResponse, 0, len(jobs))}
+	for _, job := range jobs {
+		response.Jobs = append(response.Jobs, analysisJobResponse(job))
+	}
+	if len(jobs) == limit {
+		last := jobs[len(jobs)-1]
+		next := last.CreatedAt
+		response.NextBefore = &next
+		response.NextCursor = encodeAnalysisJobCursor(analysisJobCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleCancelAnalysisJob(w http.ResponseWriter, r *http.Request) {
+	user, _ := s.currentUser(r)
+	jobID := strings.TrimSpace(r.PathValue("jobID"))
+	job, found, err := s.jobs.FindAnalysisJob(r.Context(), jobID, user.ID, user.Role == app.AuthRoleAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("analysis job not found"))
+		return
+	}
+	if job.Status == app.AnalysisJobCompleted || job.Status == app.AnalysisJobFailed || job.Status == app.AnalysisJobCancelled {
+		writeJSON(w, http.StatusOK, analysisJobResponse(job))
+		return
+	}
+	if s.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("durable workflow cancellation is not configured"))
+		return
+	}
+	job.CancellationRequested = true
+	job.Message = "Cancellation requested"
+	job.UpdatedAt = time.Now().UTC()
+	if err := s.jobs.UpdateAnalysisJob(r.Context(), job); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.workflow.CancelAnalysisWorkflow(r.Context(), job.ID); err != nil {
+		job.Message = "Cancellation queued for delivery"
+		s.logger.Warn("workflow cancellation deferred", "job_id", job.ID, "error", err)
+	}
+	writeJSON(w, http.StatusAccepted, analysisJobResponse(job))
+}
+
+func (s *Server) runAnalysisJob(job app.AnalysisJob, request app.AnalysisJobRequest) {
 	startedAt := time.Now().UTC()
 	job.Status = app.AnalysisJobRunning
+	job.Stage = "starting"
+	job.ProgressPercent = 1
 	job.Message = "Analyzing VOD"
 	job.StartedAt = &startedAt
 	job.UpdatedAt = startedAt
@@ -1581,66 +1742,43 @@ func (s *Server) runAnalysisJob(job app.AnalysisJob, request AnalyzeRequest, dur
 		return
 	}
 
-	overallTimeout, _ := analysisTimeouts(durationSeconds)
-	ctx, cancel := context.WithTimeout(context.Background(), overallTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), localanalysis.OverallTimeout(request.DurationSeconds))
 	defer cancel()
 
-	result, err := s.runLocalAnalysis(ctx, request, durationSeconds)
+	reporter := app.AnalysisProgressReporterFunc(func(ctx context.Context, progress app.AnalysisProgress) {
+		current, found, err := s.jobs.FindAnalysisJob(ctx, job.ID, job.OwnerID, false)
+		if err != nil || !found {
+			return
+		}
+		current.Stage = progress.Stage
+		current.ProgressPercent = progress.Percent
+		current.Message = progress.Message
+		current.UpdatedAt = time.Now().UTC()
+		_ = s.jobs.UpdateAnalysisJob(ctx, current)
+	})
+	result, err := s.executor.RunAnalysis(ctx, request, reporter)
 	finishedAt := time.Now().UTC()
+	if current, found, findErr := s.jobs.FindAnalysisJob(context.Background(), job.ID, job.OwnerID, false); findErr == nil && found {
+		job = current
+	}
 	job.FinishedAt = &finishedAt
 	job.UpdatedAt = finishedAt
 	if err != nil {
 		job.Status = app.AnalysisJobFailed
+		job.Stage = "failed"
 		job.Message = "Analysis failed"
 		job.Error = err.Error()
 	} else {
 		job.Status = app.AnalysisJobCompleted
+		job.Stage = "completed"
+		job.ProgressPercent = 100
 		job.Message = "Analysis completed"
-		job.ReportJSONPath = result.Saved.JSONPath
-		job.ReportMDPath = result.Saved.MarkdownPath
+		job.ReportJSONPath = result.ReportJSONPath
+		job.ReportMDPath = result.ReportMDPath
 	}
 	if updateErr := s.jobs.UpdateAnalysisJob(context.Background(), job); updateErr != nil {
 		s.logger.Error("finish analysis job", "job_id", job.ID, "error", updateErr)
 	}
-}
-
-func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, durationSeconds float64) (app.RunAnalysisResult, error) {
-	_, sampleTimeout := analysisTimeouts(durationSeconds)
-	processedRoot := s.analysisRoot(request.OwnerID)
-	runner := app.AnalysisRunner{
-		Resolver: s.vodResolver(request.OwnerID, request.IncludeAll),
-		Media: media.LocalProcessor{
-			FFprobePath:   s.config.FFprobePath,
-			FFmpegPath:    s.config.FFmpegPath,
-			ProcessedRoot: processedRoot,
-			ProbeTimeout:  30 * time.Second,
-			SampleTimeout: sampleTimeout,
-		},
-		Analyzer: vision.LocalGameplayAnalyzer{TesseractPath: "tesseract"},
-		Reports: reportstore.LocalStore{
-			ProcessedRoot: processedRoot,
-		},
-		Catalog: s.config.Catalog,
-		Locks:   s.config.Locks,
-	}
-	if request.ModelReview {
-		if strings.TrimSpace(s.config.VisionURL) == "" {
-			return app.RunAnalysisResult{}, errors.New("model_review requested but vision service URL is not configured")
-		}
-		runner.Reviewer = visionservice.Client{BaseURL: s.config.VisionURL}
-	}
-
-	return runner.Run(ctx, app.RunAnalysisRequest{
-		VODLabel:     request.VODLabel,
-		OwnerID:      request.OwnerID,
-		RunID:        request.RunID,
-		FPS:          request.FPS,
-		Start:        secondsDuration(request.StartSeconds),
-		Duration:     secondsDuration(durationSeconds),
-		ImageQuality: request.ImageQuality,
-		Overwrite:    request.Force,
-		ModelReview:  request.ModelReview,
-	})
 }
 
 func (s *Server) vodResolver(ownerID string, includeAll bool) vodstore.OwnedResolver {
@@ -2659,13 +2797,6 @@ func normalizeAnalyzeRequest(request *AnalyzeRequest) (float64, error) {
 	return durationSeconds, nil
 }
 
-func analysisTimeouts(durationSeconds float64) (time.Duration, time.Duration) {
-	if durationSeconds == 0 || durationSeconds > 10*60 {
-		return 50 * time.Minute, 45 * time.Minute
-	}
-	return 15 * time.Minute, 10 * time.Minute
-}
-
 func newAnalysisJobID(runID string, now time.Time) string {
 	value := strings.TrimSpace(runID)
 	if value == "" {
@@ -2704,6 +2835,79 @@ func (s *analysisJobStore) FindAnalysisJob(_ context.Context, jobID string, owne
 	return job, true, nil
 }
 
+func (s *analysisJobStore) ListAnalysisJobs(_ context.Context, filter app.AnalysisJobListFilter) ([]app.AnalysisJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	jobs := make([]app.AnalysisJob, 0, limit)
+	for _, job := range s.jobs {
+		if !filter.IncludeAll && job.OwnerID != filter.OwnerID {
+			continue
+		}
+		if filter.VODLabel != "" && job.VODLabel != filter.VODLabel {
+			continue
+		}
+		if filter.Status != "" && job.Status != filter.Status {
+			continue
+		}
+		if filter.CancellationRequested != nil && job.CancellationRequested != *filter.CancellationRequested {
+			continue
+		}
+		if filter.ActiveOnly && job.Status != app.AnalysisJobQueued && job.Status != app.AnalysisJobRunning {
+			continue
+		}
+		if filter.Before != nil {
+			isBefore := job.CreatedAt.Before(*filter.Before)
+			if filter.BeforeID != "" && job.CreatedAt.Equal(*filter.Before) {
+				isBefore = job.ID < filter.BeforeID
+			}
+			if !isBefore {
+				continue
+			}
+		}
+		jobs = append(jobs, job)
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
+			return jobs[i].ID > jobs[j].ID
+		}
+		return jobs[i].CreatedAt.After(jobs[j].CreatedAt)
+	})
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
+	return jobs, nil
+}
+
+func encodeAnalysisJobCursor(cursor analysisJobCursor) string {
+	payload, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeAnalysisJobCursor(value string) (analysisJobCursor, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(payload) > 1024 {
+		return analysisJobCursor{}, errors.New("cursor is invalid")
+	}
+	var cursor analysisJobCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.CreatedAt.IsZero() || strings.TrimSpace(cursor.ID) == "" {
+		return analysisJobCursor{}, errors.New("cursor is invalid")
+	}
+	return cursor, nil
+}
+
+func isAnalysisJobStatus(status string) bool {
+	switch status {
+	case app.AnalysisJobQueued, app.AnalysisJobRunning, app.AnalysisJobCompleted, app.AnalysisJobFailed, app.AnalysisJobCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *analysisJobStore) UpdateAnalysisJob(_ context.Context, job app.AnalysisJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2727,8 +2931,10 @@ func (s *analysisJobStore) CountAnalysisJobs(_ context.Context) (map[string]int,
 func analysisJobResponse(job app.AnalysisJob) AnalysisJobResponse {
 	return AnalysisJobResponse{
 		JobID: job.ID, RunID: job.RunID, VODLabel: job.VODLabel, Status: job.Status,
-		Message: job.Message, CreatedAt: job.CreatedAt, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
-		Error: job.Error, ReportJSON: job.ReportJSONPath, ReportMD: job.ReportMDPath, ArtifactBase: "/artifacts/",
+		Stage: job.Stage, ProgressPercent: job.ProgressPercent, Message: job.Message,
+		CreatedAt: job.CreatedAt, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
+		Error: job.Error, Attempts: job.Attempts, MaxAttempts: job.MaxAttempts, CancellationRequested: job.CancellationRequested,
+		ReportJSON: job.ReportJSONPath, ReportMD: job.ReportMDPath, ArtifactBase: "/artifacts/",
 	}
 }
 
@@ -3092,10 +3298,6 @@ func isAllowedDevOrigin(origin string) bool {
 		port := parsed.Port()
 		return (host == "127.0.0.1" || host == "localhost") && strings.HasPrefix(port, "517")
 	}
-}
-
-func secondsDuration(seconds float64) time.Duration {
-	return time.Duration(seconds * float64(time.Second))
 }
 
 func parsePort(value string, fallback int) int {

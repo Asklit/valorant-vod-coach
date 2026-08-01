@@ -206,6 +206,104 @@ func TestAnalysisJobIsOwnerIsolated(t *testing.T) {
 	}
 }
 
+func TestAnalysisJobHistoryIsTenantIsolated(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	admin := registerTestAdmin(t, server)
+	owner := registerTestAccount(t, server, "history-owner@example.com")
+	other := registerTestAccount(t, server, "history-other@example.com")
+	createdAt := time.Now().UTC()
+	if err := server.jobs.CreateAnalysisJob(context.Background(), app.AnalysisJob{
+		ID: "job_history_private", OwnerID: owner.user.ID, RunID: "private", VODLabel: "diamond_example",
+		Status: app.AnalysisJobQueued, MaxAttempts: 3, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/analysis-runs", nil)
+	authorize(request, other)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "job_history_private") {
+		t.Fatalf("another tenant must not list private job, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/analysis-runs", nil)
+	authorize(request, owner)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job_history_private") {
+		t.Fatalf("owner must list private job, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/analysis-runs?scope=all", nil)
+	authorize(request, admin)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job_history_private") {
+		t.Fatalf("administrator scope=all must list job, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAnalysisJobHistoryCursorDoesNotSkipEqualTimestamps(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	auth := registerTestAccount(t, server, "cursor-owner@example.com")
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	for _, id := range []string{"job_cursor_a", "job_cursor_b", "job_cursor_c"} {
+		if err := server.jobs.CreateAnalysisJob(context.Background(), app.AnalysisJob{
+			ID: id, OwnerID: auth.user.ID, RunID: id, VODLabel: "diamond_example",
+			Status: app.AnalysisJobQueued, MaxAttempts: 3, CreatedAt: createdAt, UpdatedAt: createdAt,
+		}); err != nil {
+			t.Fatalf("create cursor job: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/analysis-runs?limit=2", nil)
+	authorize(request, auth)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var first AnalysisJobListResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &first) != nil {
+		t.Fatalf("first cursor page expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if len(first.Jobs) != 2 || first.Jobs[0].JobID != "job_cursor_c" || first.Jobs[1].JobID != "job_cursor_b" || first.NextCursor == "" {
+		t.Fatalf("unexpected first cursor page: %+v", first)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/analysis-runs?limit=2&cursor="+first.NextCursor, nil)
+	authorize(request, auth)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var second AnalysisJobListResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &second) != nil {
+		t.Fatalf("second cursor page expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if len(second.Jobs) != 1 || second.Jobs[0].JobID != "job_cursor_a" {
+		t.Fatalf("unexpected second cursor page: %+v", second)
+	}
+}
+
+func TestAnalysisJobHistoryRejectsInvalidFilters(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+	auth := registerTestAccount(t, server, "filters-owner@example.com")
+
+	for _, target := range []string{
+		"/api/analysis-runs?status=unknown",
+		"/api/analysis-runs?cursor=not-base64",
+		"/api/analysis-runs?cursor=not-base64&before=2026-08-01T00:00:00Z",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		authorize(request, auth)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s expected 400, got %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestSameRunIDProducesOwnerIsolatedReports(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)

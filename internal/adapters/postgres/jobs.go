@@ -31,12 +31,12 @@ INSERT INTO analysis_jobs (
   id, owner_id, run_id, vod_label, status, message, error, request,
   report_json_path, report_markdown_path, attempts, max_attempts,
   lease_owner, lease_expires_at, cancellation_requested,
-  created_at, started_at, finished_at, updated_at
+  created_at, started_at, finished_at, stage, progress_percent, updated_at
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8::jsonb,
   $9, $10, $11, $12,
   $13, $14, $15,
-  $16, $17, $18, now()
+  $16, $17, $18, $19, $20, now()
 )
 `,
 		job.ID,
@@ -57,6 +57,8 @@ INSERT INTO analysis_jobs (
 		job.CreatedAt.UTC(),
 		job.StartedAt,
 		job.FinishedAt,
+		job.Stage,
+		job.ProgressPercent,
 	)
 	if err != nil {
 		return fmt.Errorf("insert analysis job: %w", err)
@@ -85,6 +87,8 @@ UPDATE analysis_jobs SET
   cancellation_requested = $12,
   started_at = $13,
   finished_at = $14,
+  stage = $15,
+  progress_percent = $16,
   updated_at = now()
 WHERE id = $1 AND owner_id = $2
 `,
@@ -102,6 +106,8 @@ WHERE id = $1 AND owner_id = $2
 		job.CancellationRequested,
 		job.StartedAt,
 		job.FinishedAt,
+		job.Stage,
+		job.ProgressPercent,
 	)
 	if err != nil {
 		return fmt.Errorf("update analysis job: %w", err)
@@ -125,7 +131,7 @@ SELECT
   id, owner_id, run_id, vod_label, status, message, error, request,
   report_json_path, report_markdown_path, attempts, max_attempts,
   lease_owner, lease_expires_at, cancellation_requested,
-  created_at, started_at, finished_at, updated_at
+  created_at, started_at, finished_at, stage, progress_percent, updated_at
 FROM analysis_jobs
 WHERE id = $1 AND ($3 OR owner_id = $2)
 `, strings.TrimSpace(id), strings.TrimSpace(ownerID), includeAll)
@@ -137,6 +143,52 @@ WHERE id = $1 AND ($3 OR owner_id = $2)
 		return app.AnalysisJob{}, false, fmt.Errorf("find analysis job: %w", err)
 	}
 	return job, true, nil
+}
+
+func (s Store) ListAnalysisJobs(ctx context.Context, filter app.AnalysisJobListFilter) ([]app.AnalysisJob, error) {
+	if s.DB == nil {
+		return nil, errors.New("postgres store requires DB")
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT
+  id, owner_id, run_id, vod_label, status, message, error, request,
+  report_json_path, report_markdown_path, attempts, max_attempts,
+  lease_owner, lease_expires_at, cancellation_requested,
+  created_at, started_at, finished_at, stage, progress_percent, updated_at
+FROM analysis_jobs
+WHERE ($3 OR owner_id = $1)
+  AND ($2 = '' OR vod_label = $2)
+  AND (
+    $4::timestamptz IS NULL
+    OR ($7 = '' AND created_at < $4)
+    OR ($7 <> '' AND (created_at < $4 OR (created_at = $4 AND id < $7)))
+  )
+  AND ($6 = '' OR status = $6)
+  AND ($8::boolean IS NULL OR cancellation_requested = $8)
+  AND (NOT $9 OR status IN ('queued', 'running'))
+ORDER BY created_at DESC, id DESC
+LIMIT $5
+`, strings.TrimSpace(filter.OwnerID), strings.TrimSpace(filter.VODLabel), filter.IncludeAll, filter.Before, limit, strings.TrimSpace(filter.Status), strings.TrimSpace(filter.BeforeID), filter.CancellationRequested, filter.ActiveOnly)
+	if err != nil {
+		return nil, fmt.Errorf("list analysis jobs: %w", err)
+	}
+	defer rows.Close()
+	jobs := make([]app.AnalysisJob, 0, limit)
+	for rows.Next() {
+		job, err := scanAnalysisJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 func (s Store) CountAnalysisJobs(ctx context.Context) (map[string]int, error) {
@@ -168,12 +220,18 @@ func validateAnalysisJob(job app.AnalysisJob) error {
 		return errors.New("analysis job ID, owner ID, and VOD label are required")
 	}
 	switch job.Status {
-	case app.AnalysisJobQueued, app.AnalysisJobRunning, app.AnalysisJobCompleted, app.AnalysisJobFailed, "cancelled":
+	case app.AnalysisJobQueued, app.AnalysisJobRunning, app.AnalysisJobCompleted, app.AnalysisJobFailed, app.AnalysisJobCancelled:
 	default:
 		return fmt.Errorf("invalid analysis job status %q", job.Status)
 	}
 	if job.CreatedAt.IsZero() {
 		return errors.New("analysis job creation time is required")
+	}
+	if job.ProgressPercent < 0 || job.ProgressPercent > 100 {
+		return errors.New("analysis job progress percent must be between 0 and 100")
+	}
+	if len(job.Stage) > 64 || len(job.Message) > 512 || len(job.Error) > 4096 {
+		return errors.New("analysis job status text is too long")
 	}
 	if len(job.Request) > 0 && !json.Valid(job.Request) {
 		return errors.New("analysis job request must be valid JSON")
@@ -202,6 +260,8 @@ func scanAnalysisJob(scanner rowScanner) (app.AnalysisJob, error) {
 		&job.CreatedAt,
 		&job.StartedAt,
 		&job.FinishedAt,
+		&job.Stage,
+		&job.ProgressPercent,
 		&job.UpdatedAt,
 	)
 	return job, err

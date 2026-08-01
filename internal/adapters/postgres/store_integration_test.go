@@ -117,6 +117,45 @@ TRUNCATE TABLE auth_users, vods, analysis_jobs, user_documents, outbox_events CA
 	if foundJob, found, err := store.FindAnalysisJob(ctx, job.ID, player.ID, false); err != nil || !found || foundJob.Attempts != 1 {
 		t.Fatalf("find job: %+v found=%v err=%v", foundJob, found, err)
 	}
+	if jobs, err := store.ListAnalysisJobs(ctx, app.AnalysisJobListFilter{OwnerID: admin.ID, Limit: 10}); err != nil || len(jobs) != 0 {
+		t.Fatalf("another tenant must not list jobs: %+v err=%v", jobs, err)
+	}
+	if jobs, err := store.ListAnalysisJobs(ctx, app.AnalysisJobListFilter{OwnerID: player.ID, VODLabel: vod.Label, Limit: 10}); err != nil || len(jobs) != 1 || jobs[0].ID != job.ID {
+		t.Fatalf("owner must list job: %+v err=%v", jobs, err)
+	}
+	for _, sibling := range []app.AnalysisJob{
+		{
+			ID: "job_integration_b", OwnerID: player.ID, RunID: "run_b", VODLabel: vod.Label,
+			Status: app.AnalysisJobCancelled, Stage: "cancelled", CancellationRequested: true,
+			Request: []byte(`{"fps":"1"}`), MaxAttempts: 3, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "job_integration_c", OwnerID: player.ID, RunID: "run_c", VODLabel: vod.Label,
+			Status: app.AnalysisJobRunning, Stage: "analyzing", CancellationRequested: true,
+			Request: []byte(`{"fps":"1"}`), MaxAttempts: 3, CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := store.CreateAnalysisJob(ctx, sibling); err != nil {
+			t.Fatalf("create sibling job %s: %v", sibling.ID, err)
+		}
+	}
+	firstPage, err := store.ListAnalysisJobs(ctx, app.AnalysisJobListFilter{OwnerID: player.ID, Limit: 2})
+	if err != nil || len(firstPage) != 2 || firstPage[0].ID != "job_integration_c" || firstPage[1].ID != "job_integration_b" {
+		t.Fatalf("unexpected first composite cursor page: %+v err=%v", firstPage, err)
+	}
+	secondPage, err := store.ListAnalysisJobs(ctx, app.AnalysisJobListFilter{
+		OwnerID: player.ID, Limit: 2, Before: &firstPage[1].CreatedAt, BeforeID: firstPage[1].ID,
+	})
+	if err != nil || len(secondPage) != 1 || secondPage[0].ID != job.ID {
+		t.Fatalf("unexpected second composite cursor page: %+v err=%v", secondPage, err)
+	}
+	cancellationRequested := true
+	activeCancellations, err := store.ListAnalysisJobs(ctx, app.AnalysisJobListFilter{
+		IncludeAll: true, CancellationRequested: &cancellationRequested, ActiveOnly: true, Limit: 10,
+	})
+	if err != nil || len(activeCancellations) != 1 || activeCancellations[0].ID != "job_integration_c" {
+		t.Fatalf("unexpected active cancellations: %+v err=%v", activeCancellations, err)
+	}
 
 	corrections := domain.ManualCorrectionSet{
 		SchemaVersion: domain.ManualCorrectionSetSchemaVersion, VODLabel: vod.Label, ReportRunID: "same_run", UpdatedAt: now,

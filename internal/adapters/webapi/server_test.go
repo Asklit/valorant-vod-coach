@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -438,6 +439,82 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	}
 }
 
+func TestServerDispatchesVersionedJobToTemporalAndCancelsIt(t *testing.T) {
+	fixture := newFixture(t)
+	launcher := &fakeWorkflowLauncher{}
+	fixture.config.WorkflowLauncher = launcher
+	server := NewServer(fixture.config)
+	auth := registerTestAdmin(t, server)
+
+	body := bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"temporal_test","fps":"2","duration_seconds":0,"force":true,"async":true}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", body)
+	authorize(request, auth)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("dispatch expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var job AnalysisJobResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if launcher.startedJobID != job.JobID {
+		t.Fatalf("started workflow %q, want %q", launcher.startedJobID, job.JobID)
+	}
+	if launcher.request.SchemaVersion != app.AnalysisJobRequestSchemaVersion || launcher.request.OwnerID != auth.user.ID || launcher.request.DurationSeconds != 0 {
+		t.Fatalf("unexpected workflow request: %+v", launcher.request)
+	}
+	persisted, found, err := server.jobs.FindAnalysisJob(context.Background(), job.JobID, auth.user.ID, false)
+	if err != nil || !found {
+		t.Fatalf("find persisted job: found=%t err=%v", found, err)
+	}
+	var persistedRequest app.AnalysisJobRequest
+	if err := json.Unmarshal(persisted.Request, &persistedRequest); err != nil || persistedRequest.OwnerID != auth.user.ID {
+		t.Fatalf("persisted job request must retain tenant context: %+v err=%v", persistedRequest, err)
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/analysis-runs/"+job.JobID, nil)
+	authorize(request, auth)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("cancel expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+	if launcher.cancelledJobID != job.JobID {
+		t.Fatalf("cancelled workflow %q, want %q", launcher.cancelledJobID, job.JobID)
+	}
+}
+
+func TestServerPersistsCancellationIntentWhenTemporalIsUnavailable(t *testing.T) {
+	fixture := newFixture(t)
+	launcher := &fakeWorkflowLauncher{cancelErr: errors.New("Temporal unavailable")}
+	fixture.config.WorkflowLauncher = launcher
+	server := NewServer(fixture.config)
+	auth := registerTestAdmin(t, server)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-runs", bytes.NewBufferString(`{"vod_label":"diamond_example","run_id":"cancel_retry","async":true}`))
+	authorize(request, auth)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var job AnalysisJobResponse
+	if response.Code != http.StatusAccepted || json.Unmarshal(response.Body.Bytes(), &job) != nil {
+		t.Fatalf("dispatch expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/analysis-runs/"+job.JobID, nil)
+	authorize(request, auth)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"cancellation_requested": true`) || !strings.Contains(response.Body.String(), "Cancellation queued for delivery") {
+		t.Fatalf("cancellation intent expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+	persisted, found, err := server.jobs.FindAnalysisJob(context.Background(), job.JobID, auth.user.ID, false)
+	if err != nil || !found || !persisted.CancellationRequested {
+		t.Fatalf("cancellation intent was not persisted: found=%t job=%+v err=%v", found, persisted, err)
+	}
+}
+
 func TestServerListsEvaluations(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -845,6 +922,25 @@ func TestServerDiagnosticsEndpoints(t *testing.T) {
 	if got := response.Body.String(); !strings.Contains(got, "profiles") {
 		t.Fatalf("unexpected pprof response:\n%s", got)
 	}
+}
+
+type fakeWorkflowLauncher struct {
+	startedJobID   string
+	cancelledJobID string
+	request        app.AnalysisJobRequest
+	startErr       error
+	cancelErr      error
+}
+
+func (f *fakeWorkflowLauncher) StartAnalysisWorkflow(_ context.Context, jobID string, request app.AnalysisJobRequest) error {
+	f.startedJobID = jobID
+	f.request = request
+	return f.startErr
+}
+
+func (f *fakeWorkflowLauncher) CancelAnalysisWorkflow(_ context.Context, jobID string) error {
+	f.cancelledJobID = jobID
+	return f.cancelErr
 }
 
 func TestReadinessChecksConfiguredDependenciesWithoutLeakingDetails(t *testing.T) {

@@ -522,9 +522,9 @@ Current status:
 - Cache every model response by video ID, timestamp window, model, and prompt version.
 - Keep reports reproducible from saved intermediate JSON.
 
-## Immediate Next Steps
+## Current Product Work
 
-No open code tasks for the current local MVP.
+The local MVP platform is complete, but product-quality coaching, multi-replica storage, diagnostics, and deployment work remain open. Current execution is tracked as feature branches rather than treating the first runnable pipeline as the finished product.
 
 Completed local MVP infrastructure:
 
@@ -542,4 +542,15 @@ Completed local MVP infrastructure:
 - Service diagnostics for `vod-web`: liveness, readiness, metrics, and pprof.
 - Manual correction capture in the Go API and React UI, saved as reproducible local JSON artifacts.
 - Page-based React product UI, local auth endpoints, and admin console for readiness checks, request metrics, logs, users, and service diagnostics.
-- Product JSON API auth guard with public diagnostics and media/artifact routes.
+- Secure cookie authentication, CSRF protection, admin-only profiling/evaluation, and tenant-scoped media/artifact routes.
+- PostgreSQL-backed users, uploads, report snapshots, analysis jobs, corrections, and guided reviews with tenant isolation.
+- Redis-backed sessions and atomic authentication rate limiting.
+- Temporal workflow, independent `vod-worker`, activity retries/heartbeats/cancellation, queued-intent reconciliation, and persisted stage progress.
+
+Next product increments:
+
+- S3-compatible VOD/artifact storage and safe multi-replica upload lifecycle.
+- Kafka/ClickHouse operational dashboards and worker-level OpenTelemetry metrics/traces.
+- Evidence-quality benchmarks and stronger zero-cost CPU/OCR gameplay semantics.
+- Router- and feature-based React architecture, user job/report history, and a complete administrative operations console.
+- Container images, production Compose profiles, CI integration suites, backup/restore, and browser QA.

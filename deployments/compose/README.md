@@ -1,11 +1,11 @@
 # Local Infrastructure
 
-This compose stack is the local production-shaped environment for the MVP.
+This compose stack is the local production-shaped product environment. It is intended for development and integration testing; production deployment uses independently managed stateful services or their supported Kubernetes operators/Helm charts.
 
 ## Services
 
 - PostgreSQL: transactional source of truth.
-- Redis: cache, locks, rate limits, temporary job state.
+- Redis: sessions, distributed locks, rate limits, and cache.
 - Kafka in KRaft mode: durable domain and pipeline event stream.
 - ClickHouse: analytical event and pipeline telemetry store.
 - MinIO: local S3-compatible artifact storage.
@@ -54,6 +54,17 @@ When `vodctl analyze run` or `vod-web` receives a `DATABASE_URL`, successful ana
 With `DATABASE_URL`, `vod-web` also reads report history and latest report metadata from PostgreSQL. The report JSON/Markdown files remain artifact payloads referenced by the database rows.
 
 When `REDIS_URL` is configured, analysis runs acquire a Redis-backed lock per VOD before ffprobe/ffmpeg work starts. Use the default `redis://localhost:6379/0` from `.env.example` for local duplicate-run protection.
+
+Run the durable analysis worker while PostgreSQL, Redis, and Temporal are healthy:
+
+```sh
+go run ./cmd/vod-worker \
+  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}" \
+  --redis-url "${REDIS_URL:-redis://localhost:6379/0}" \
+  --temporal-address "${TEMPORAL_ADDRESS:-localhost:7233}"
+```
+
+Start `vod-web` with the same three service addresses. The API commits queued job intents to PostgreSQL and Temporal delivers them to `vod-worker`; queued intents are reconciled after transient Temporal failures.
 
 Publish pending outbox rows to Kafka:
 
