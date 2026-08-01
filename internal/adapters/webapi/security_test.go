@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/asklit/valorant-vod-coach/internal/app"
 )
 
 func TestAuthUsesHTTPOnlyCookieAndSessionBoundCSRF(t *testing.T) {
@@ -103,12 +106,15 @@ func TestAuthenticationEndpointsAreRateLimitedByClient(t *testing.T) {
 }
 
 func TestAuthRateLimiterExpiresOldClientEntries(t *testing.T) {
-	limiter := newAuthRateLimiter(1, time.Minute)
 	started := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
-	if allowed, _ := limiter.allow("login:old-client", started); !allowed {
+	now := started
+	limiter := newAuthRateLimiter()
+	limiter.clock = func() time.Time { return now }
+	if allowed, _, _ := limiter.Allow(context.Background(), "login:old-client", 1, time.Minute); !allowed {
 		t.Fatal("first request should be allowed")
 	}
-	if allowed, _ := limiter.allow("login:new-client", started.Add(2*time.Minute)); !allowed {
+	now = started.Add(2 * time.Minute)
+	if allowed, _, _ := limiter.Allow(context.Background(), "login:new-client", 1, time.Minute); !allowed {
 		t.Fatal("new client request should be allowed")
 	}
 	if _, retained := limiter.entries["login:old-client"]; retained {
@@ -175,12 +181,13 @@ func TestAnalysisJobIsOwnerIsolated(t *testing.T) {
 	registerTestAdmin(t, server)
 	owner := registerTestAccount(t, server, "owner@example.com")
 	other := registerTestAccount(t, server, "other@example.com")
-	server.jobs.put(&analysisJob{
-		OwnerID: owner.user.ID,
-		AnalysisJobResponse: AnalysisJobResponse{
-			JobID: "job_private", RunID: "private", VODLabel: "diamond_example", Status: "queued", CreatedAt: time.Now().UTC(),
-		},
-	})
+	createdAt := time.Now().UTC()
+	if err := server.jobs.CreateAnalysisJob(context.Background(), app.AnalysisJob{
+		ID: "job_private", OwnerID: owner.user.ID, RunID: "private", VODLabel: "diamond_example",
+		Status: app.AnalysisJobQueued, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}); err != nil {
+		t.Fatalf("create private analysis job: %v", err)
+	}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/analysis-runs/job_private", nil)
 	authorize(request, other)
@@ -249,6 +256,29 @@ func TestCorrectionsAreUserIsolatedForSharedVOD(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("owner correction expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	var correctionResponse ManualCorrectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &correctionResponse); err != nil {
+		t.Fatalf("decode correction response: %v", err)
+	}
+	relativeCorrectionPath, err := filepath.Rel(fixture.outRoot, correctionResponse.JSONPath)
+	if err != nil {
+		t.Fatalf("resolve correction artifact path: %v", err)
+	}
+	correctionArtifactURL := "/artifacts/" + filepath.ToSlash(relativeCorrectionPath)
+	request = httptest.NewRequest(http.MethodGet, correctionArtifactURL, nil)
+	authorize(request, owner)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "private note") {
+		t.Fatalf("owner correction export expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, correctionArtifactURL, nil)
+	authorize(request, other)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("other user correction export expected 404, got %d: %s", response.Code, response.Body.String())
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/corrections?vod_label=diamond_example&report_run_id=shared_report", nil)

@@ -64,18 +64,43 @@ func AppendManualCorrection(ctx context.Context, root string, vodLabel string, r
 	set.UpdatedAt = now.UTC()
 	set.Corrections = append(set.Corrections, correction)
 
-	if err := os.MkdirAll(filepath.Dir(saved.JSONPath), 0o755); err != nil {
-		return domain.ManualCorrectionSet{}, SavedManualCorrections{}, err
-	}
-	raw, err := json.MarshalIndent(set, "", "  ")
-	if err != nil {
-		return domain.ManualCorrectionSet{}, SavedManualCorrections{}, err
-	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(saved.JSONPath, raw, 0o644); err != nil {
+	if _, err := SaveManualCorrections(root, set); err != nil {
 		return domain.ManualCorrectionSet{}, SavedManualCorrections{}, err
 	}
 	return set, saved, nil
+}
+
+func SaveManualCorrections(root string, set domain.ManualCorrectionSet) (SavedManualCorrections, error) {
+	path := manualCorrectionsPath(root, set.VODLabel, set.ReportRunID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return SavedManualCorrections{}, err
+	}
+	raw, err := json.MarshalIndent(set, "", "  ")
+	if err != nil {
+		return SavedManualCorrections{}, err
+	}
+	raw = append(raw, '\n')
+	temp, err := os.CreateTemp(filepath.Dir(path), ".corrections-*.tmp")
+	if err != nil {
+		return SavedManualCorrections{}, err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(raw); err != nil {
+		temp.Close()
+		return SavedManualCorrections{}, err
+	}
+	if err := temp.Chmod(0o640); err != nil {
+		temp.Close()
+		return SavedManualCorrections{}, err
+	}
+	if err := temp.Close(); err != nil {
+		return SavedManualCorrections{}, err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return SavedManualCorrections{}, err
+	}
+	return SavedManualCorrections{JSONPath: path}, nil
 }
 
 func emptyManualCorrectionSet(vodLabel string, reportRunID string) domain.ManualCorrectionSet {

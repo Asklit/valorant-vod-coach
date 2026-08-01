@@ -20,9 +20,17 @@ import (
 )
 
 const (
-	AuthRoleAdmin = "admin"
-	AuthRoleUser  = "user"
+	AuthRoleAdmin             = "admin"
+	AuthRoleUser              = "user"
+	DefaultAuthHashIterations = 120000
 )
+
+type Authenticator interface {
+	Register(ctx context.Context, request AuthRegisterRequest) (PublicAuthUser, error)
+	Authenticate(ctx context.Context, request AuthLoginRequest) (PublicAuthUser, error)
+	ListUsers(ctx context.Context) ([]PublicAuthUser, error)
+	UserCount(ctx context.Context) (int, error)
+}
 
 type AuthStore struct {
 	Path       string
@@ -226,7 +234,34 @@ func (s *AuthStore) iterations() int {
 	if s.Iterations > 0 {
 		return s.Iterations
 	}
-	return 120000
+	return DefaultAuthHashIterations
+}
+
+func NormalizeAuthRegistration(request AuthRegisterRequest) (email string, displayName string, password string, err error) {
+	return normalizeAuthRegistration(request)
+}
+
+func NormalizeAuthEmail(value string) string {
+	return normalizeEmail(value)
+}
+
+func HashAuthPassword(password string, iterations int) (string, error) {
+	if iterations <= 0 {
+		iterations = DefaultAuthHashIterations
+	}
+	return hashPassword(password, iterations)
+}
+
+func VerifyAuthPassword(password string, encoded string) bool {
+	return verifyPassword(password, encoded)
+}
+
+func PublicAuthUserFromRecord(user AuthUser) PublicAuthUser {
+	return publicAuthUser(user)
+}
+
+func NewAuthUserID() string {
+	return newAuthID("user")
 }
 
 func normalizeAuthRegistration(request AuthRegisterRequest) (string, string, string, error) {
@@ -236,11 +271,20 @@ func normalizeAuthRegistration(request AuthRegisterRequest) (string, string, str
 	if email == "" || !strings.Contains(email, "@") {
 		return "", "", "", errors.New("valid email is required")
 	}
+	if len(email) > 320 {
+		return "", "", "", errors.New("email is too long")
+	}
 	if len(password) < 8 {
 		return "", "", "", errors.New("password must be at least 8 characters")
 	}
+	if len(password) > 1024 {
+		return "", "", "", errors.New("password is too long")
+	}
 	if displayName == "" {
 		displayName = strings.Split(email, "@")[0]
+	}
+	if len(displayName) > 100 {
+		return "", "", "", errors.New("display name is too long")
 	}
 	return email, displayName, password, nil
 }

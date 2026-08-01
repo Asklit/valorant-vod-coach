@@ -48,13 +48,27 @@ func LoadMigrations(dir string) ([]Migration, error) {
 }
 
 func ApplyMigrations(ctx context.Context, db *sql.DB, dir string) ([]Migration, error) {
+	if db == nil {
+		return nil, fmt.Errorf("DB is required")
+	}
+	lockConn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open migration lock connection: %w", err)
+	}
+	defer lockConn.Close()
+	const migrationLockID int64 = 749188227126104539
+	if _, err := lockConn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer lockConn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", migrationLockID)
+
 	migrations, err := LoadMigrations(dir)
 	if err != nil {
 		return nil, err
 	}
 	applied := make([]Migration, 0, len(migrations))
 	for _, migration := range migrations {
-		didApply, err := applyMigration(ctx, db, migration)
+		didApply, err := applyMigration(ctx, lockConn, migration)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +79,11 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, dir string) ([]Migration, 
 	return applied, nil
 }
 
-func applyMigration(ctx context.Context, db *sql.DB, migration Migration) (bool, error) {
+type migrationBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+func applyMigration(ctx context.Context, db migrationBeginner, migration Migration) (bool, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err

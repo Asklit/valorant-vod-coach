@@ -350,6 +350,38 @@ func TestServerUsesReportCatalogWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestServerReadsStructuredReportFromCatalogSnapshot(t *testing.T) {
+	fixture := newFixture(t)
+	generatedAt := time.Date(2026, 7, 31, 18, 30, 0, 0, time.UTC)
+	report := domain.AnalysisReport{
+		SchemaVersion: domain.AnalysisReportSchemaVersion, RunID: "snapshot_run", Status: "completed", GeneratedAt: generatedAt,
+		VOD:      domain.VOD{Label: "diamond_example", Rank: "diamond", Title: "Snapshot fixture"},
+		Sample:   domain.FrameSampleSummary{Name: "full", FPS: "1", FrameCount: 20},
+		Gameplay: &domain.GameplaySummary{Analyzer: "postgres-snapshot", SampledFrames: 20, AnalyzedFrames: 20},
+		Findings: []domain.Finding{}, Timeline: []domain.TimelineEvent{}, Artifacts: []domain.Artifact{},
+		Metadata: domain.AnalysisRunMetadata{Analyzer: "postgres-snapshot", Mode: "full_vod"},
+	}
+	catalog := &fakeReportCatalog{
+		summaries: []app.ReportCatalogSummary{{
+			VODLabel: "diamond_example", RunID: report.RunID, Status: report.Status, GeneratedAt: generatedAt,
+			SchemaVersion: report.SchemaVersion, Analyzer: report.Metadata.Analyzer, FrameCount: report.Sample.FrameCount,
+			JSONPath: "/missing/report.json", MarkdownPath: "/missing/report.md",
+		}},
+		record: &app.ReportCatalogRecord{Report: report, JSONPath: "/missing/report.json", MarkdownPath: "/missing/report.md"},
+	}
+	fixture.config.ReportCatalog = catalog
+	server := NewServer(fixture.config)
+	auth := registerTestAdmin(t, server)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/reports/latest?vod_label=diamond_example", nil)
+	authorize(request, auth)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"analyzer": "postgres-snapshot"`) {
+		t.Fatalf("catalog snapshot must be returned without report file, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -393,11 +425,16 @@ func TestServerRunsAsyncAnalysisJob(t *testing.T) {
 	if job.Status != "completed" {
 		t.Fatalf("expected completed job, got %+v", job)
 	}
-	if job.Report == nil || job.Report.RunID != "async_test" || job.Report.Gameplay == nil {
-		t.Fatalf("expected completed gameplay report: %+v", job)
-	}
 	if job.ReportJSON == "" || job.ReportMD == "" {
 		t.Fatalf("expected report paths: %+v", job)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/reports/diamond_example/async_test", nil)
+	authorize(request, token)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var report domain.AnalysisReport
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &report) != nil || report.Gameplay == nil {
+		t.Fatalf("expected completed gameplay report from report resource, got %d: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -810,6 +847,33 @@ func TestServerDiagnosticsEndpoints(t *testing.T) {
 	}
 }
 
+func TestReadinessChecksConfiguredDependenciesWithoutLeakingDetails(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.config.Dependencies = map[string]app.HealthChecker{
+		"postgres": staticHealthChecker{err: fmt.Errorf("dial failed for database-password-secret")},
+	}
+	server := NewServer(fixture.config)
+	auth := registerTestAdmin(t, server)
+
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"postgres": "failed"`) {
+		t.Fatalf("failed dependency must make service unready, got %d: %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "database-password-secret") {
+		t.Fatalf("public readiness response leaked dependency details: %s", response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/overview", nil)
+	authorize(request, auth)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "database-password-secret") {
+		t.Fatalf("administrator must receive diagnostic detail, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestServerMetricsEndpoint(t *testing.T) {
 	server := NewServer(Config{VisionURL: "http://vision.invalid"})
 
@@ -855,6 +919,14 @@ func TestDevCORSAllowsFallbackVitePorts(t *testing.T) {
 type fixture struct {
 	config  Config
 	outRoot string
+}
+
+type staticHealthChecker struct {
+	err error
+}
+
+func (c staticHealthChecker) Ping(context.Context) error {
+	return c.err
 }
 
 func newFixture(t *testing.T) fixture {
@@ -957,11 +1029,19 @@ esac
 type fakeReportCatalog struct {
 	labels    []string
 	summaries []app.ReportCatalogSummary
+	record    *app.ReportCatalogRecord
 }
 
-func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, vodLabel string) ([]app.ReportCatalogSummary, error) {
+func (c *fakeReportCatalog) ListReportSummaries(_ context.Context, _ string, vodLabel string, _ bool) ([]app.ReportCatalogSummary, error) {
 	c.labels = append(c.labels, vodLabel)
 	return c.summaries, nil
+}
+
+func (c *fakeReportCatalog) FindReport(_ context.Context, _ string, _ string, runID string, _ bool) (app.ReportCatalogRecord, bool, error) {
+	if c.record == nil || (runID != "" && c.record.Report.RunID != runID) {
+		return app.ReportCatalogRecord{}, false, nil
+	}
+	return *c.record, true, nil
 }
 
 type testAuth struct {
