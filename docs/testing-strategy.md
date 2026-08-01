@@ -43,12 +43,18 @@ internal/adapters/dataset/
   manifest.go
   manifest_test.go               # fast unit tests for manifest parsing
 
+internal/adapters/postgres/
+  store_integration_test.go      # env-gated real PostgreSQL contract
+
+internal/adapters/temporalworkflow/
+  workflow_integration_test.go   # env-gated Temporal + PostgreSQL workflow
+
 cmd/vodctl/
   main.go
   main_test.go                   # CLI behavior tests with fake ffmpeg/ffprobe
 
 tests/integration/
-  ...                            # slower tests that need Docker, Postgres, Kafka, etc.
+  ...                            # optional black-box tests spanning many services
 ```
 
 ## Test Categories
@@ -69,7 +75,9 @@ Examples:
 
 Tests that need real binaries, Docker services, databases, Kafka, or object storage.
 
-These should live under `tests/integration/` or use build tags:
+Adapter-level integration tests stay beside the adapter and skip unless their explicit test environment variables are present. This keeps `go test ./...` useful while avoiding accidental access to developer services.
+
+Use `tests/integration/` for black-box scenarios that do not belong to one package. Build tags remain an option for unusually expensive suites:
 
 ```go
 //go:build integration
@@ -82,6 +90,19 @@ Examples:
 - Kafka producer/consumer contract;
 - ClickHouse sink writes;
 - Temporal workflow smoke test.
+
+Current real-service commands:
+
+```sh
+TEST_DATABASE_URL='postgres://.../valorant_vod_coach_test?sslmode=disable' \
+go test ./internal/adapters/postgres -run Integration -count=1 -v
+
+TEST_DATABASE_URL='postgres://.../valorant_vod_coach_test?sslmode=disable' \
+TEST_TEMPORAL_ADDRESS=localhost:7243 \
+go test ./internal/adapters/temporalworkflow -run Integration -count=1 -v
+```
+
+The PostgreSQL integration suite rejects database names that do not contain `test` and truncates only that dedicated database.
 
 ### Contract Tests
 
@@ -97,7 +118,7 @@ Examples:
 ## Rule Of Thumb
 
 - Keep unit tests next to package code.
-- Put slow cross-service tests under `tests/integration`.
+- Keep adapter-owned real-service tests beside the adapter and gate them with test-only environment variables.
+- Put broad black-box scenarios under `tests/integration`.
 - Prefer fake binaries/services for CLI unit tests.
 - Add tiny fixtures only when needed; never commit real VODs.
-

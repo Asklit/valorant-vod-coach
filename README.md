@@ -8,12 +8,15 @@ Current scope:
 - download only full game VODs, not stream archives;
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
 - store raw videos outside git under `data/raw/youtube/<rank>/`;
-- run a local MVP gameplay review pipeline that writes reproducible JSON and Markdown reports.
+- run a local CPU gameplay review pipeline that writes reproducible JSON and Markdown reports;
 - expose a Python `vision-service` contract for model review over selected clips.
 - capture manual corrections from the web UI into reproducible local JSON artifacts.
-- use a page-based React UI with local registration/login and an admin console for metrics, logs, users, and service links.
+- use a page-based React UI with registration/login and an admin console for metrics, logs, users, and service links;
+- persist tenant-owned users, uploads, reports, jobs, and coaching feedback in PostgreSQL;
+- keep sessions, distributed locks, and authentication rate limits in Redis;
+- run full-VOD analysis as retryable, cancellable Temporal workflows through `vod-worker`.
 
-Planned product stack:
+Agreed product stack, implemented incrementally:
 
 - Go API, CLI, and workers;
 - Python/FastAPI vision service for OCR, CV, and Qwen/VLM inference;
@@ -141,11 +144,33 @@ The local web UI includes:
 - Dashboard, Library, Review, Reports, and Admin pages;
 - local registration/login through `POST /api/auth/register` and `POST /api/auth/login`;
 - Admin page backed by `GET /api/admin/overview`, `GET /api/admin/metrics`, `GET /api/admin/logs`, and `GET /api/admin/users`, including readiness checks, request metrics, logs, users, and service links.
-- bearer-token protection for product JSON API routes. Health, metrics, pprof, video streaming, and generated artifact URLs remain public for local diagnostics and browser media playback.
+- secure cookie sessions, CSRF protection for commands, tenant-scoped VOD/report/artifact access, and explicit bootstrap-token creation of the first administrator;
+- live workflow stage/progress, retry attempts, recent run history, and Temporal cancellation on the Review page.
+
+## Durable Analysis
+
+For the production-shaped execution path, start PostgreSQL, Redis, and Temporal, then run the worker and API in separate terminals:
+
+```sh
+DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" \
+TEMPORAL_ADDRESS=localhost:7233 \
+go run ./cmd/vod-worker
+```
+
+```sh
+DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" \
+TEMPORAL_ADDRESS=localhost:7233 \
+VODCOACH_BOOTSTRAP_TOKEN="$VODCOACH_BOOTSTRAP_TOKEN" \
+go run ./cmd/vod-web --static-dir web/app/dist --addr :8090
+```
+
+The API writes a versioned job intent to PostgreSQL and starts a Temporal workflow. An idempotent dispatcher retries queued intents after a transient Temporal outage or an API crash between those two operations. Temporal owns retries and cancellation; Kafka receives immutable domain events through the PostgreSQL outbox and does not execute workflows.
+
+See [durable workflow design](docs/durable-workflows.md) for lifecycle and failure semantics.
 
 ## Current Analysis Model
 
-The local MVP analysis is a deterministic gameplay-review pipeline:
+The local analysis is a deterministic gameplay-review pipeline:
 
 - sample frames from the selected VOD with ffmpeg;
 - extract visual signals from frames, including motion, brightness, sharpness, HUD-like regions, and frame quality;

@@ -6,19 +6,23 @@ These diagrams describe the agreed target architecture. They are written in Merm
 
 Current decision: Kafka is the MVP event streaming layer.
 
-## Implemented Local MVP
+## Implemented Product Path
 
-This flow is implemented by `vodctl analyze run`. It runs locally and writes artifacts under ignored `data/processed/`.
+The web product persists tenant state in PostgreSQL and runs asynchronous analysis through Temporal. `vodctl analyze run` remains a direct developer path for benchmarks.
 
 ```mermaid
 flowchart LR
-  user[Developer]
+  user[User / Developer]
   cli[vodctl analyze run]
   ui[React Vite UI]
   api[vod-web Go API]
-  jobs[in-memory analysis jobs]
+  jobs[(PostgreSQL jobs / reports)]
+  temporal[Temporal workflow history]
+  dispatcher[queued-job dispatcher]
+  worker[vod-worker]
+  executor[localanalysis.Service]
   runner[app.AnalysisRunner]
-  resolver[dataset.LocalVODResolver]
+  resolver[tenant-aware VOD resolver]
   media[media.LocalProcessor]
   ffprobe[ffprobe]
   frames[ffmpeg frames]
@@ -27,18 +31,22 @@ flowchart LR
   gameplay[gameplay_review.json]
   coach[coach summary<br/>focus areas / practice plan]
   report[report.LocalStore]
-  raw[(data/raw/youtube)]
-  processed[(data/processed)]
+  redis[(Redis locks / sessions / limits)]
+  raw[(curated + uploaded VOD files)]
+  processed[(owner-scoped artifacts)]
 
-  user --> cli
   user --> ui
+  user --> cli
   ui --> api
   api --> jobs
-  jobs --> runner
-  api --> raw
+  api --> temporal
+  jobs --> dispatcher
+  dispatcher --> temporal
+  temporal --> worker
+  worker --> executor
+  executor --> runner
   cli --> runner
-  api --> runner
-  api --> processed
+  api --> redis
   runner --> resolver
   resolver --> raw
   runner --> media
@@ -53,6 +61,8 @@ flowchart LR
   coach --> report
   runner --> report
   report --> processed
+  runner --> jobs
+  runner --> redis
 ```
 
 ## Agreed Architecture

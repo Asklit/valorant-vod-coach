@@ -396,8 +396,13 @@ type AnalysisJobResponse = {
   job_id: string;
   run_id: string;
   vod_label: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  progress_percent: number;
   message?: string;
+  attempts: number;
+  max_attempts: number;
+  cancellation_requested: boolean;
   created_at: string;
   started_at?: string;
   finished_at?: string;
@@ -405,6 +410,12 @@ type AnalysisJobResponse = {
   report?: Report;
   report_json?: string;
   report_md?: string;
+};
+
+type AnalysisJobListResponse = {
+  jobs: AnalysisJobResponse[];
+  next_before?: string;
+  next_cursor?: string;
 };
 
 type ReportSummary = {
@@ -609,6 +620,7 @@ export function App() {
 	const [coachProgress, setCoachProgress] = useState<CoachReviewProgress | null>(null);
 	const [coachAssessmentsPath, setCoachAssessmentsPath] = useState("");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
+  const [analysisHistory, setAnalysisHistory] = useState<AnalysisJobResponse[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminMetrics, setAdminMetrics] = useState<AdminMetricsResponse | null>(null);
   const [adminLogs, setAdminLogs] = useState<RequestLog[]>([]);
@@ -671,11 +683,13 @@ export function App() {
       setReportHistory([]);
       setEvaluationHistory([]);
       setEvaluationAnnotations([]);
+      setAnalysisHistory([]);
       return;
     }
     void loadReports(selectedLabel, { preferGameplay: true });
     void loadEvaluations(selectedLabel);
     void loadEvaluationAnnotations(selectedLabel);
+    void loadAnalysisHistory(selectedLabel);
   }, [selectedLabel]);
 
   useEffect(() => {
@@ -853,6 +867,18 @@ export function App() {
     }
   }
 
+  async function loadAnalysisHistory(label: string) {
+    try {
+      const response = await apiFetch(`/api/analysis-runs?vod_label=${encodeURIComponent(label)}&limit=10`, { headers: authHeaders });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      setAnalysisHistory(((await response.json()) as AnalysisJobListResponse).jobs);
+    } catch {
+      setAnalysisHistory([]);
+    }
+  }
+
   async function loadManualCorrections(label: string, runID: string) {
     try {
       const response = await apiFetch(`/api/corrections?vod_label=${encodeURIComponent(label)}&report_run_id=${encodeURIComponent(runID)}`, { headers: authHeaders });
@@ -934,6 +960,7 @@ export function App() {
       }
       const payload = (await response.json()) as AnalysisJobResponse;
       setAnalysisJob(payload);
+      setAnalysisHistory((current) => [payload, ...current.filter((item) => item.job_id !== payload.job_id)].slice(0, 10));
       await pollAnalysisJob(payload.job_id, selectedVod.label);
     } catch (err) {
       setError(messageFromError(err));
@@ -951,16 +978,42 @@ export function App() {
       }
       const job = (await response.json()) as AnalysisJobResponse;
       setAnalysisJob(job);
+      setAnalysisHistory((current) => [job, ...current.filter((item) => item.job_id !== job.job_id)].slice(0, 10));
       if (job.status === "completed") {
         await loadVods();
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
         await loadEvaluations(analyzedLabel);
+        await loadAnalysisHistory(analyzedLabel);
         setPage("review");
         return;
       }
       if (job.status === "failed") {
         throw new Error(job.error || "Analysis failed");
       }
+      if (job.status === "cancelled") {
+        return;
+      }
+    }
+  }
+
+  async function cancelAnalysis() {
+    if (!analysisJob || analysisJob.status === "completed" || analysisJob.status === "failed" || analysisJob.status === "cancelled") {
+      return;
+    }
+    setError("");
+    try {
+      const response = await apiFetch(`/api/analysis-runs/${encodeURIComponent(analysisJob.job_id)}`, {
+        method: "DELETE",
+        headers: authHeaders
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const job = (await response.json()) as AnalysisJobResponse;
+      setAnalysisJob(job);
+      setAnalysisHistory((current) => [job, ...current.filter((item) => item.job_id !== job.job_id)].slice(0, 10));
+    } catch (err) {
+      setError(messageFromError(err));
     }
   }
 
@@ -1269,7 +1322,9 @@ export function App() {
         {page === "review" && (
           <ReviewPage
             analysisJob={analysisJob}
+            analysisHistory={analysisHistory}
             analyzing={analyzing}
+			cancelAnalysis={() => void cancelAnalysis()}
 			coachAssessments={coachAssessments}
 			coachProgress={coachProgress}
             fullVod={fullVod}
@@ -1649,7 +1704,9 @@ function LibraryPage(props: {
 
 function ReviewPage(props: {
   analysisJob: AnalysisJobResponse | null;
+  analysisHistory: AnalysisJobResponse[];
   analyzing: boolean;
+	cancelAnalysis: () => void;
 	coachAssessments: GuidedReviewAssessment[];
 	coachProgress: CoachReviewProgress | null;
   fullVod: boolean;
@@ -1733,11 +1790,34 @@ function ReviewPage(props: {
           </div>
           {props.analysisJob && (
             <div className={`analysis-job status-${props.analysisJob.status}`}>
-              <span>{props.analysisJob.status}</span>
-              <strong>{props.analysisJob.run_id}</strong>
-              <small>{props.analysisJob.message ?? props.analysisJob.job_id}</small>
+			  <div className="analysis-job-head">
+				<div>
+				  <span>{props.analysisJob.status} / {props.analysisJob.stage || "queued"}</span>
+				  <strong>{props.analysisJob.run_id}</strong>
+				</div>
+				{(props.analysisJob.status === "queued" || props.analysisJob.status === "running") && (
+				  <button aria-label="Cancel analysis" disabled={props.analysisJob.cancellation_requested} onClick={props.cancelAnalysis} title="Cancel analysis" type="button"><X size={16} /></button>
+				)}
+			  </div>
+			  <div className="analysis-progress" aria-label={`${props.analysisJob.progress_percent}% complete`}>
+				<i style={{ width: `${props.analysisJob.progress_percent}%` }} />
+			  </div>
+			  <small>{props.analysisJob.message ?? props.analysisJob.job_id} · {props.analysisJob.progress_percent}% · attempt {Math.max(1, props.analysisJob.attempts)} / {props.analysisJob.max_attempts || 3}</small>
             </div>
           )}
+		  {props.analysisHistory.length > 0 && (
+			<div className="analysis-history">
+			  <div className="analysis-history-title"><History size={15} /><span>Recent runs</span></div>
+			  {props.analysisHistory.slice(0, 5).map((job) => (
+				<div className="analysis-history-row" key={job.job_id}>
+				  <span className={`history-status status-${job.status}`}>{job.status}</span>
+				  <strong>{job.run_id}</strong>
+				  <small>{job.progress_percent}%</small>
+				  <time dateTime={job.created_at}>{formatDate(job.created_at)}</time>
+				</div>
+			  ))}
+			</div>
+		  )}
         </section>
 
         <section className="surface">
@@ -2281,6 +2361,10 @@ function formatSeconds(seconds: number) {
 
 function windowRange(window: ReviewWindow) {
   return `${formatSeconds(window.start_seconds)}-${formatSeconds(window.end_seconds)}`;
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function buildCorrectionTargets(report: Report | null) {

@@ -204,6 +204,39 @@ func TestAnalysisRunnerPersistsCatalogWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAnalysisRunnerReportsMonotonicPipelineStages(t *testing.T) {
+	var progress []AnalysisProgress
+	runner := AnalysisRunner{
+		Resolver: fakeResolver{},
+		Media:    fakeMediaProcessor{},
+		Reports:  &fakeReportStore{},
+		Catalog:  &fakeCatalog{},
+		Progress: AnalysisProgressReporterFunc(func(_ context.Context, update AnalysisProgress) {
+			progress = append(progress, update)
+		}),
+	}
+
+	_, err := runner.Run(context.Background(), RunAnalysisRequest{
+		VODLabel: "diamond_example", RunID: "progress_contract", FPS: "1",
+		Duration: 30 * time.Second, ImageQuality: 3, Overwrite: true,
+	})
+	if err != nil {
+		t.Fatalf("run analysis: %v", err)
+	}
+	wantStages := []string{"resolving", "probing", "sampling", "analyzing", "saving", "persisting"}
+	if len(progress) != len(wantStages) {
+		t.Fatalf("progress = %+v", progress)
+	}
+	for index, want := range wantStages {
+		if progress[index].Stage != want {
+			t.Fatalf("stage[%d] = %q, want %q", index, progress[index].Stage, want)
+		}
+		if index > 0 && progress[index].Percent <= progress[index-1].Percent {
+			t.Fatalf("progress is not monotonic: %+v", progress)
+		}
+	}
+}
+
 func TestAnalysisRunnerUsesLockManagerWhenConfigured(t *testing.T) {
 	locks := &fakeLockManager{}
 	runner := AnalysisRunner{
