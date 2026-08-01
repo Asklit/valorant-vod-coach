@@ -10,6 +10,8 @@ import (
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/redisrate"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/redissession"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/webapi"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
@@ -25,6 +27,8 @@ func main() {
 	ffmpegPath := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable path")
 	visionURL := flag.String("vision-url", os.Getenv("VISION_SERVICE_URL"), "optional vision-service base URL; can also be set through VISION_SERVICE_URL")
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "optional Postgres URL for report metadata and outbox persistence")
+	postgresMigrationsDir := flag.String("postgres-migrations-dir", "deployments/migrations/postgres", "directory containing PostgreSQL migrations")
+	migratePostgres := flag.Bool("migrate-postgres", true, "apply pending PostgreSQL migrations at startup")
 	redisURL := flag.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks")
 	bootstrapAdminToken := flag.String("bootstrap-admin-token", os.Getenv("VODCOACH_BOOTSTRAP_TOKEN"), "one-time token required to create the first administrator")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
@@ -39,17 +43,36 @@ func main() {
 
 	var catalog app.AnalysisCatalog
 	var reportCatalog app.ReportCatalog
+	var uploadCatalog app.UploadCatalog
+	var authenticator app.Authenticator
+	var jobStore app.AnalysisJobStore
+	var userDataStore app.UserDataStore
+	dependencies := map[string]app.HealthChecker{}
 	if *databaseURL != "" {
 		db, err := postgres.Open(context.Background(), *databaseURL)
 		if err != nil {
 			log.Fatalf("open postgres: %v", err)
 		}
 		defer db.Close()
+		if *migratePostgres {
+			applied, err := postgres.ApplyMigrations(context.Background(), db, *postgresMigrationsDir)
+			if err != nil {
+				log.Fatalf("apply PostgreSQL migrations: %v", err)
+			}
+			obs.Logger.Info("PostgreSQL migrations checked", "applied", len(applied))
+		}
 		store := postgres.Store{DB: db, Producer: "vod-web"}
 		catalog = store
 		reportCatalog = store
+		uploadCatalog = store
+		authenticator = store
+		jobStore = store
+		userDataStore = store
+		dependencies["postgres"] = store
 	}
 	var locks app.LockManager
+	var sessions app.AuthSessionStore
+	var authRateLimiter app.RateLimiter
 	if *redisURL != "" {
 		manager, err := redislock.NewManager(*redisURL)
 		if err != nil {
@@ -57,6 +80,14 @@ func main() {
 		}
 		defer manager.Close()
 		locks = manager
+		sessionStore, err := redissession.New(*redisURL)
+		if err != nil {
+			log.Fatalf("configure Redis sessions: %v", err)
+		}
+		defer sessionStore.Close()
+		sessions = sessionStore
+		authRateLimiter = redisrate.Limiter{Client: sessionStore.Client}
+		dependencies["redis"] = sessionStore
 	}
 
 	server := webapi.NewServer(webapi.Config{
@@ -72,6 +103,13 @@ func main() {
 		StaticDir:           *staticDir,
 		Catalog:             catalog,
 		ReportCatalog:       reportCatalog,
+		UploadCatalog:       uploadCatalog,
+		UserDataStore:       userDataStore,
+		Authenticator:       authenticator,
+		SessionStore:        sessions,
+		AuthRateLimiter:     authRateLimiter,
+		JobStore:            jobStore,
+		Dependencies:        dependencies,
 		Locks:               locks,
 		Logger:              obs.Logger,
 		Tracer:              obs.Tracer,

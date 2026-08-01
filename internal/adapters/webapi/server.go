@@ -49,9 +49,17 @@ type Config struct {
 	AuthStorePath             string
 	AuthHashIterations        int
 	AuthRequestsPerMinute     int
+	AuthRateLimiter           app.RateLimiter
 	BootstrapAdminToken       string
+	Authenticator             app.Authenticator
+	SessionStore              app.AuthSessionStore
+	SessionTTL                time.Duration
+	JobStore                  app.AnalysisJobStore
+	Dependencies              map[string]app.HealthChecker
 	Catalog                   app.AnalysisCatalog
 	ReportCatalog             app.ReportCatalog
+	UploadCatalog             app.UploadCatalog
+	UserDataStore             app.UserDataStore
 	Locks                     app.LockManager
 	Logger                    *slog.Logger
 	Tracer                    trace.Tracer
@@ -60,11 +68,11 @@ type Config struct {
 type Server struct {
 	config   Config
 	mux      *http.ServeMux
-	jobs     *analysisJobStore
+	jobs     app.AnalysisJobStore
 	metrics  *serverMetrics
-	auth     *authSessionStore
-	authRate *authRateLimiter
-	users    *app.AuthStore
+	auth     app.AuthSessionStore
+	authRate app.RateLimiter
+	users    app.Authenticator
 	logs     *requestLogStore
 	logger   *slog.Logger
 	tracer   trace.Tracer
@@ -180,14 +188,9 @@ type AnalysisJobResponse struct {
 	ArtifactBase string                 `json:"artifact_base"`
 }
 
-type analysisJob struct {
-	AnalysisJobResponse
-	OwnerID string
-}
-
 type analysisJobStore struct {
 	mu   sync.RWMutex
-	jobs map[string]*analysisJob
+	jobs map[string]app.AnalysisJob
 }
 
 type ReportListResponse struct {
@@ -406,21 +409,36 @@ func NewServer(config Config) *Server {
 	if config.AuthRequestsPerMinute <= 0 {
 		config.AuthRequestsPerMinute = 30
 	}
+	if config.SessionTTL <= 0 {
+		config.SessionTTL = 24 * time.Hour
+	}
 
 	server := &Server{
 		config:   config,
 		mux:      http.NewServeMux(),
-		jobs:     &analysisJobStore{jobs: map[string]*analysisJob{}},
+		jobs:     config.JobStore,
 		metrics:  newServerMetrics(time.Now().UTC()),
-		auth:     newAuthSessionStore(24 * time.Hour),
-		authRate: newAuthRateLimiter(config.AuthRequestsPerMinute, time.Minute),
-		users:    &app.AuthStore{Path: config.AuthStorePath, Iterations: config.AuthHashIterations},
+		auth:     config.SessionStore,
+		authRate: config.AuthRateLimiter,
+		users:    config.Authenticator,
 		logs:     newRequestLogStore(200),
 		logger:   config.Logger,
 		tracer:   config.Tracer,
 	}
 	if server.logger == nil {
 		server.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if server.users == nil {
+		server.users = &app.AuthStore{Path: config.AuthStorePath, Iterations: config.AuthHashIterations}
+	}
+	if server.auth == nil {
+		server.auth = newAuthSessionStore(config.SessionTTL)
+	}
+	if server.authRate == nil {
+		server.authRate = newAuthRateLimiter()
+	}
+	if server.jobs == nil {
+		server.jobs = &analysisJobStore{jobs: map[string]app.AnalysisJob{}}
 	}
 	if server.tracer == nil {
 		server.tracer = trace.NewNoopTracerProvider().Tracer("vod-web")
@@ -638,12 +656,28 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readinessChecks(ctx context.Context) map[string]readinessCheck {
-	return map[string]readinessCheck{
+	checks := map[string]readinessCheck{
 		"manifest":       checkExistingFile(s.config.ManifestPath),
 		"raw_root":       checkExistingDir(s.config.RawRoot),
 		"processed_root": checkWritableTargetDir(s.config.ProcessedRoot),
 		"vision_service": s.checkVisionReadiness(ctx),
 	}
+	for name, dependency := range s.config.Dependencies {
+		checks[name] = checkDependency(ctx, dependency)
+	}
+	return checks
+}
+
+func checkDependency(ctx context.Context, dependency app.HealthChecker) readinessCheck {
+	if dependency == nil {
+		return readinessCheck{Status: "failed", Detail: "dependency is not configured"}
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := dependency.Ping(checkCtx); err != nil {
+		return readinessCheck{Status: "failed", Detail: err.Error()}
+	}
+	return readinessCheck{Status: "ok"}
 }
 
 func (s *Server) checkVisionReadiness(ctx context.Context) readinessCheck {
@@ -800,9 +834,12 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if previous := sessionToken(r); previous != "" {
-		s.auth.delete(previous)
+		if err := s.auth.Delete(r.Context(), previous); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
-	session, err := s.auth.create(user)
+	session, err := s.auth.Create(r.Context(), user, s.config.SessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -830,9 +867,12 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if previous := sessionToken(r); previous != "" {
-		s.auth.delete(previous)
+		if err := s.auth.Delete(r.Context(), previous); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
-	session, err := s.auth.create(user)
+	session, err := s.auth.Create(r.Context(), user, s.config.SessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -843,7 +883,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if token := sessionToken(r); token != "" {
-		s.auth.delete(token)
+		if err := s.auth.Delete(r.Context(), token); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	s.clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
@@ -904,7 +947,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		},
 		Readiness: s.readinessChecks(r.Context()),
 		Dataset:   counts,
-		Jobs:      s.jobs.countByStatus(),
+		Jobs:      s.analysisJobCounts(r.Context()),
 		Auth:      AdminAuthStatus{UserCount: userCount},
 	})
 }
@@ -928,7 +971,7 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, AdminMetricsResponse{
 		StartedAt: startedAt,
 		Requests:  metrics,
-		Jobs:      s.jobs.countByStatus(),
+		Jobs:      s.analysisJobCounts(r.Context()),
 		Logs:      s.logs.snapshot(20),
 		Routes:    adminRouteList(),
 		User:      user,
@@ -954,7 +997,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, AdminUsersResponse{Users: users})
 }
 
-func (s *Server) authStore() *app.AuthStore {
+func (s *Server) authStore() app.Authenticator {
 	if s.users == nil {
 		s.users = &app.AuthStore{Path: s.config.AuthStorePath, Iterations: s.config.AuthHashIterations}
 	}
@@ -969,12 +1012,17 @@ func (s *Server) currentUser(r *http.Request) (app.PublicAuthUser, bool) {
 	return session.User, true
 }
 
-func (s *Server) currentSession(r *http.Request) (authSession, bool) {
+func (s *Server) currentSession(r *http.Request) (app.AuthSession, bool) {
 	token := sessionToken(r)
 	if token == "" || s.auth == nil {
-		return authSession{}, false
+		return app.AuthSession{}, false
 	}
-	return s.auth.get(token)
+	session, ok, err := s.auth.Get(r.Context(), token)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "load authentication session", "error", err)
+		return app.AuthSession{}, false
+	}
+	return session, ok
 }
 
 func (s *Server) requiresAPIAuth(r *http.Request) bool {
@@ -1013,9 +1061,9 @@ func sessionToken(r *http.Request) string {
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	ttl := 24 * time.Hour
-	if s.auth != nil && s.auth.ttl > 0 {
-		ttl = s.auth.ttl
+	ttl := s.config.SessionTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -1048,7 +1096,7 @@ func requestUsesHTTPS(r *http.Request) bool {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	startedAt, requestMetrics := s.metrics.snapshot()
-	jobCounts := s.jobs.countByStatus()
+	jobCounts := s.analysisJobCounts(r.Context())
 	uptime := time.Since(startedAt).Seconds()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -1188,7 +1236,7 @@ func (s *Server) handleUploadVOD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := s.uploadStore()
-	r.Body = http.MaxBytesReader(w, r.Body, storeMaxBodyBytes(store))
+	r.Body = http.MaxBytesReader(w, r.Body, storeMaxBodyBytes(s.config.MaxUploadBytes))
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("multipart/form-data body is required"))
@@ -1347,14 +1395,18 @@ func removeProcessedVOD(root string, label string) error {
 	return nil
 }
 
-func (s *Server) uploadStore() vodstore.LocalStore {
-	return vodstore.LocalStore{
+func (s *Server) uploadStore() vodstore.Store {
+	local := vodstore.LocalStore{
 		Root: s.config.UploadRoot, FFprobePath: s.config.FFprobePath, MaxUploadBytes: s.config.MaxUploadBytes,
 	}
+	if s.config.UploadCatalog != nil {
+		return vodstore.CatalogStore{Files: local, Catalog: s.config.UploadCatalog}
+	}
+	return local
 }
 
-func storeMaxBodyBytes(store vodstore.LocalStore) int64 {
-	limit := store.MaxUploadBytes
+func storeMaxBodyBytes(configuredLimit int64) int64 {
+	limit := configuredLimit
 	if limit <= 0 {
 		limit = vodstore.DefaultMaxUploadBytes
 	}
@@ -1462,18 +1514,22 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 			request.RunID = app.DefaultRunID(now)
 		}
 		jobID := newAnalysisJobID(request.RunID, now)
-		job := &analysisJob{OwnerID: user.ID, AnalysisJobResponse: AnalysisJobResponse{
-			JobID:        jobID,
-			RunID:        request.RunID,
-			VODLabel:     request.VODLabel,
-			Status:       "queued",
-			Message:      "Analysis job queued",
-			CreatedAt:    now,
-			ArtifactBase: "/artifacts/",
-		}}
-		s.jobs.put(job)
-		go s.runAnalysisJob(jobID, request, durationSeconds)
-		writeJSON(w, http.StatusAccepted, s.jobs.snapshot(jobID))
+		requestJSON, err := json.Marshal(request)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		job := app.AnalysisJob{
+			ID: jobID, OwnerID: user.ID, RunID: request.RunID, VODLabel: request.VODLabel,
+			Status: app.AnalysisJobQueued, Message: "Analysis job queued", Request: requestJSON,
+			MaxAttempts: 3, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.jobs.CreateAnalysisJob(r.Context(), job); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		go s.runAnalysisJob(job, request, durationSeconds)
+		writeJSON(w, http.StatusAccepted, analysisJobResponse(job))
 		return
 	}
 
@@ -1502,21 +1558,28 @@ func (s *Server) handleAnalysisJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, ok := s.jobs.getForUser(jobID, user.ID, user.Role == app.AuthRoleAdmin)
+	job, ok, err := s.jobs.FindAnalysisJob(r.Context(), jobID, user.ID, user.Role == app.AuthRoleAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("analysis job not found: %s", jobID))
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	writeJSON(w, http.StatusOK, analysisJobResponse(job))
 }
 
-func (s *Server) runAnalysisJob(jobID string, request AnalyzeRequest, durationSeconds float64) {
+func (s *Server) runAnalysisJob(job app.AnalysisJob, request AnalyzeRequest, durationSeconds float64) {
 	startedAt := time.Now().UTC()
-	s.jobs.update(jobID, func(job *analysisJob) {
-		job.Status = "running"
-		job.Message = "Analyzing VOD"
-		job.StartedAt = &startedAt
-	})
+	job.Status = app.AnalysisJobRunning
+	job.Message = "Analyzing VOD"
+	job.StartedAt = &startedAt
+	job.UpdatedAt = startedAt
+	if err := s.jobs.UpdateAnalysisJob(context.Background(), job); err != nil {
+		s.logger.Error("start analysis job", "job_id", job.ID, "error", err)
+		return
+	}
 
 	overallTimeout, _ := analysisTimeouts(durationSeconds)
 	ctx, cancel := context.WithTimeout(context.Background(), overallTimeout)
@@ -1524,20 +1587,21 @@ func (s *Server) runAnalysisJob(jobID string, request AnalyzeRequest, durationSe
 
 	result, err := s.runLocalAnalysis(ctx, request, durationSeconds)
 	finishedAt := time.Now().UTC()
-	s.jobs.update(jobID, func(job *analysisJob) {
-		job.FinishedAt = &finishedAt
-		if err != nil {
-			job.Status = "failed"
-			job.Message = "Analysis failed"
-			job.Error = err.Error()
-			return
-		}
-		job.Status = "completed"
+	job.FinishedAt = &finishedAt
+	job.UpdatedAt = finishedAt
+	if err != nil {
+		job.Status = app.AnalysisJobFailed
+		job.Message = "Analysis failed"
+		job.Error = err.Error()
+	} else {
+		job.Status = app.AnalysisJobCompleted
 		job.Message = "Analysis completed"
-		job.Report = &result.Report
-		job.ReportJSON = result.Saved.JSONPath
-		job.ReportMD = result.Saved.MarkdownPath
-	})
+		job.ReportJSONPath = result.Saved.JSONPath
+		job.ReportMDPath = result.Saved.MarkdownPath
+	}
+	if updateErr := s.jobs.UpdateAnalysisJob(context.Background(), job); updateErr != nil {
+		s.logger.Error("finish analysis job", "job_id", job.ID, "error", updateErr)
+	}
 }
 
 func (s *Server) runLocalAnalysis(ctx context.Context, request AnalyzeRequest, durationSeconds float64) (app.RunAnalysisResult, error) {
@@ -1602,19 +1666,13 @@ func (s *Server) handleLatestReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reportPath, err := s.resolveUserReportPath(r.Context(), user.ID, label, "")
+	report, err := s.loadUserReportByID(r.Context(), user.ID, label, "")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if reportPath == "" {
-		writeError(w, http.StatusNotFound, fmt.Errorf("no reports for %s", label))
-		return
-	}
-
-	report, err := readReport(reportPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		if errors.Is(err, app.ErrReportNotFound) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("no reports for %s", label))
+		} else {
+			writeError(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
@@ -1701,7 +1759,7 @@ func (s *Server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	set, saved, err := app.LoadManualCorrections(s.correctionsRoot(user.ID), label, reportRunID)
+	set, saved, err := s.loadManualCorrections(r.Context(), user.ID, label, reportRunID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("load corrections: %w", err))
 		return
@@ -1737,6 +1795,13 @@ func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	s.guidedMu.Lock()
+	err := s.hydrateManualCorrections(r.Context(), user.ID, request.VODLabel, request.ReportRunID)
+	if err != nil {
+		s.guidedMu.Unlock()
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	set, saved, err := app.AppendManualCorrection(r.Context(), s.correctionsRoot(user.ID), request.VODLabel, request.ReportRunID, domain.ManualCorrection{
 		Type:             request.Type,
 		TargetID:         request.TargetID,
@@ -1745,6 +1810,10 @@ func (s *Server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		TimestampSeconds: request.TimestampSeconds,
 		Author:           user.Email,
 	}, time.Now().UTC())
+	if err == nil && s.config.UserDataStore != nil {
+		err = s.config.UserDataStore.SaveManualCorrections(r.Context(), user.ID, set)
+	}
+	s.guidedMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -1773,7 +1842,7 @@ func (s *Server) handleListCoachAssessments(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	set, saved, err := app.LoadGuidedReviews(s.guidedReviewsRoot(user.ID), label, runID)
+	set, saved, err := s.loadGuidedReviews(r.Context(), user.ID, label, runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1802,9 +1871,17 @@ func (s *Server) handleCreateCoachAssessment(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.guidedMu.Lock()
+	if err := s.hydrateGuidedReviews(r.Context(), user.ID, request.VODLabel, request.ReportRunID); err != nil {
+		s.guidedMu.Unlock()
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	set, saved, err := app.SaveGuidedAssessment(r.Context(), s.guidedReviewsRoot(user.ID), app.EvidenceCoachEngine{}, app.SaveGuidedAssessmentRequest{
 		Report: report, WindowID: request.WindowID, Answers: request.Answers, Author: user.Email, Now: time.Now().UTC(),
 	})
+	if err == nil && s.config.UserDataStore != nil {
+		err = s.config.UserDataStore.SaveGuidedReviews(r.Context(), user.ID, set)
+	}
 	s.guidedMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1834,10 +1911,18 @@ func (s *Server) handleCoachFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.guidedMu.Lock()
+	if err := s.hydrateGuidedReviews(r.Context(), user.ID, request.VODLabel, request.ReportRunID); err != nil {
+		s.guidedMu.Unlock()
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	set, saved, err := app.SaveCoachFeedback(r.Context(), s.guidedReviewsRoot(user.ID), app.SaveCoachFeedbackRequest{
 		VODLabel: request.VODLabel, ReportRunID: request.ReportRunID, WindowID: request.WindowID,
 		Verdict: request.Verdict, Comment: request.Comment, Author: user.Email, Now: time.Now().UTC(),
 	})
+	if err == nil && s.config.UserDataStore != nil {
+		err = s.config.UserDataStore.SaveGuidedReviews(r.Context(), user.ID, set)
+	}
 	s.guidedMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1885,22 +1970,13 @@ func (s *Server) handleReportByPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reportPath, err := s.resolveUserReportPath(r.Context(), user.ID, parts[0], parts[1])
+	report, err := s.loadUserReportByID(r.Context(), user.ID, parts[0], parts[1])
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if reportPath == "" {
-		writeError(w, http.StatusNotFound, fmt.Errorf("no report %s for %s", parts[1], parts[0]))
-		return
-	}
-	report, err := readReport(reportPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, err)
-			return
+		if errors.Is(err, app.ErrReportNotFound) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("no report %s for %s", parts[1], parts[0]))
+		} else {
+			writeError(w, http.StatusInternalServerError, err)
 		}
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
@@ -1928,7 +2004,7 @@ type annotationIndexItem struct {
 
 func (s *Server) listReportSummaries(ctx context.Context, vodLabel string) ([]ReportSummary, error) {
 	if s.config.ReportCatalog != nil {
-		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, vodLabel)
+		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, "", vodLabel, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1956,13 +2032,12 @@ func (s *Server) listUserReportSummaries(ctx context.Context, userID string, vod
 	}
 	combinedSummaries := make([]ReportSummary, 0)
 	if s.config.ReportCatalog != nil {
-		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, vodLabel)
+		catalogSummaries, err := s.config.ReportCatalog.ListReportSummaries(ctx, userID, vodLabel, true)
 		if err != nil {
 			return nil, err
 		}
 		for _, summary := range catalogSummaries {
-			report, err := readReport(summary.JSONPath)
-			if err != nil || (report.Metadata.OwnerID != "" && report.Metadata.OwnerID != userID) {
+			if summary.OwnerID != "" && summary.OwnerID != userID {
 				continue
 			}
 			combinedSummaries = append(combinedSummaries, reportCatalogSummaryToAPI(summary))
@@ -2000,8 +2075,70 @@ func (s *Server) correctionsRoot(userID string) string {
 	return filepath.Join(s.userDataRoot(userID), "corrections")
 }
 
+func (s *Server) loadManualCorrections(ctx context.Context, userID string, vodLabel string, reportRunID string) (domain.ManualCorrectionSet, app.SavedManualCorrections, error) {
+	root := s.correctionsRoot(userID)
+	if s.config.UserDataStore != nil {
+		set, found, err := s.config.UserDataStore.LoadManualCorrections(ctx, userID, vodLabel, reportRunID)
+		if err != nil {
+			return domain.ManualCorrectionSet{}, app.SavedManualCorrections{}, err
+		}
+		if found {
+			saved, err := app.SaveManualCorrections(root, set)
+			return set, saved, err
+		}
+	}
+	set, saved, err := app.LoadManualCorrections(root, vodLabel, reportRunID)
+	if err == nil && s.config.UserDataStore != nil && len(set.Corrections) > 0 {
+		err = s.config.UserDataStore.SaveManualCorrections(ctx, userID, set)
+	}
+	return set, saved, err
+}
+
+func (s *Server) hydrateManualCorrections(ctx context.Context, userID string, vodLabel string, reportRunID string) error {
+	if s.config.UserDataStore == nil {
+		return nil
+	}
+	set, found, err := s.config.UserDataStore.LoadManualCorrections(ctx, userID, vodLabel, reportRunID)
+	if err != nil || !found {
+		return err
+	}
+	_, err = app.SaveManualCorrections(s.correctionsRoot(userID), set)
+	return err
+}
+
 func (s *Server) guidedReviewsRoot(userID string) string {
 	return filepath.Join(s.userDataRoot(userID), "coaching")
+}
+
+func (s *Server) loadGuidedReviews(ctx context.Context, userID string, vodLabel string, reportRunID string) (domain.GuidedReviewSet, app.SavedGuidedReviews, error) {
+	root := s.guidedReviewsRoot(userID)
+	if s.config.UserDataStore != nil {
+		set, found, err := s.config.UserDataStore.LoadGuidedReviews(ctx, userID, vodLabel, reportRunID)
+		if err != nil {
+			return domain.GuidedReviewSet{}, app.SavedGuidedReviews{}, err
+		}
+		if found {
+			saved, err := app.SaveGuidedReviews(root, set)
+			return set, saved, err
+		}
+	}
+	set, saved, err := app.LoadGuidedReviews(root, vodLabel, reportRunID)
+	if err == nil && s.config.UserDataStore != nil && len(set.Assessments) > 0 {
+		err = s.config.UserDataStore.SaveGuidedReviews(ctx, userID, set)
+	}
+	return set, saved, err
+}
+
+func (s *Server) hydrateGuidedReviews(ctx context.Context, userID string, vodLabel string, reportRunID string) error {
+	if s.config.UserDataStore == nil {
+		return nil
+	}
+	set, found, err := s.config.UserDataStore.LoadGuidedReviews(ctx, userID, vodLabel, reportRunID)
+	if err != nil || !found {
+		return err
+	}
+	_, err = app.SaveGuidedReviews(s.guidedReviewsRoot(userID), set)
+	return err
 }
 
 func (s *Server) userDataRoot(userID string) string {
@@ -2017,29 +2154,56 @@ func (s *Server) loadReportByID(ctx context.Context, vodLabel string, reportRunI
 		return domain.AnalysisReport{}, err
 	}
 	if path == "" {
-		return domain.AnalysisReport{}, fmt.Errorf("no report %s for %s", reportRunID, vodLabel)
+		return domain.AnalysisReport{}, fmt.Errorf("%w: %s/%s", app.ErrReportNotFound, vodLabel, reportRunID)
 	}
 	report, err := readReport(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return domain.AnalysisReport{}, app.ErrReportNotFound
+		}
 		return domain.AnalysisReport{}, fmt.Errorf("read report: %w", err)
 	}
 	return report, nil
 }
 
 func (s *Server) loadUserReportByID(ctx context.Context, userID string, vodLabel string, reportRunID string) (domain.AnalysisReport, error) {
+	if s.config.ReportCatalog != nil {
+		record, found, err := s.config.ReportCatalog.FindReport(
+			ctx,
+			userID,
+			strings.TrimSpace(vodLabel),
+			strings.TrimSpace(reportRunID),
+			true,
+		)
+		if err != nil {
+			return domain.AnalysisReport{}, err
+		}
+		if found && record.Report.RunID != "" {
+			return record.Report, nil
+		}
+		if found && strings.TrimSpace(record.JSONPath) != "" {
+			report, readErr := readReport(record.JSONPath)
+			if readErr == nil && (report.Metadata.OwnerID == "" || report.Metadata.OwnerID == userID) {
+				return report, nil
+			}
+		}
+	}
 	path, err := s.resolveUserReportPath(ctx, userID, strings.TrimSpace(vodLabel), strings.TrimSpace(reportRunID))
 	if err != nil {
 		return domain.AnalysisReport{}, err
 	}
 	if path == "" {
-		return domain.AnalysisReport{}, fmt.Errorf("no report %s for %s", reportRunID, vodLabel)
+		return domain.AnalysisReport{}, fmt.Errorf("%w: %s/%s", app.ErrReportNotFound, vodLabel, reportRunID)
 	}
 	report, err := readReport(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return domain.AnalysisReport{}, app.ErrReportNotFound
+		}
 		return domain.AnalysisReport{}, fmt.Errorf("read report: %w", err)
 	}
 	if report.Metadata.OwnerID != "" && report.Metadata.OwnerID != userID {
-		return domain.AnalysisReport{}, errors.New("report not found")
+		return domain.AnalysisReport{}, app.ErrReportNotFound
 	}
 	return report, nil
 }
@@ -2520,57 +2684,64 @@ func newAnalysisJobID(runID string, now time.Time) string {
 	return fmt.Sprintf("job_%s_%s", value, strconv.FormatInt(now.UnixNano(), 36))
 }
 
-func (s *analysisJobStore) put(job *analysisJob) {
+func (s *analysisJobStore) CreateAnalysisJob(_ context.Context, job app.AnalysisJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.jobs[job.JobID] = job
-}
-
-func (s *analysisJobStore) get(jobID string) (AnalysisJobResponse, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	job, ok := s.jobs[jobID]
-	if !ok {
-		return AnalysisJobResponse{}, false
+	if _, duplicate := s.jobs[job.ID]; duplicate {
+		return errors.New("analysis job already exists")
 	}
-	return job.AnalysisJobResponse, true
+	s.jobs[job.ID] = job
+	return nil
 }
 
-func (s *analysisJobStore) getForUser(jobID string, ownerID string, includeAll bool) (AnalysisJobResponse, bool) {
+func (s *analysisJobStore) FindAnalysisJob(_ context.Context, jobID string, ownerID string, includeAll bool) (app.AnalysisJob, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	job, ok := s.jobs[jobID]
 	if !ok || (!includeAll && job.OwnerID != ownerID) {
-		return AnalysisJobResponse{}, false
+		return app.AnalysisJob{}, false, nil
 	}
-	return job.AnalysisJobResponse, true
+	return job, true, nil
 }
 
-func (s *analysisJobStore) snapshot(jobID string) AnalysisJobResponse {
-	job, ok := s.get(jobID)
-	if !ok {
-		return AnalysisJobResponse{}
-	}
-	return job
-}
-
-func (s *analysisJobStore) update(jobID string, mutate func(*analysisJob)) {
+func (s *analysisJobStore) UpdateAnalysisJob(_ context.Context, job app.AnalysisJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if job, ok := s.jobs[jobID]; ok {
-		mutate(job)
+	if _, ok := s.jobs[job.ID]; !ok {
+		return errors.New("analysis job not found")
 	}
+	s.jobs[job.ID] = job
+	return nil
 }
 
-func (s *analysisJobStore) countByStatus() map[string]int {
+func (s *analysisJobStore) CountAnalysisJobs(_ context.Context) (map[string]int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	counts := map[string]int{}
 	for _, job := range s.jobs {
 		counts[job.Status]++
 	}
+	return counts, nil
+}
+
+func analysisJobResponse(job app.AnalysisJob) AnalysisJobResponse {
+	return AnalysisJobResponse{
+		JobID: job.ID, RunID: job.RunID, VODLabel: job.VODLabel, Status: job.Status,
+		Message: job.Message, CreatedAt: job.CreatedAt, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
+		Error: job.Error, ReportJSON: job.ReportJSONPath, ReportMD: job.ReportMDPath, ArtifactBase: "/artifacts/",
+	}
+}
+
+func (s *Server) analysisJobCounts(ctx context.Context) map[string]int {
+	counts, err := s.jobs.CountAnalysisJobs(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "count analysis jobs", "error", err)
+		return map[string]int{}
+	}
 	return counts
 }
+
+var _ app.AnalysisJobStore = (*analysisJobStore)(nil)
 
 type statusRecorder struct {
 	http.ResponseWriter
@@ -2605,17 +2776,10 @@ type serverMetrics struct {
 	requests  map[requestMetricKey]requestMetricValue
 }
 
-type authSession struct {
-	Token     string
-	CSRFToken string
-	User      app.PublicAuthUser
-	ExpiresAt time.Time
-}
-
 type authSessionStore struct {
 	mu       sync.Mutex
 	ttl      time.Duration
-	sessions map[string]authSession
+	sessions map[string]app.AuthSession
 }
 
 type requestLogEntry struct {
@@ -2637,23 +2801,26 @@ type requestLogStore struct {
 }
 
 func newAuthSessionStore(ttl time.Duration) *authSessionStore {
-	return &authSessionStore{ttl: ttl, sessions: map[string]authSession{}}
+	return &authSessionStore{ttl: ttl, sessions: map[string]app.AuthSession{}}
 }
 
-func (s *authSessionStore) create(user app.PublicAuthUser) (authSession, error) {
+func (s *authSessionStore) Create(_ context.Context, user app.PublicAuthUser, ttl time.Duration) (app.AuthSession, error) {
 	token, err := app.NewAuthToken()
 	if err != nil {
-		return authSession{}, err
+		return app.AuthSession{}, err
 	}
 	csrfToken, err := app.NewAuthToken()
 	if err != nil {
-		return authSession{}, err
+		return app.AuthSession{}, err
 	}
-	session := authSession{
+	if ttl <= 0 {
+		ttl = s.ttl
+	}
+	session := app.AuthSession{
 		Token:     token,
 		CSRFToken: csrfToken,
 		User:      user,
-		ExpiresAt: time.Now().UTC().Add(s.ttl),
+		ExpiresAt: time.Now().UTC().Add(ttl),
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2661,25 +2828,28 @@ func (s *authSessionStore) create(user app.PublicAuthUser) (authSession, error) 
 	return session, nil
 }
 
-func (s *authSessionStore) get(token string) (authSession, bool) {
+func (s *authSessionStore) Get(_ context.Context, token string) (app.AuthSession, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[token]
 	if !ok {
-		return authSession{}, false
+		return app.AuthSession{}, false, nil
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
 		delete(s.sessions, token)
-		return authSession{}, false
+		return app.AuthSession{}, false, nil
 	}
-	return session, true
+	return session, true, nil
 }
 
-func (s *authSessionStore) delete(token string) {
+func (s *authSessionStore) Delete(_ context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, token)
+	return nil
 }
+
+var _ app.AuthSessionStore = (*authSessionStore)(nil)
 
 func newRequestLogStore(limit int) *requestLogStore {
 	if limit <= 0 {

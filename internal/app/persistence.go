@@ -2,17 +2,21 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
+
+var ErrReportNotFound = errors.New("analysis report not found")
 
 type AnalysisCatalog interface {
 	SaveAnalysisResult(ctx context.Context, request PersistAnalysisRequest) error
 }
 
 type ReportCatalog interface {
-	ListReportSummaries(ctx context.Context, vodLabel string) ([]ReportCatalogSummary, error)
+	ListReportSummaries(ctx context.Context, ownerID string, vodLabel string, includeSystem bool) ([]ReportCatalogSummary, error)
+	FindReport(ctx context.Context, ownerID string, vodLabel string, runID string, includeSystem bool) (ReportCatalogRecord, bool, error)
 }
 
 type PersistAnalysisRequest struct {
@@ -20,7 +24,14 @@ type PersistAnalysisRequest struct {
 	Saved  SavedReport
 }
 
+type ReportCatalogRecord struct {
+	Report       domain.AnalysisReport
+	JSONPath     string
+	MarkdownPath string
+}
+
 type ReportCatalogSummary struct {
+	OwnerID              string
 	SchemaVersion        int
 	VODLabel             string
 	RunID                string

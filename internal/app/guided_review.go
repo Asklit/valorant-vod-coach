@@ -205,7 +205,7 @@ func writeGuidedReviews(path string, set domain.GuidedReviewSet) error {
 		temp.Close()
 		return err
 	}
-	if err := temp.Chmod(0o644); err != nil {
+	if err := temp.Chmod(0o640); err != nil {
 		temp.Close()
 		return err
 	}
@@ -213,4 +213,12 @@ func writeGuidedReviews(path string, set domain.GuidedReviewSet) error {
 		return err
 	}
 	return os.Rename(tempPath, path)
+}
+
+func SaveGuidedReviews(root string, set domain.GuidedReviewSet) (SavedGuidedReviews, error) {
+	path := guidedReviewsPath(root, set.VODLabel, set.ReportRunID)
+	if err := writeGuidedReviews(path, set); err != nil {
+		return SavedGuidedReviews{}, err
+	}
+	return SavedGuidedReviews{JSONPath: path}, nil
 }

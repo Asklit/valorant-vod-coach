@@ -29,6 +29,16 @@ const (
 
 var ErrUploadNotFound = errors.New("uploaded VOD not found")
 
+type Store interface {
+	Stage(ctx context.Context, reader io.Reader) (StagedUpload, error)
+	Discard(staged StagedUpload) error
+	Create(ctx context.Context, request CreateUploadRequest) (UploadedAsset, error)
+	List(ctx context.Context, ownerID string, includeAll bool) ([]UploadedAsset, error)
+	Resolve(ctx context.Context, label string, ownerID string, includeAll bool) (UploadedAsset, error)
+	Update(ctx context.Context, label string, ownerID string, includeAll bool, request UpdateUploadRequest) (UploadedAsset, error)
+	Delete(ctx context.Context, label string, ownerID string, includeAll bool) (UploadedAsset, error)
+}
+
 type LocalStore struct {
 	Root           string
 	FFprobePath    string
@@ -336,7 +346,7 @@ func (s LocalStore) Delete(ctx context.Context, label string, ownerID string, in
 }
 
 type OwnedResolver struct {
-	Store      LocalStore
+	Store      Store
 	OwnerID    string
 	IncludeAll bool
 	Fallback   app.VODResolver

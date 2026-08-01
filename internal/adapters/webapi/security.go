@@ -27,46 +27,56 @@ type authRateLimitEntry struct {
 
 type authRateLimiter struct {
 	mu        sync.Mutex
-	limit     int
-	window    time.Duration
 	entries   map[string]authRateLimitEntry
 	lastSweep time.Time
+	clock     func() time.Time
 }
 
-func newAuthRateLimiter(limit int, window time.Duration) *authRateLimiter {
-	return &authRateLimiter{limit: limit, window: window, entries: map[string]authRateLimitEntry{}}
+func newAuthRateLimiter() *authRateLimiter {
+	return &authRateLimiter{entries: map[string]authRateLimitEntry{}}
 }
 
-func (l *authRateLimiter) allow(key string, now time.Time) (bool, time.Duration) {
-	if l == nil || l.limit <= 0 {
-		return true, 0
+func (l *authRateLimiter) Allow(_ context.Context, key string, limit int, window time.Duration) (bool, time.Duration, error) {
+	if l == nil || limit <= 0 {
+		return true, 0, nil
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	now := time.Now().UTC()
+	if l.clock != nil {
+		now = l.clock().UTC()
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.window {
+	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= window {
 		for entryKey, candidate := range l.entries {
-			if now.Sub(candidate.windowStart) >= l.window {
+			if now.Sub(candidate.windowStart) >= window {
 				delete(l.entries, entryKey)
 			}
 		}
 		l.lastSweep = now
 	}
 	entry := l.entries[key]
-	if entry.windowStart.IsZero() || now.Sub(entry.windowStart) >= l.window {
+	if entry.windowStart.IsZero() || now.Sub(entry.windowStart) >= window {
 		entry = authRateLimitEntry{windowStart: now, count: 1}
 		l.entries[key] = entry
-		return true, 0
+		return true, 0, nil
 	}
-	if entry.count >= l.limit {
-		return false, l.window - now.Sub(entry.windowStart)
+	if entry.count >= limit {
+		return false, window - now.Sub(entry.windowStart), nil
 	}
 	entry.count++
 	l.entries[key] = entry
-	return true, 0
+	return true, 0, nil
 }
 
 func (s *Server) allowAuthRequest(w http.ResponseWriter, r *http.Request, action string) bool {
-	allowed, retryAfter := s.authRate.allow(action+":"+clientIP(r), time.Now().UTC())
+	allowed, retryAfter, err := s.authRate.Allow(r.Context(), action+":"+clientIP(r), s.config.AuthRequestsPerMinute, time.Minute)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("authentication rate limiter is unavailable"))
+		return false
+	}
 	if allowed {
 		return true
 	}
@@ -75,6 +85,8 @@ func (s *Server) allowAuthRequest(w http.ResponseWriter, r *http.Request, action
 	writeError(w, http.StatusTooManyRequests, errors.New("too many authentication requests"))
 	return false
 }
+
+var _ app.RateLimiter = (*authRateLimiter)(nil)
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
@@ -280,7 +292,13 @@ func (s *Server) canReadArtifact(ctx context.Context, user app.PublicAuthUser, p
 	}
 	switch parts[0] {
 	case "users":
-		if len(parts) < 4 || parts[1] != user.ID || parts[2] != "analyses" || !isSafeResourceID(parts[3]) {
+		if len(parts) < 4 || parts[1] != user.ID {
+			return false
+		}
+		if parts[2] == "data" {
+			return parts[3] == "corrections" || parts[3] == "coaching"
+		}
+		if parts[2] != "analyses" || !isSafeResourceID(parts[3]) {
 			return false
 		}
 		_, _, err := s.vodResolver(user.ID, false).ResolveVOD(ctx, parts[3])
