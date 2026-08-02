@@ -842,6 +842,39 @@ func TestServerAuthRegisterLoginAndAdminOverview(t *testing.T) {
 	}
 }
 
+func TestAdminTelemetryRequiresAdminAndConfiguredBackends(t *testing.T) {
+	fixture := newFixture(t)
+	server := NewServer(fixture.config)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/telemetry?window=6h", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous telemetry status = %d, want 401", response.Code)
+	}
+
+	auth := registerTestAdmin(t, server)
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/telemetry?window=6h", nil)
+	authorize(request, auth)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured telemetry status = %d, want 503: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminTelemetryWindowIsBoundedToSupportedValues(t *testing.T) {
+	for raw, expected := range map[string]time.Duration{"": time.Hour, "1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour} {
+		got, err := adminTelemetryWindow(raw)
+		if err != nil || got != expected {
+			t.Fatalf("adminTelemetryWindow(%q) = %s, %v; want %s", raw, got, err, expected)
+		}
+	}
+	if _, err := adminTelemetryWindow("30d"); err == nil {
+		t.Fatal("unsupported telemetry window should fail")
+	}
+}
+
 func TestServerRejectsModelReviewWithoutVisionURL(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)

@@ -1,6 +1,6 @@
 # Project Structure
 
-Date: 2026-07-21
+Date: 2026-08-02
 
 The project uses a Go-first modular monolith with ports/adapters boundaries and DDD-lite naming. This keeps the codebase simple while preserving the important dependency rule: product logic should not depend on infrastructure details.
 
@@ -93,7 +93,10 @@ data/
 tests/
   integration/                    # integration/e2e tests that need real services or tools
 web/
-  app/                            # React/TypeScript/Vite product UI
+  app/                            # React 19/TypeScript/Vite product UI
+    src/app/                      # routing and application composition
+    src/pages/                    # player and operator page features
+    src/shared/                   # typed HTTP and shared UI utilities
 ml/
   vision-service/                 # Python model-review service boundary
   evals/                          # manual quality-evaluation label fixtures
@@ -181,3 +184,5 @@ Keep simple technical wrappers in adapters. Examples:
 - reading a TSV file;
 - uploading an object to S3;
 - publishing to Kafka.
+
+The frontend follows the same dependency intent without mirroring Go packages. Route-level features own private state, `shared` does not import pages, and `app` composes features. See [Web Product Architecture](web-product.md).

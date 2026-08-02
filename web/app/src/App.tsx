@@ -33,8 +33,11 @@ import {
 } from "lucide-react";
 import type { FormEvent, ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type PageID = "dashboard" | "library" | "review" | "reports" | "admin";
+import { routePath, useAppRoute } from "./app/router";
+import type { PageID } from "./app/router";
+import { apiFetch, apiURL, readError } from "./shared/api";
+import { AdminPage as OperationsAdminPage } from "./pages/admin/AdminPage";
+import { AuthPage } from "./pages/auth/AuthPage";
 
 type AuthUser = {
   id: string;
@@ -526,75 +529,10 @@ type CoachAssessmentsResponse = {
   json_path: string;
 };
 
-type AdminOverview = {
-  generated_at: string;
-  user: AuthUser;
-  system: {
-    schema_version: number;
-    analyzer: string;
-    model_review_enabled: boolean;
-    manifest_path: string;
-    raw_root: string;
-    processed_root: string;
-    evaluation_label_root: string;
-  };
-  readiness: Record<string, ReadinessCheck>;
-  dataset: VODListResponse["counts"];
-  jobs: Record<string, number>;
-  auth: {
-    user_count: number;
-  };
-};
-
-type AdminMetric = {
-  method: string;
-  route: string;
-  status: number;
-  count: number;
-  duration_seconds: number;
-};
-
-type ReadinessCheck = {
-  status: string;
-  detail?: string;
-  path?: string;
-  runtime?: string;
-  model?: string;
-};
-
-type RequestLog = {
-  time: string;
-  method: string;
-  path: string;
-  route: string;
-  status: number;
-  duration_ms: number;
-  user_id?: string;
-  user_email?: string;
-  user_role?: string;
-};
-
-type AdminMetricsResponse = {
-  started_at: string;
-  requests: AdminMetric[];
-  jobs: Record<string, number>;
-  logs: RequestLog[];
-  routes: string[];
-  user: AuthUser;
-};
-
-type AdminLogsResponse = {
-  logs: RequestLog[];
-};
-
-type AdminUsersResponse = {
-  users: AuthUser[];
-};
-
 const ranks = ["all", "iron", "bronze", "silver", "gold", "platinum", "diamond", "ascendant", "immortal", "radiant"];
 const correctionTypes = ["false_detection", "map", "agent", "rank", "round_boundary", "finding_note", "event_note"];
 export function App() {
-  const [page, setPage] = useState<PageID>("dashboard");
+  const { page, navigate } = useAppRoute();
   const [csrfToken, setCSRFToken] = useState("");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -621,11 +559,6 @@ export function App() {
 	const [coachAssessmentsPath, setCoachAssessmentsPath] = useState("");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
   const [analysisHistory, setAnalysisHistory] = useState<AnalysisJobResponse[]>([]);
-  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
-  const [adminMetrics, setAdminMetrics] = useState<AdminMetricsResponse | null>(null);
-  const [adminLogs, setAdminLogs] = useState<RequestLog[]>([]);
-  const [adminUsers, setAdminUsers] = useState<AuthUser[]>([]);
-
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -709,10 +642,10 @@ export function App() {
   }, [selectedLabel, report?.run_id]);
 
   useEffect(() => {
-    if (page === "admin" && user?.role === "admin") {
-      void loadAdmin();
+    if (page === "admin" && user && user.role !== "admin") {
+      navigate("dashboard", { replace: true });
     }
-  }, [page, user?.role]);
+  }, [navigate, page, user]);
 
   async function loadSession() {
     try {
@@ -794,7 +727,11 @@ export function App() {
       const payload = (await response.json()) as VODListResponse;
       setVods(payload.vods);
       setCounts(payload.counts);
-      setSelectedLabel((current) => current || payload.vods.find((vod) => vod.report_count > 0)?.label || payload.vods[0]?.label || "");
+      setSelectedLabel((current) => {
+        const requested = new URLSearchParams(window.location.search).get("vod") ?? "";
+        const requestedVOD = payload.vods.find((vod) => vod.label === requested)?.label ?? "";
+        return current || requestedVOD || payload.vods.find((vod) => vod.report_count > 0)?.label || payload.vods[0]?.label || "";
+      });
     } catch (err) {
       setError(messageFromError(err));
     } finally {
@@ -908,31 +845,6 @@ export function App() {
 		}
 	}
 
-  async function loadAdmin() {
-    try {
-      const [overview, metrics, logs, users] = await Promise.all([
-        fetchJSON<AdminOverview>("/api/admin/overview"),
-        fetchJSON<AdminMetricsResponse>("/api/admin/metrics"),
-        fetchJSON<AdminLogsResponse>("/api/admin/logs"),
-        fetchJSON<AdminUsersResponse>("/api/admin/users")
-      ]);
-      setAdminOverview(overview);
-      setAdminMetrics(metrics);
-      setAdminLogs(logs.logs);
-      setAdminUsers(users.users);
-    } catch (err) {
-      setError(messageFromError(err));
-    }
-  }
-
-  async function fetchJSON<T>(path: string): Promise<T> {
-    const response = await apiFetch(path, { headers: authHeaders });
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    return (await response.json()) as T;
-  }
-
   async function runAnalysis() {
     if (!selectedVod || analyzing) {
       return;
@@ -984,7 +896,7 @@ export function App() {
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
         await loadEvaluations(analyzedLabel);
         await loadAnalysisHistory(analyzedLabel);
-        setPage("review");
+		navigate("review");
         return;
       }
       if (job.status === "failed") {
@@ -1215,7 +1127,7 @@ export function App() {
 
   function selectVOD(label: string) {
     setSelectedLabel(label);
-    setPage("review");
+	navigate("review", { params: { vod: label } });
   }
 
   function seekVideo(seconds: number) {
@@ -1232,20 +1144,20 @@ export function App() {
   }
   if (!user) {
     return (
-      <AuthScreen
-        authEmail={authEmail}
-        authMode={authMode}
-        authName={authName}
-        authPassword={authPassword}
-        authSetupToken={authSetupToken}
+      <AuthPage
+        email={authEmail}
+        mode={authMode}
+        name={authName}
+        password={authPassword}
+        setupToken={authSetupToken}
         error={error}
-        setAuthEmail={setAuthEmail}
-        setAuthMode={setAuthMode}
-        setAuthName={setAuthName}
-        setAuthPassword={setAuthPassword}
-        setAuthSetupToken={setAuthSetupToken}
+        onEmailChange={setAuthEmail}
+        onModeChange={setAuthMode}
+        onNameChange={setAuthName}
+        onPasswordChange={setAuthPassword}
+        onSetupTokenChange={setAuthSetupToken}
+        onSubmit={submitAuth}
         setupRequired={setupRequired}
-        submitAuth={submitAuth}
       />
     );
   }
@@ -1264,11 +1176,11 @@ export function App() {
         </div>
 
         <nav className="nav-stack" aria-label="Primary">
-          <NavButton active={page === "dashboard"} icon={<Gauge size={18} />} label="Dashboard" onClick={() => setPage("dashboard")} />
-          <NavButton active={page === "library"} icon={<Database size={18} />} label="Library" onClick={() => setPage("library")} />
-          <NavButton active={page === "review"} icon={<Play size={18} />} label="Review" onClick={() => setPage("review")} />
-          <NavButton active={page === "reports"} icon={<FileText size={18} />} label="Reports" onClick={() => setPage("reports")} />
-          {user.role === "admin" && <NavButton active={page === "admin"} icon={<Shield size={18} />} label="Admin" onClick={() => setPage("admin")} />}
+          <NavButton active={page === "dashboard"} icon={<Gauge size={18} />} label="Dashboard" navigate={navigate} page="dashboard" />
+          <NavButton active={page === "library"} icon={<Database size={18} />} label="Library" navigate={navigate} page="library" />
+          <NavButton active={page === "review"} icon={<Play size={18} />} label="Review" navigate={navigate} page="review" />
+          <NavButton active={page === "reports"} icon={<FileText size={18} />} label="Reports" navigate={navigate} page="reports" />
+          {user.role === "admin" && <NavButton active={page === "admin"} icon={<Shield size={18} />} label="Admin" navigate={navigate} page="admin" />}
         </nav>
 
         <div className="nav-user">
@@ -1297,7 +1209,7 @@ export function App() {
             latestReportSummary={latestReportSummary}
             report={report}
             selectedVod={selectedVod}
-            setPage={setPage}
+            setPage={navigate}
           />
         )}
         {page === "library" && (
@@ -1339,7 +1251,7 @@ export function App() {
             setFullVod={setFullVod}
             setRunDuration={setRunDuration}
             setRunFps={setRunFps}
-            setPage={setPage}
+            setPage={navigate}
             videoRef={videoRef}
             seekVideo={seekVideo}
           />
@@ -1375,86 +1287,8 @@ export function App() {
           />
         )}
         {page === "admin" && user.role === "admin" && (
-          <AdminPage
-            adminLogs={adminLogs}
-            adminMetrics={adminMetrics}
-            adminOverview={adminOverview}
-            adminUsers={adminUsers}
-            refresh={() => void loadAdmin()}
-          />
+		  <OperationsAdminPage />
         )}
-      </section>
-    </main>
-  );
-}
-
-function AuthScreen(props: {
-  authEmail: string;
-  authMode: "login" | "register";
-  authName: string;
-  authPassword: string;
-  authSetupToken: string;
-  error: string;
-  setAuthEmail: (value: string) => void;
-  setAuthMode: (value: "login" | "register") => void;
-  setAuthName: (value: string) => void;
-  setAuthPassword: (value: string) => void;
-  setAuthSetupToken: (value: string) => void;
-  setupRequired: boolean;
-  submitAuth: () => void;
-}) {
-  return (
-    <main className="auth-shell">
-      <section className="auth-panel">
-        <div className="brand-lockup">
-          <div className="brand-mark">
-            <Crosshair size={24} />
-          </div>
-          <div>
-            <div className="brand-title">VOD COACH</div>
-            <div className="brand-subtitle">VOD REVIEW</div>
-          </div>
-        </div>
-        <div className="auth-mode">
-          <button className={props.authMode === "login" ? "active" : ""} onClick={() => props.setAuthMode("login")} type="button">
-            Sign in
-          </button>
-          <button className={props.authMode === "register" ? "active" : ""} onClick={() => props.setAuthMode("register")} type="button">
-            Register
-          </button>
-        </div>
-        {props.authMode === "register" && (
-          <>
-            <label>
-              <span>Name</span>
-              <input value={props.authName} onChange={(event) => props.setAuthName(event.target.value)} placeholder="Coach" />
-            </label>
-            {props.setupRequired && (
-              <label>
-                <span>Installation key</span>
-                <input value={props.authSetupToken} onChange={(event) => props.setAuthSetupToken(event.target.value)} placeholder="Administrator setup token" type="password" />
-              </label>
-            )}
-          </>
-        )}
-        <label>
-          <span>Email</span>
-          <input value={props.authEmail} onChange={(event) => props.setAuthEmail(event.target.value)} placeholder="coach@example.com" type="email" />
-        </label>
-        <label>
-          <span>Password</span>
-          <input value={props.authPassword} onChange={(event) => props.setAuthPassword(event.target.value)} placeholder="minimum 8 chars" type="password" />
-        </label>
-        {props.error && (
-          <div className="auth-error">
-            <AlertTriangle size={16} />
-            {props.error}
-          </div>
-        )}
-        <button className="auth-submit" onClick={props.submitAuth} type="button">
-          <Shield size={17} />
-          {props.authMode === "login" ? "Sign in" : "Create account"}
-        </button>
       </section>
     </main>
   );
@@ -2123,140 +1957,6 @@ function ReportsPage(props: {
   );
 }
 
-function AdminPage(props: {
-  adminLogs: RequestLog[];
-  adminMetrics: AdminMetricsResponse | null;
-  adminOverview: AdminOverview | null;
-  adminUsers: AuthUser[];
-  refresh: () => void;
-}) {
-  const requests = props.adminMetrics?.requests ?? [];
-  const readinessEntries = Object.entries(props.adminOverview?.readiness ?? {});
-  const maxCount = Math.max(1, ...requests.map((item) => item.count));
-  return (
-    <>
-      <PageHeader eyebrow="Admin" title="Operations console" detail="Local service diagnostics, request metrics, logs, users." action={<IconButton icon={<RefreshCw size={17} />} onClick={props.refresh} title="Refresh admin" />} />
-      <div className="stat-grid">
-        <Metric icon={<Database size={18} />} label="Dataset" value={String(props.adminOverview?.dataset.total ?? 0)} detail="manifest rows" />
-        <Metric icon={<FileText size={18} />} label="Reports" value={String(props.adminOverview?.dataset.reported ?? 0)} detail="VODs ready" />
-        <Metric icon={<Shield size={18} />} label="Users" value={String(props.adminOverview?.auth.user_count ?? 0)} detail="local auth" />
-        <Metric icon={<Activity size={18} />} label="Jobs" value={String(props.adminOverview?.jobs.running ?? 0)} detail="running" />
-      </div>
-      <div className="page-grid two">
-        <section className="surface">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">HTTP metrics</p>
-              <h2>Requests by route</h2>
-            </div>
-            <BarChart3 size={19} />
-          </div>
-          <div className="metric-bars">
-            {requests.slice(0, 10).map((item) => (
-              <div className="metric-bar" key={`${item.method}-${item.route}-${item.status}`}>
-                <span>{item.method} {item.route}</span>
-                <div><i style={{ width: `${Math.max(6, (item.count / maxCount) * 100)}%` }} /></div>
-                <strong>{item.count}</strong>
-              </div>
-            ))}
-            {requests.length === 0 && <EmptyState title="No request metrics" detail="Use the app and refresh admin." />}
-          </div>
-          <div className="admin-links">
-            <a href={apiURL("/metrics")} target="_blank" rel="noreferrer">Prometheus</a>
-            <a href={apiURL("/debug/pprof/")} target="_blank" rel="noreferrer">pprof</a>
-            <a href={apiURL("/readyz")} target="_blank" rel="noreferrer">readyz</a>
-          </div>
-        </section>
-
-        <section className="surface">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">Readiness</p>
-              <h2>Service checks</h2>
-            </div>
-            <CheckCircle2 size={19} />
-          </div>
-          <div className="log-list">
-            {readinessEntries.map(([name, check]) => (
-              <article className="log-row" key={name}>
-                <span className={check.status === "ok" ? "ok" : check.status === "failed" ? "bad" : "warn"}>{check.status}</span>
-                <div>
-                  <strong>{name.replaceAll("_", " ")}</strong>
-                  <small>{check.detail ?? check.path ?? check.runtime ?? check.model ?? "ready"}</small>
-                </div>
-              </article>
-            ))}
-            {readinessEntries.length === 0 && <EmptyState title="No readiness data" detail="Refresh admin diagnostics." />}
-          </div>
-        </section>
-
-        <section className="surface">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">Logs</p>
-              <h2>Recent requests</h2>
-            </div>
-            <Activity size={19} />
-          </div>
-          <div className="log-list">
-            {props.adminLogs.slice(0, 14).map((log) => (
-              <article className="log-row" key={`${log.time}-${log.path}-${log.duration_ms}`}>
-                <span className={log.status >= 500 ? "bad" : log.status >= 400 ? "warn" : "ok"}>{log.status}</span>
-                <div>
-                  <strong>{log.method} {log.route}</strong>
-                  <small>{log.path} / {log.duration_ms.toFixed(1)}ms / {new Date(log.time).toLocaleTimeString()} / {log.user_email ?? "anonymous"}</small>
-                </div>
-              </article>
-            ))}
-            {props.adminLogs.length === 0 && <EmptyState title="No logs" detail="No requests recorded yet." />}
-          </div>
-        </section>
-
-        <section className="surface">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">Users</p>
-              <h2>Local accounts</h2>
-            </div>
-            <Shield size={19} />
-          </div>
-          <div className="user-list">
-            {props.adminUsers.map((account) => (
-              <article className="user-row" key={account.id}>
-                <span>{account.role}</span>
-                <div>
-                  <strong>{account.display_name}</strong>
-                  <small>{account.email}</small>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="surface">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">System</p>
-              <h2>Paths</h2>
-            </div>
-            <Gauge size={19} />
-          </div>
-          <dl className="system-list">
-            <dt>manifest</dt>
-            <dd>{props.adminOverview?.system.manifest_path}</dd>
-            <dt>raw</dt>
-            <dd>{props.adminOverview?.system.raw_root}</dd>
-            <dt>processed</dt>
-            <dd>{props.adminOverview?.system.processed_root}</dd>
-            <dt>analyzer</dt>
-            <dd>{props.adminOverview?.system.analyzer}</dd>
-          </dl>
-        </section>
-      </div>
-    </>
-  );
-}
-
 function PageHeader(props: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return (
     <header className="page-header">
@@ -2270,12 +1970,20 @@ function PageHeader(props: { eyebrow: string; title: string; detail: string; act
   );
 }
 
-function NavButton(props: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+function NavButton(props: { active: boolean; icon: ReactNode; label: string; navigate: (page: PageID) => void; page: PageID }) {
   return (
-    <button className={props.active ? "nav-button active" : "nav-button"} onClick={props.onClick} type="button">
+    <a
+      aria-current={props.active ? "page" : undefined}
+      className={props.active ? "nav-button active" : "nav-button"}
+      href={routePath(props.page)}
+      onClick={(event) => {
+        event.preventDefault();
+        props.navigate(props.page);
+      }}
+    >
       {props.icon}
       {props.label}
-    </button>
+    </a>
   );
 }
 
@@ -2328,15 +2036,6 @@ function LoadingScreen() {
       </div>
     </main>
   );
-}
-
-async function readError(response: Response) {
-  try {
-    const payload = (await response.json()) as { error?: string };
-    return payload.error || response.statusText;
-  } catch {
-    return response.statusText;
-  }
 }
 
 function messageFromError(error: unknown) {
@@ -2409,22 +2108,4 @@ function artifactURL(path: string) {
     return apiURL(`/artifacts/${normalized.slice(index + marker.length)}`);
   }
   return apiURL(`/artifacts/${normalized.replace(/^\/+/, "")}`);
-}
-
-function apiURL(path: string) {
-  const explicitBase = import.meta.env.VITE_API_BASE as string | undefined;
-  const base = explicitBase || devBackendBase();
-  return `${base}${path}`;
-}
-
-function apiFetch(path: string, init: RequestInit = {}) {
-  return fetch(apiURL(path), { ...init, credentials: "include" });
-}
-
-function devBackendBase() {
-  const isLocalHost = window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost";
-  if (isLocalHost && window.location.port.startsWith("517")) {
-    return "http://127.0.0.1:8080";
-  }
-  return "";
 }

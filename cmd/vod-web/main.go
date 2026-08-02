@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/asklit/valorant-vod-coach/internal/adapters/operations"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redisrate"
@@ -49,6 +50,14 @@ func main() {
 	temporalNamespace := flag.String("temporal-namespace", envString("TEMPORAL_NAMESPACE", client.DefaultNamespace), "Temporal namespace")
 	temporalTaskQueue := flag.String("temporal-task-queue", envString("TEMPORAL_TASK_QUEUE", temporalworkflow.DefaultTaskQueue), "Temporal analysis task queue")
 	bootstrapAdminToken := flag.String("bootstrap-admin-token", os.Getenv("VODCOACH_BOOTSTRAP_TOKEN"), "one-time token required to create the first administrator")
+	prometheusURL := flag.String("prometheus-url", envString("PROMETHEUS_URL", "http://localhost:9090"), "Prometheus URL used by the protected admin telemetry aggregator")
+	lokiURL := flag.String("loki-url", envString("LOKI_URL", "http://localhost:3100"), "Loki URL used by the protected admin telemetry aggregator")
+	grafanaPublicURL := flag.String("grafana-public-url", envString("GRAFANA_PUBLIC_URL", "http://localhost:3000"), "browser-visible Grafana URL")
+	prometheusPublicURL := flag.String("prometheus-public-url", envString("PROMETHEUS_PUBLIC_URL", "http://localhost:9090"), "browser-visible Prometheus URL")
+	temporalUIPublicURL := flag.String("temporal-ui-public-url", envString("TEMPORAL_UI_PUBLIC_URL", "http://localhost:8233"), "browser-visible Temporal UI URL")
+	minioPublicURL := flag.String("minio-public-url", envString("MINIO_PUBLIC_URL", "http://localhost:9001"), "browser-visible MinIO console URL")
+	clickhousePublicURL := flag.String("clickhouse-public-url", envString("CLICKHOUSE_PUBLIC_URL", "http://localhost:8123"), "browser-visible ClickHouse HTTP URL")
+	alloyPublicURL := flag.String("alloy-public-url", envString("ALLOY_PUBLIC_URL", "http://localhost:12345"), "browser-visible Alloy status URL")
 	staticDir := flag.String("static-dir", "", "optional built frontend directory")
 	addr := flag.String("addr", webapi.AddrFromEnv(8080), "HTTP listen address")
 	flag.Parse()
@@ -179,12 +188,22 @@ func main() {
 		Locks:               locks,
 		Objects:             objects,
 		WorkflowLauncher:    workflowLauncher,
-		Logger:              obs.Logger,
-		Tracer:              obs.Tracer,
+		Operations:          &operations.Client{PrometheusURL: *prometheusURL, LokiURL: *lokiURL},
+		ServiceLinks: map[string]string{
+			"grafana": *grafanaPublicURL, "prometheus": *prometheusPublicURL,
+			"temporal": *temporalUIPublicURL, "minio": *minioPublicURL,
+			"clickhouse": *clickhousePublicURL, "alloy": *alloyPublicURL,
+		},
+		Logger: obs.Logger,
+		Tracer: obs.Tracer,
 	})
 
 	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "object_storage_enabled", objects != nil, "temporal_enabled", *temporalAddress != "", "vision_configured", *visionURL != "")
-	fmt.Fprintf(os.Stdout, "vod-web listening on http://localhost%s\n", *addr)
+	displayAddress := *addr
+	if strings.HasPrefix(displayAddress, ":") {
+		displayAddress = "localhost" + displayAddress
+	}
+	fmt.Fprintf(os.Stdout, "vod-web listening on http://%s\n", displayAddress)
 	httpServer := &http.Server{
 		Addr:              *addr,
 		Handler:           server,
