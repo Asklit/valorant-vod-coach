@@ -120,9 +120,10 @@ func AnalyzeGameplay(ctx context.Context, request app.ObservationRequest, option
 	summary.PeakCombatScore = round4(maxObservation(observations, func(o domain.FrameObservation) float64 { return o.CombatSignal }))
 
 	classifyPhases(observations)
-	windows := buildReviewWindows(observations, maxWindows)
 	phaseProfile := buildPhaseProfile(observations)
-	roundSegments := buildRoundSegments(observations, windows, request)
+	roundSegments := buildRoundSegments(observations, nil, request)
+	windows := buildReviewWindows(observations, maxWindows, roundSegments)
+	roundSegments = buildRoundSegments(observations, windows, request)
 	windows = assignWindowRoundNumbers(windows, roundSegments)
 	summary.ReviewWindows = windows
 	summary.ReviewWindowCount = len(windows)
@@ -452,7 +453,7 @@ func assignWindowRoundNumbers(windows []domain.ReviewWindow, segments []domain.R
 	return windows
 }
 
-func buildReviewWindows(observations []domain.FrameObservation, maxWindows int) []domain.ReviewWindow {
+func buildReviewWindows(observations []domain.FrameObservation, maxWindows int, rounds []domain.RoundSegment) []domain.ReviewWindow {
 	maxWindows = min(max(1, maxWindows), MaxReviewWindowsLimit)
 	deathBudget := max(1, int(math.Ceil(float64(maxWindows)*0.34)))
 	combatBudget := max(1, int(math.Ceil(float64(maxWindows)*0.40)))
@@ -461,7 +462,11 @@ func buildReviewWindows(observations []domain.FrameObservation, maxWindows int) 
 		decisionBudget = max(2, int(math.Round(float64(maxWindows)*0.16)))
 	}
 
-	windows := buildDeathReviewWindows(observations, min(maxWindows, deathBudget))
+	// Inspect every temporal cluster before applying the report budget. Limiting
+	// candidates here biases equal-confidence combat reports toward early rounds.
+	deathCandidates := buildDeathReviewWindows(observations, len(observations))
+	deathCandidates = assignWindowRoundNumbers(deathCandidates, rounds)
+	windows := selectDeathWindowsByRound(deathCandidates, deathBudget)
 	remaining := maxWindows - len(windows)
 	if remaining > 0 {
 		windows = append(windows, buildHighImpactWindows(observations, min(remaining, combatBudget), windows)...)
@@ -478,6 +483,48 @@ func buildReviewWindows(observations []domain.FrameObservation, maxWindows int) 
 	return sortReviewWindows(windows)
 }
 
+func selectDeathWindowsByRound(windows []domain.ReviewWindow, limit int) []domain.ReviewWindow {
+	if len(windows) == 0 || limit <= 0 {
+		return nil
+	}
+	chronological := append([]domain.ReviewWindow(nil), windows...)
+	sort.SliceStable(chronological, func(i, j int) bool {
+		return chronological[i].PeakSeconds < chronological[j].PeakSeconds
+	})
+	selected := make([]domain.ReviewWindow, 0, len(chronological))
+	roundIndexes := map[int]int{}
+	for _, window := range chronological {
+		if window.RoundNumber <= 0 {
+			selected = append(selected, window)
+			continue
+		}
+		if _, exists := roundIndexes[window.RoundNumber]; exists {
+			// The first trusted combat-report onset is the POV death. Later onsets in
+			// the same round come from toggling spectator or scoreboard overlays.
+			continue
+		}
+		roundIndexes[window.RoundNumber] = len(selected)
+		selected = append(selected, window)
+	}
+	if len(selected) <= limit {
+		return sortReviewWindows(selected)
+	}
+
+	spread := make([]domain.ReviewWindow, 0, limit)
+	for bucket := 0; bucket < limit; bucket++ {
+		start := bucket * len(selected) / limit
+		end := (bucket + 1) * len(selected) / limit
+		best := selected[start]
+		for index := start + 1; index < end; index++ {
+			if selected[index].Score > best.Score {
+				best = selected[index]
+			}
+		}
+		spread = append(spread, best)
+	}
+	return sortReviewWindows(spread)
+}
+
 func buildDeathReviewWindows(observations []domain.FrameObservation, maxWindows int) []domain.ReviewWindow {
 	if len(observations) == 0 || maxWindows <= 0 {
 		return nil
@@ -492,7 +539,8 @@ func buildDeathReviewWindows(observations []domain.FrameObservation, maxWindows 
 	clusterStart := -1
 	peak := -1
 	for index, observation := range observations {
-		visible := observation.CombatReportSignal >= trustedCombatReportSignal &&
+		visible := containsString(observation.OCRSignals, ocrSignalDeathReport) &&
+			observation.CombatReportSignal >= trustedCombatReportSignal &&
 			observation.HUDLayoutConfidence >= 0.22 &&
 			observation.BuyPhaseSignal < trustedBuyPhaseSignal &&
 			observation.ScoreboardSignal < trustedScoreboardSignal &&

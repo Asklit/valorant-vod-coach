@@ -143,11 +143,11 @@ func TestRotationWindowsRejectRoundEndOverlay(t *testing.T) {
 func TestDeathReviewWindowsClusterPersistentCombatReport(t *testing.T) {
 	observations := []domain.FrameObservation{
 		{Index: 1, TimestampSeconds: 5, Path: "before-1.jpg", HUDLayoutConfidence: 0.6},
-		{Index: 2, TimestampSeconds: 10, Path: "death-1.jpg", HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98},
+		{Index: 2, TimestampSeconds: 10, Path: "death-1.jpg", HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, OCRSignals: []string{ocrSignalDeathReport}},
 		{Index: 3, TimestampSeconds: 12, Path: "report-still-visible.jpg", HUDLayoutConfidence: 0.6, CombatReportSignal: 0.97},
 		{Index: 4, TimestampSeconds: 18, Path: "after-1.jpg", HUDLayoutConfidence: 0.6},
 		{Index: 5, TimestampSeconds: 40, Path: "before-2.jpg", HUDLayoutConfidence: 0.6},
-		{Index: 6, TimestampSeconds: 46, Path: "death-2.jpg", HUDLayoutConfidence: 0.6, CombatReportSignal: 0.99},
+		{Index: 6, TimestampSeconds: 46, Path: "death-2.jpg", HUDLayoutConfidence: 0.6, CombatReportSignal: 0.99, OCRSignals: []string{ocrSignalDeathReport}},
 		{Index: 7, TimestampSeconds: 50, Path: "after-2.jpg", HUDLayoutConfidence: 0.6},
 	}
 
@@ -162,14 +162,91 @@ func TestDeathReviewWindowsClusterPersistentCombatReport(t *testing.T) {
 	}
 }
 
+func TestDeathReviewSelectionKeepsOneMomentPerRoundAndSpreadsCoverage(t *testing.T) {
+	windows := []domain.ReviewWindow{
+		{Kind: "death_review", RoundNumber: 1, StartSeconds: 1, PeakSeconds: 10, Score: 0.95},
+		{Kind: "death_review", RoundNumber: 1, StartSeconds: 11, PeakSeconds: 20, Score: 0.98},
+		{Kind: "death_review", RoundNumber: 2, StartSeconds: 101, PeakSeconds: 110, Score: 0.97},
+		{Kind: "death_review", RoundNumber: 3, StartSeconds: 201, PeakSeconds: 210, Score: 0.96},
+		{Kind: "death_review", RoundNumber: 4, StartSeconds: 301, PeakSeconds: 310, Score: 0.99},
+		{Kind: "death_review", RoundNumber: 5, StartSeconds: 401, PeakSeconds: 410, Score: 0.95},
+		{Kind: "death_review", RoundNumber: 6, StartSeconds: 501, PeakSeconds: 510, Score: 0.98},
+	}
+
+	all := selectDeathWindowsByRound(windows, 10)
+	if len(all) != 6 {
+		t.Fatalf("expected the first single death per round: %+v", all)
+	}
+	seenRounds := map[int]bool{}
+	for _, window := range all {
+		if window.RoundNumber == 1 && window.PeakSeconds != 10 {
+			t.Fatalf("expected the first death onset for round 1: %+v", all)
+		}
+		if seenRounds[window.RoundNumber] {
+			t.Fatalf("round %d selected more than once: %+v", window.RoundNumber, all)
+		}
+		seenRounds[window.RoundNumber] = true
+	}
+
+	spread := selectDeathWindowsByRound(windows, 3)
+	if len(spread) != 3 || spread[0].RoundNumber > 2 || spread[1].RoundNumber < 3 || spread[1].RoundNumber > 4 || spread[2].RoundNumber < 5 {
+		t.Fatalf("expected early, middle, and late match coverage: %+v", spread)
+	}
+}
+
+func TestReviewWindowsApplyDeathBudgetAfterRoundDeduplication(t *testing.T) {
+	observations := make([]domain.FrameObservation, 0, 28)
+	addCluster := func(timestamp float64, score float64) {
+		observations = append(observations,
+			domain.FrameObservation{TimestampSeconds: timestamp, HUDLayoutConfidence: 0.6, CombatReportSignal: score, OCRSignals: []string{ocrSignalDeathReport}},
+			domain.FrameObservation{TimestampSeconds: timestamp + 1, HUDLayoutConfidence: 0.6},
+		)
+	}
+	for timestamp := 10.0; timestamp <= 160; timestamp += 30 {
+		addCluster(timestamp, 0.99)
+	}
+	addCluster(330, 0.96)
+	addCluster(630, 0.95)
+	addCluster(930, 0.94)
+	rounds := []domain.RoundSegment{
+		{RoundNumber: 1, StartSeconds: 0, EndSeconds: 299},
+		{RoundNumber: 2, StartSeconds: 299, EndSeconds: 599},
+		{RoundNumber: 3, StartSeconds: 599, EndSeconds: 899},
+		{RoundNumber: 4, StartSeconds: 899, EndSeconds: 1000},
+	}
+
+	windows := buildReviewWindows(observations, 6, rounds)
+	deaths := make([]domain.ReviewWindow, 0, 3)
+	for _, window := range windows {
+		if window.Kind == "death_review" {
+			deaths = append(deaths, window)
+		}
+	}
+	if len(deaths) != 3 {
+		t.Fatalf("expected the three-window death budget after round deduplication: %+v", windows)
+	}
+	if deaths[0].RoundNumber != 1 || deaths[1].RoundNumber < 2 || deaths[2].RoundNumber < 3 {
+		t.Fatalf("expected death review coverage beyond the stronger early clusters: %+v", deaths)
+	}
+}
+
 func TestDeathReviewWindowsRejectPostRoundCombatReport(t *testing.T) {
 	observations := []domain.FrameObservation{
-		{Index: 1, TimestampSeconds: 10, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, BuyPhaseSignal: 0.90},
-		{Index: 2, TimestampSeconds: 20, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, ScoreboardSignal: 0.80},
-		{Index: 3, TimestampSeconds: 30, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, RoundEndSignal: 0.90},
+		{Index: 1, TimestampSeconds: 10, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, BuyPhaseSignal: 0.90, OCRSignals: []string{ocrSignalDeathReport}},
+		{Index: 2, TimestampSeconds: 20, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, ScoreboardSignal: 0.80, OCRSignals: []string{ocrSignalDeathReport}},
+		{Index: 3, TimestampSeconds: 30, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, RoundEndSignal: 0.90, OCRSignals: []string{ocrSignalDeathReport}},
 	}
 	if windows := buildDeathReviewWindows(observations, 4); len(windows) != 0 {
 		t.Fatalf("post-round combat report must not confirm a death: %+v", windows)
+	}
+}
+
+func TestDeathReviewWindowsRejectUnconfirmedCombatReport(t *testing.T) {
+	observations := []domain.FrameObservation{
+		{Index: 1, TimestampSeconds: 10, HUDLayoutConfidence: 0.6, CombatReportSignal: 0.98, OCRSignals: []string{ocrSignalCombatReport}},
+	}
+	if windows := buildDeathReviewWindows(observations, 4); len(windows) != 0 {
+		t.Fatalf("a generic or outgoing combat report must not confirm a POV death: %+v", windows)
 	}
 }
 

@@ -16,14 +16,24 @@ export function routePath(page: PageID) {
   return pagePaths[page];
 }
 
+export function buildRoute(page: PageID, params: Record<string, string | undefined> = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  return `${routePath(page)}${query.size ? `?${query.toString()}` : ""}`;
+}
+
+export function pageFromPath(pathname: string): PageID {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  const entry = (Object.entries(pagePaths) as Array<[PageID, string]>).find(([, candidate]) => candidate === path);
+  return entry?.[0] ?? "dashboard";
+}
+
 export function useAppRoute() {
   const page = useSyncExternalStore(subscribe, currentPage, () => "dashboard" as PageID);
   const navigate = useCallback((nextPage: PageID, options: { replace?: boolean; params?: Record<string, string | undefined> } = {}) => {
-    const query = new URLSearchParams();
-    Object.entries(options.params ?? {}).forEach(([key, value]) => {
-      if (value) query.set(key, value);
-    });
-    const path = `${routePath(nextPage)}${query.size ? `?${query.toString()}` : ""}`;
+    const path = buildRoute(nextPage, options.params);
     if (`${window.location.pathname}${window.location.search}` === path) {
       return;
     }
@@ -48,7 +58,5 @@ function subscribe(listener: () => void) {
 }
 
 function currentPage(): PageID {
-  const path = window.location.pathname.replace(/\/+$/, "") || "/";
-  const entry = (Object.entries(pagePaths) as Array<[PageID, string]>).find(([, candidate]) => candidate === path);
-  return entry?.[0] ?? "dashboard";
+  return pageFromPath(window.location.pathname);
 }

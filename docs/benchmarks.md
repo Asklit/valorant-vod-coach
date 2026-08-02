@@ -1,6 +1,6 @@
 # Benchmarks
 
-Last measured: 2026-07-31
+Last measured: 2026-08-02
 
 The default product path uses local CPU processing only: ffmpeg for sampling,
 VALORANT-specific temporal CV for HUD events, and staged Tesseract OCR for
@@ -67,7 +67,7 @@ This is a regression score for one short segment, not a population-quality
 claim. Release-level quality requires reviewed fixtures across rank buckets,
 maps, agents, HUD languages, resolutions, spectator states, and full matches.
 
-## Current Latency Result
+## Short Fixture Latency
 
 The same 180-second report completed in 24.3 seconds after analysis started:
 
@@ -85,6 +85,51 @@ The same 180-second report completed in 24.3 seconds after analysis started:
 The number includes extraction, CV, OCR, clip generation, and report writing on
 this machine. It is a preliminary local measurement; codec, resolution, disk
 cache, and CPU materially affect it.
+
+## Full-Match Product Result
+
+The released CPU path was also run over the complete English-HUD
+`iron_spudbud_01` recording:
+
+```sh
+go run ./cmd/vodctl analyze run \
+  --vod iron_spudbud_01 \
+  --fps 1 \
+  --duration 0 \
+  --timeout 20m \
+  --run-id full_product_benchmark_full_v4 \
+  --force
+```
+
+Environment: 8-core Apple M2 MacBook Air with 16 GB RAM, warm local filesystem
+cache, 1920x1080 60 FPS source, 33:02.7 media duration.
+
+| Metric | Result |
+| --- | ---: |
+| sampled/analyzed frames | 1,983 / 1,983 |
+| staged OCR frames | 840 |
+| round segments | 17, buy-phase visual anchors |
+| review windows / clips | 18 / 18 |
+| window mix | 7 death, 8 fight, 2 rotation, 1 tempo |
+| wall time | 413.0 s |
+| processing speed | 4.80x realtime |
+| frame artifacts | 413.6 MiB |
+| clip artifacts | 196.6 MiB |
+| report artifacts | 2.0 MiB |
+
+Release invariants checked against the structured report:
+
+- every selected death contains an OCR-confirmed POV marker such as `KILLED BY`
+  or `KILLED YOU`;
+- death moments are unique per round and cover early, middle, and late match
+  sections rather than only the highest-confidence early frames;
+- all 18 automatic coach decisions remain `needs_confirmation`;
+- automatic recommendations before guided assessment: zero;
+- every selected moment has a generated clip and chronological frame evidence.
+
+This run proves end-to-end completion, local resource cost, and safety
+invariants for one full match. It is not a full-match precision/recall score;
+that still requires the broader manually reviewed corpus below.
 
 ## Media Baseline
 

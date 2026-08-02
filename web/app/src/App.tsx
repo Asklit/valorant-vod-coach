@@ -1,7 +1,6 @@
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -107,22 +106,6 @@ type VODListResponse = {
     reported: number;
   };
   vods: VODItem[];
-};
-
-type BackendHealth = {
-  status: string;
-  schema_version?: number;
-  analyzer?: string;
-  model_review_configured?: boolean;
-  model_review_available?: boolean;
-  vision_service?: {
-    configured?: boolean;
-    status?: string;
-    model?: string;
-    mode?: string;
-    runtime?: string;
-    error?: string;
-  };
 };
 
 type EvidenceRef = {
@@ -446,42 +429,6 @@ type ReportListResponse = {
   reports: ReportSummary[];
 };
 
-type EvaluationSummary = {
-  schema_version: number;
-  run_id: string;
-  generated_at: string;
-  vod_label: string;
-  report_run_id: string;
-  tolerance_seconds: number;
-  label_count: number;
-  prediction_count: number;
-  match_count: number;
-  precision: number;
-  recall: number;
-  f1: number;
-  json_path: string;
-  markdown_path: string;
-};
-
-type EvaluationListResponse = {
-  vod_label: string;
-  evaluations: EvaluationSummary[];
-};
-
-type EvaluationAnnotationSummary = {
-  schema_version: number;
-  vod_label: string;
-  report_run_id?: string;
-  tolerance_seconds?: number;
-  label_count: number;
-  path: string;
-};
-
-type EvaluationAnnotationListResponse = {
-  vod_label: string;
-  annotations: EvaluationAnnotationSummary[];
-};
-
 type ManualCorrection = {
   id: string;
   type: string;
@@ -544,14 +491,11 @@ export function App() {
 
   const [vods, setVods] = useState<VODItem[]>([]);
   const [counts, setCounts] = useState<VODListResponse["counts"] | null>(null);
-  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
   const [selectedLabel, setSelectedLabel] = useState("");
   const [rank, setRank] = useState("all");
   const [query, setQuery] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [reportHistory, setReportHistory] = useState<ReportSummary[]>([]);
-  const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([]);
-  const [evaluationAnnotations, setEvaluationAnnotations] = useState<EvaluationAnnotationSummary[]>([]);
   const [manualCorrections, setManualCorrections] = useState<ManualCorrection[]>([]);
   const [manualCorrectionsPath, setManualCorrectionsPath] = useState("");
 	const [coachAssessments, setCoachAssessments] = useState<GuidedReviewAssessment[]>([]);
@@ -562,7 +506,6 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [evaluating, setEvaluating] = useState(false);
   const [savingCorrection, setSavingCorrection] = useState(false);
   const [savingCoachReview, setSavingCoachReview] = useState(false);
 	const [uploadingVod, setUploadingVod] = useState(false);
@@ -570,8 +513,7 @@ export function App() {
 	const [mutatingVod, setMutatingVod] = useState("");
   const [error, setError] = useState("");
   const [runDuration, setRunDuration] = useState(180);
-  const [runFps, setRunFps] = useState("1");
-  const [fullVod, setFullVod] = useState(false);
+  const [fullVod, setFullVod] = useState(true);
   const [correctionType, setCorrectionType] = useState("false_detection");
   const [correctionTargetID, setCorrectionTargetID] = useState("");
   const [correctionValue, setCorrectionValue] = useState("");
@@ -614,14 +556,10 @@ export function App() {
     if (!selectedLabel) {
       setReport(null);
       setReportHistory([]);
-      setEvaluationHistory([]);
-      setEvaluationAnnotations([]);
       setAnalysisHistory([]);
       return;
     }
     void loadReports(selectedLabel, { preferGameplay: true });
-    void loadEvaluations(selectedLabel);
-    void loadEvaluationAnnotations(selectedLabel);
     void loadAnalysisHistory(selectedLabel);
   }, [selectedLabel]);
 
@@ -702,18 +640,7 @@ export function App() {
   }
 
   async function loadBootstrap() {
-    await Promise.all([loadBackendHealth(), loadVods()]);
-  }
-
-  async function loadBackendHealth() {
-    try {
-      const response = await apiFetch("/api/health");
-      if (response.ok) {
-        setBackendHealth((await response.json()) as BackendHealth);
-      }
-    } catch {
-      setBackendHealth(null);
-    }
+    await loadVods();
   }
 
   async function loadVods() {
@@ -782,28 +709,6 @@ export function App() {
     }
   }
 
-  async function loadEvaluations(label: string) {
-    try {
-      const response = await apiFetch(`/api/evaluations?vod_label=${encodeURIComponent(label)}`, { headers: authHeaders });
-      if (response.ok) {
-        setEvaluationHistory(((await response.json()) as EvaluationListResponse).evaluations);
-      }
-    } catch {
-      setEvaluationHistory([]);
-    }
-  }
-
-  async function loadEvaluationAnnotations(label: string) {
-    try {
-      const response = await apiFetch(`/api/evaluation-annotations?vod_label=${encodeURIComponent(label)}`, { headers: authHeaders });
-      if (response.ok) {
-        setEvaluationAnnotations(((await response.json()) as EvaluationAnnotationListResponse).annotations);
-      }
-    } catch {
-      setEvaluationAnnotations([]);
-    }
-  }
-
   async function loadAnalysisHistory(label: string) {
     try {
       const response = await apiFetch(`/api/analysis-runs?vod_label=${encodeURIComponent(label)}&limit=10`, { headers: authHeaders });
@@ -859,7 +764,7 @@ export function App() {
         body: JSON.stringify({
           vod_label: selectedVod.label,
           run_id: `ui_${compactTimestamp(new Date())}`,
-          fps: runFps,
+          fps: "1",
           image_quality: 3,
           duration_seconds: fullVod ? 0 : runDuration,
           force: true,
@@ -894,9 +799,8 @@ export function App() {
       if (job.status === "completed") {
         await loadVods();
         await loadReports(analyzedLabel, { preferredRunID: job.run_id });
-        await loadEvaluations(analyzedLabel);
         await loadAnalysisHistory(analyzedLabel);
-		navigate("review");
+		navigate("review", { params: { vod: analyzedLabel } });
         return;
       }
       if (job.status === "failed") {
@@ -926,37 +830,6 @@ export function App() {
       setAnalysisHistory((current) => [job, ...current.filter((item) => item.job_id !== job.job_id)].slice(0, 10));
     } catch (err) {
       setError(messageFromError(err));
-    }
-  }
-
-  async function runEvaluation() {
-    if (!selectedVod || !report || evaluating || evaluationAnnotations.length === 0) {
-      return;
-    }
-    const annotation = evaluationAnnotations.find((item) => item.report_run_id === report.run_id) ?? evaluationAnnotations[0];
-    setEvaluating(true);
-    setError("");
-    try {
-      const response = await apiFetch("/api/evaluation-runs", {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({
-          vod_label: selectedVod.label,
-          report_run_id: report.run_id,
-          annotations_path: annotation.path,
-          run_id: `ui_eval_${compactTimestamp(new Date())}`,
-          tolerance_seconds: annotation.tolerance_seconds ?? 0,
-          force: true
-        })
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-      await loadEvaluations(selectedVod.label);
-    } catch (err) {
-      setError(messageFromError(err));
-    } finally {
-      setEvaluating(false);
     }
   }
 
@@ -1204,9 +1077,9 @@ export function App() {
 
         {page === "dashboard" && (
           <DashboardPage
-            backendHealth={backendHealth}
+            coachAssessments={coachAssessments}
+            coachProgress={coachProgress}
             counts={counts}
-            latestReportSummary={latestReportSummary}
             report={report}
             selectedVod={selectedVod}
             setPage={navigate}
@@ -1244,13 +1117,11 @@ export function App() {
 			rateCoachRecommendation={(windowID, verdict) => void rateCoachRecommendation(windowID, verdict)}
             runAnalysis={() => void runAnalysis()}
             runDuration={runDuration}
-            runFps={runFps}
 			saveCoachAssessment={(windowID, answers) => void saveCoachAssessment(windowID, answers)}
 			savingCoachReview={savingCoachReview}
             selectedVod={selectedVod}
             setFullVod={setFullVod}
             setRunDuration={setRunDuration}
-            setRunFps={setRunFps}
             setPage={navigate}
             videoRef={videoRef}
             seekVideo={seekVideo}
@@ -1266,16 +1137,12 @@ export function App() {
             correctionTargets={correctionTargets}
             correctionType={correctionType}
             correctionValue={correctionValue}
-            evaluating={evaluating}
-            evaluationAnnotations={evaluationAnnotations}
-            evaluationHistory={evaluationHistory}
             latestReportSummary={latestReportSummary}
             loadReport={loadReport}
             manualCorrections={manualCorrections}
             manualCorrectionsPath={manualCorrectionsPath}
             report={report}
             reportHistory={reportHistory}
-            runEvaluation={() => void runEvaluation()}
             saveManualCorrection={() => void saveManualCorrection()}
             savingCorrection={savingCorrection}
             selectedVod={selectedVod}
@@ -1295,73 +1162,83 @@ export function App() {
 }
 
 function DashboardPage(props: {
-  backendHealth: BackendHealth | null;
+  coachAssessments: GuidedReviewAssessment[];
+  coachProgress: CoachReviewProgress | null;
   counts: VODListResponse["counts"] | null;
-  latestReportSummary: ReportSummary | null;
   report: Report | null;
   selectedVod: VODItem | null;
   setPage: (page: PageID) => void;
 }) {
   const coach = props.report?.gameplay?.coach;
+  const actionable = props.coachAssessments.filter((item) => item.result.recommendation);
+  const latestAction = actionable.at(-1)?.result;
+  const totalMoments = props.coachProgress?.total ?? props.report?.gameplay?.coach_review?.decisions.length ?? 0;
+  const completedMoments = props.coachProgress?.completed ?? 0;
+  const completion = totalMoments ? Math.round(completedMoments / totalMoments * 100) : 0;
   return (
     <>
-      <PageHeader eyebrow="Overview" title="Your VOD review workspace" detail="Player workflow first, developer details in Admin." />
+      <PageHeader
+        detail={props.selectedVod ? `${compactLabel(props.selectedVod.rank)} / ${props.selectedVod.map || "Map not set"} / ${props.selectedVod.agent || "Agent not set"}` : "No match selected"}
+        eyebrow="Overview"
+        title="Performance dashboard"
+      />
       <div className="stat-grid">
-        <Metric icon={<Database size={18} />} label="Downloaded" value={props.counts ? `${props.counts.downloaded}/${props.counts.enabled}` : "..."} detail="local VODs" />
-        <Metric icon={<FileText size={18} />} label="Reports" value={String(props.counts?.reported ?? 0)} detail="VODs reviewed" />
-        <Metric icon={<Radar size={18} />} label="Model review" value={props.backendHealth?.model_review_available ? "online" : "offline"} detail={props.backendHealth?.vision_service?.model ?? "vision-service"} />
-        <Metric icon={<Gauge size={18} />} label="Schema" value={String(props.backendHealth?.schema_version ?? 0)} detail={props.backendHealth?.analyzer ?? "unknown"} />
+        <Metric detail={`${props.counts?.downloaded ?? 0} ready`} icon={<Video size={18} />} label="Matches" value={String(props.counts?.total ?? 0)} />
+        <Metric detail="match reports" icon={<FileText size={18} />} label="Reviewed" value={String(props.counts?.reported ?? 0)} />
+        <Metric detail={`${completion}% complete`} icon={<CheckCircle2 size={18} />} label="Review progress" value={`${completedMoments}/${totalMoments}`} />
+        <Metric detail="confirmed actions" icon={<Lightbulb size={18} />} label="Findings" value={String(actionable.length)} />
       </div>
 
       <div className="page-grid two">
         <section className="surface hero-surface">
           <div className="surface-heading">
             <div>
-              <p className="eyebrow">Current analysis</p>
+              <p className="eyebrow">Current match</p>
               <h2>{props.selectedVod?.title ?? "Select a VOD"}</h2>
             </div>
-            <span className={props.backendHealth?.status === "ok" ? "success-chip" : "live-chip"}>
-              <Activity size={14} />
-              {props.backendHealth?.status ?? "unknown"}
+            <span className={props.report ? "success-chip" : "live-chip"}>
+              {props.report ? <CheckCircle2 size={14} /> : <Clock3 size={14} />}
+              {props.report ? "Review ready" : "Not analyzed"}
             </span>
           </div>
-          <div className="analysis-explainer">
-            <StepPill index="1" title="Sample" detail="ffprobe and frames" />
-            <StepPill index="2" title="Signals" detail="motion, HUD, minimap" />
-            <StepPill index="3" title="Windows" detail="review clips" />
-            <StepPill index="4" title="Report" detail="coach schema" />
+          <div className="dashboard-match-meta">
+            <span>{compactLabel(props.selectedVod?.rank ?? "unranked")}</span>
+            <span>{props.selectedVod?.map || "Map not set"}</span>
+            <span>{props.selectedVod?.agent || "Agent not set"}</span>
+            <span>{props.report ? `${totalMoments} review moments` : "Analysis required"}</span>
           </div>
-          <p className="plain-copy">
-            The CPU engine validates the VALORANT HUD, confirms buy phases and death-state overlays with OCR, and selects corroborated evidence sequences for guided coaching review.
-          </p>
+          <div className="dashboard-progress">
+            <div><strong>Guided review</strong><span>{completion}%</span></div>
+            <div className="dashboard-progress-track"><i style={{ width: `${completion}%` }} /></div>
+          </div>
           <div className="hero-actions">
-            <button onClick={() => props.setPage("library")} type="button">
-              <Database size={16} />
-              Open library
-            </button>
-            <button onClick={() => props.setPage("review")} type="button">
-              <Play size={16} fill="currentColor" />
-              Review VOD
-            </button>
+            <button disabled={!props.selectedVod} onClick={() => props.setPage("review")} type="button"><Play fill="currentColor" size={16} />{props.report ? "Continue review" : "Analyze match"}</button>
+            <button onClick={() => props.setPage("library")} type="button"><Database size={16} />Choose match</button>
           </div>
         </section>
 
         <section className="surface">
           <div className="surface-heading">
             <div>
-              <p className="eyebrow">Latest report</p>
-              <h2>{props.latestReportSummary?.run_id ?? "No report loaded"}</h2>
+              <p className="eyebrow">Coaching focus</p>
+              <h2>{latestAction?.title ?? coach?.focus_areas?.[0]?.title ?? "No confirmed focus"}</h2>
             </div>
-            <History size={19} />
+            <Crosshair size={19} />
           </div>
-          {coach ? (
+          {latestAction?.recommendation ? (
+            <div className="coach-card dashboard-coach-action">
+              <strong>{latestAction.recommendation.summary}</strong>
+              <p>{latestAction.recommendation.better_action}</p>
+              <span>{latestAction.recommendation.checkpoint}</span>
+            </div>
+          ) : coach ? (
             <div className="coach-card">
               <strong>{coach.focus_areas?.[0]?.title ?? "Coach summary"}</strong>
               <p>{coach.verdict}</p>
-              <span>{Math.round(clamp01(coach.confidence) * 100)}% confidence</span>
+              <span>{completedMoments ? `${completedMoments} moments reviewed` : `${totalMoments} moments waiting`}</span>
             </div>
           ) : (
-            <EmptyState title="No gameplay summary" detail="Run analysis or select a report from the Reports page." />
+            <EmptyState detail="Select a match to begin." title="No coaching report" />
           )}
         </section>
       </div>
@@ -1548,13 +1425,11 @@ function ReviewPage(props: {
   report: Report | null;
   runAnalysis: () => void;
   runDuration: number;
-  runFps: string;
 	saveCoachAssessment: (windowID: string, answers: Record<string, string>) => void;
 	savingCoachReview: boolean;
   selectedVod: VODItem | null;
   setFullVod: (value: boolean) => void;
   setRunDuration: (value: number) => void;
-  setRunFps: (value: string) => void;
   setPage: (page: PageID) => void;
   videoRef: RefObject<HTMLVideoElement | null>;
   seekVideo: (seconds: number) => void;
@@ -1601,25 +1476,26 @@ function ReviewPage(props: {
             )}
           </div>
           <div className="run-controls product-controls">
-            <label>
-              <span>Sample seconds</span>
-              <input disabled={props.fullVod} min={30} max={600} step={30} type="number" value={props.runDuration} onChange={(event) => props.setRunDuration(Number(event.target.value))} />
-            </label>
-            <label>
-              <span>FPS</span>
-              <select value={props.runFps} onChange={(event) => props.setRunFps(event.target.value)}>
-                <option value="0.5">0.5</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-              </select>
-            </label>
-            <label className="toggle-control">
-              <input checked={props.fullVod} onChange={(event) => props.setFullVod(event.target.checked)} type="checkbox" />
-              <span>Full VOD</span>
-            </label>
+            <div className="analysis-scope-control">
+              <span>Analysis scope</span>
+              <div className="segmented-control compact">
+                <button className={!props.fullVod ? "active" : ""} onClick={() => props.setFullVod(false)} type="button">Quick</button>
+                <button className={props.fullVod ? "active" : ""} onClick={() => props.setFullVod(true)} type="button">Full match</button>
+              </div>
+            </div>
+            {!props.fullVod && (
+              <label>
+                <span>Review length</span>
+                <select value={props.runDuration} onChange={(event) => props.setRunDuration(Number(event.target.value))}>
+                  <option value={180}>3 minutes</option>
+                  <option value={300}>5 minutes</option>
+                  <option value={600}>10 minutes</option>
+                </select>
+              </label>
+            )}
             <button className="run-button" disabled={!props.selectedVod || props.selectedVod.local_status !== "downloaded" || props.analyzing} onClick={props.runAnalysis} type="button">
               <Play size={18} fill="currentColor" />
-              {props.analyzing ? "Analyzing" : props.fullVod ? "Run full VOD" : "Run analysis"}
+              {props.analyzing ? "Analyzing" : props.fullVod ? "Analyze full match" : "Run quick review"}
             </button>
           </div>
           {props.analysisJob && (
@@ -1666,12 +1542,11 @@ function ReviewPage(props: {
 				<>
 				  {understanding && (
 					<div className={`understanding-summary compatibility-${understanding.capture_compatibility}`}>
-					  <div><span>Capture</span><strong>{understanding.capture_compatibility}</strong><small>{Math.round(understanding.compatibility_confidence * 100)}% HUD / {understanding.ocr_status ?? "OCR unknown"}</small></div>
+					  <div><span>Evidence coverage</span><strong>{understanding.capture_compatibility}</strong><small>{Math.round(understanding.compatibility_confidence * 100)}% confidence</small></div>
 					  <div className="understanding-counts"><span><strong>{understanding.death_review_count ?? 0}</strong><small>Deaths</small></span><span><strong>{understanding.corroborated_fight_count ?? 0}</strong><small>Fights</small></span><span><strong>{props.report?.gameplay?.round_segment_count ?? 0}</strong><small>Rounds</small></span></div>
 					</div>
 				  )}
 				  <div className="review-progress" aria-label="Guided review progress"><i style={{ width: `${review.decisions.length ? ((props.coachProgress?.completed ?? 0) / review.decisions.length) * 100 : 0}%` }} /></div>
-			  <p className="review-contract-copy">{review.summary}</p>
 			  <div className="coach-queue">
 				{decisions.map((decision) => {
 				  const saved = props.coachAssessments.find((item) => item.window_id === decision.window_id);
@@ -1764,16 +1639,12 @@ function ReportsPage(props: {
   correctionTargets: Array<{ id: string; label: string }>;
   correctionType: string;
   correctionValue: string;
-  evaluating: boolean;
-  evaluationAnnotations: EvaluationAnnotationSummary[];
-  evaluationHistory: EvaluationSummary[];
   latestReportSummary: ReportSummary | null;
   loadReport: (label: string, runID: string) => Promise<void>;
   manualCorrections: ManualCorrection[];
   manualCorrectionsPath: string;
   report: Report | null;
   reportHistory: ReportSummary[];
-  runEvaluation: () => void;
   saveManualCorrection: () => void;
   savingCorrection: boolean;
   selectedVod: VODItem | null;
@@ -1785,24 +1656,30 @@ function ReportsPage(props: {
 }) {
   const windows = props.report?.gameplay?.review_windows ?? [];
 	const actionable = props.coachAssessments.filter((item) => item.result.recommendation);
+  const practicePlan = actionable.map((item) => ({
+    id: item.result.rule_id,
+    title: item.result.title,
+    drill: item.result.recommendation?.drill ?? "",
+    checkpoint: item.result.recommendation?.checkpoint ?? ""
+  })).filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
   return (
     <>
-      <PageHeader eyebrow="Reports" title="Review evidence and corrections" detail={props.report ? `Run ${props.report.run_id}` : "No report selected."} />
+      <PageHeader eyebrow="Reports" title="Coaching report" detail={props.report ? `${props.selectedVod?.title ?? props.report.vod.title} / ${formatDate(props.report.generated_at)}` : "No report selected"} />
       <div className="page-grid reports-grid">
         <section className="surface">
           <div className="surface-heading">
             <div>
               <p className="eyebrow">History</p>
-              <h2>{props.selectedVod?.label ?? "No VOD"}</h2>
+              <h2>{props.selectedVod?.title ?? "No match"}</h2>
             </div>
             <History size={19} />
           </div>
           <div className="history-list product-history">
             {props.reportHistory.map((item) => (
               <button className={props.report?.run_id === item.run_id ? "history-run active" : "history-run"} key={item.run_id} onClick={() => props.selectedVod && void props.loadReport(props.selectedVod.label, item.run_id)} type="button">
-                <span>{item.run_id}</span>
-                <small>{item.frame_count} frames / {item.review_window_count} windows / {item.model_review_run_count || 0}/{item.model_review_task_count || 0} model</small>
-                <small>{item.analyzer ?? `schema ${item.schema_version}`}</small>
+                <span>{formatDate(item.generated_at)}</span>
+                <small>{item.review_window_count} moments / {item.round_segment_count} rounds / {item.sample_duration_seconds ? `${formatSeconds(item.sample_duration_seconds)} analyzed` : "full match"}</small>
+                <small>{item.run_id}</small>
               </button>
             ))}
             {props.reportHistory.length === 0 && <EmptyState title="No reports" detail="Run analysis first." />}
@@ -1819,6 +1696,22 @@ function ReportsPage(props: {
               </a>
             </div>
           )}
+        </section>
+
+        <section className="surface wide practice-plan-section">
+          <div className="surface-heading">
+            <div><p className="eyebrow">Practice plan</p><h2>{practicePlan.length} focus drills</h2></div>
+            <Crosshair size={19} />
+          </div>
+          <div className="practice-plan-grid">
+            {practicePlan.map((item, index) => (
+              <article className="practice-plan-item" key={item.id}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <div><small>{item.id.replaceAll("_", " ")}</small><h3>{item.title}</h3><p>{item.drill}</p><blockquote>{item.checkpoint}</blockquote></div>
+              </article>
+            ))}
+            {practicePlan.length === 0 && <EmptyState detail="Confirmed coaching findings will appear here." title="No drills yet" />}
+          </div>
         </section>
 
         <section className="surface">
@@ -1928,30 +1821,6 @@ function ReportsPage(props: {
           )}
         </section>
 
-        <section className="surface wide">
-          <div className="surface-heading">
-            <div>
-              <p className="eyebrow">Benchmarks</p>
-              <h2>{props.evaluationHistory.length} eval runs</h2>
-            </div>
-            <button className="secondary-action inline" disabled={!props.report || props.evaluating || props.evaluationAnnotations.length === 0} onClick={props.runEvaluation} type="button">
-              <BarChart3 size={15} />
-              {props.evaluating ? "Running" : "Run benchmark"}
-            </button>
-          </div>
-          <div className="quality-list product-quality">
-            {props.evaluationHistory.slice(0, 4).map((item) => (
-              <article className="quality-card" key={item.run_id}>
-                <div>
-                  <span>{item.run_id}</span>
-                  <strong>{Math.round(clamp01(item.f1) * 100)}% F1</strong>
-                </div>
-                <p>{item.match_count}/{item.label_count} labels / {item.prediction_count} predictions / report {item.report_run_id}</p>
-              </article>
-            ))}
-            {props.evaluationHistory.length === 0 && <EmptyState title="No benchmarks" detail="Add labels in ml/evals and run benchmark." />}
-          </div>
-        </section>
       </div>
     </>
   );
@@ -2004,16 +1873,6 @@ function Metric(props: { icon: ReactNode; label: string; value: string; detail: 
         <strong>{props.value}</strong>
         <small>{props.detail}</small>
       </div>
-    </div>
-  );
-}
-
-function StepPill(props: { index: string; title: string; detail: string }) {
-  return (
-    <div className="step-pill">
-      <span>{props.index}</span>
-      <strong>{props.title}</strong>
-      <small>{props.detail}</small>
     </div>
   );
 }
@@ -2088,13 +1947,6 @@ function buildCorrectionTargets(report: Report | null) {
 
 function compactLabel(value: string) {
   return value.length > 88 ? `${value.slice(0, 85)}...` : value;
-}
-
-function clamp01(value: number) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.min(1, Math.max(0, value));
 }
 
 function artifactURL(path: string) {

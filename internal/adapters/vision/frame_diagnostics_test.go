@@ -1,13 +1,45 @@
 package vision
 
 import (
+	"context"
 	"image"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/asklit/valorant-vod-coach/internal/domain"
 )
+
+func TestFrameOCRDiagnostics(t *testing.T) {
+	specs := strings.Split(strings.TrimSpace(os.Getenv("VALORANT_OCR_DIAGNOSTIC_FRAMES")), ",")
+	if len(specs) == 0 || specs[0] == "" {
+		t.Skip("set VALORANT_OCR_DIAGNOSTIC_FRAMES to expected-signal=path entries")
+	}
+	tesseractPath, err := exec.LookPath("tesseract")
+	if err != nil {
+		t.Skip("tesseract is unavailable")
+	}
+	for _, spec := range specs {
+		expected, path, found := strings.Cut(strings.TrimSpace(spec), "=")
+		if !found || expected == "" || path == "" {
+			t.Fatalf("invalid diagnostic spec %q", spec)
+		}
+		signals, err := inspectFrameText(context.Background(), tesseractPath, ocrTask{
+			frame: domain.FrameObservation{Path: path}, buy: true, scoreboard: true, report: true,
+		})
+		if err != nil {
+			t.Fatalf("inspect %s: %v", path, err)
+		}
+		if !containsString(signals, expected) {
+			t.Fatalf("%s signals = %v, expected %q", path, signals, expected)
+		}
+		if expected == ocrSignalCombatReport && containsString(signals, ocrSignalDeathReport) {
+			t.Fatalf("%s generic report was incorrectly classified as a POV death: %v", path, signals)
+		}
+		t.Logf("%s signals = %v", path, signals)
+	}
+}
 
 func TestFrameRegionDiagnostics(t *testing.T) {
 	paths := strings.Split(strings.TrimSpace(os.Getenv("VALORANT_DIAGNOSTIC_FRAMES")), ",")
@@ -54,6 +86,8 @@ func TestOCRSemanticPatterns(t *testing.T) {
 		{name: "english buy", text: "BUY PHASE PRESS B TO BUY", match: isBuyPhaseText},
 		{name: "turkish buy", text: "SATIN ALMA EVRESI", match: isBuyPhaseText},
 		{name: "english report", text: "KILLED BY REYNA COMBAT REPORT", match: isCombatReportText},
+		{name: "english death report", text: "KILLED BY REYNA COMBAT REPORT INCOMING KILLED YOU", match: isDeathReportText},
+		{name: "turkish death report", text: "OLDUREN REYNA CATISMA RAPORU", match: isDeathReportText},
 		{name: "turkish report OCR", text: "GATISMA RAPORU", match: isCombatReportText},
 		{name: "english scoreboard", text: "NAME ULTIMATE KDA LOADOUT CREDS PING", match: isScoreboardText},
 		{name: "english round victory", text: "VICTORY ENEMY TEAM ELIMINATED", match: isRoundEndText},
@@ -70,6 +104,9 @@ func TestOCRSemanticPatterns(t *testing.T) {
 	}
 	if isCombatReportText(normalizeOCRText("red wall and weapon")) || isBuyPhaseText(normalizeOCRText("spike planted")) || isRoundEndText(normalizeOCRText("round in progress")) {
 		t.Fatalf("ordinary gameplay text must not match HUD overlays")
+	}
+	if isDeathReportText(normalizeOCRText("OUTGOING COMBAT REPORT 135 KILLED")) {
+		t.Fatal("outgoing combat report rows must not confirm a POV death")
 	}
 }
 

@@ -1,6 +1,6 @@
 # Product and Architecture Decisions
 
-Date: 2026-07-21
+Date: 2026-08-02
 
 This document fixes the project direction at a middle+/senior engineering level. The goal is not to build a thin AI wrapper, but to build a production-like VOD analysis system with clear boundaries, reproducible processing, observability, and evaluation.
 
@@ -14,7 +14,8 @@ The system should:
 - process it through a durable workflow;
 - extract technical media metadata, frames, clips, OCR observations, and match timeline;
 - identify candidate review windows;
-- run AI analysis only where it adds value;
+- ask the player to confirm tactical context that pixels alone cannot prove;
+- derive recommendations from versioned coaching rules and confirmed facts;
 - produce a structured report with timestamps, evidence, confidence, and recommendations;
 - show the report in a web UI next to a video player;
 - allow manual corrections that improve future evaluation.
@@ -27,24 +28,39 @@ Open UI
   -> start processing
   -> watch live workflow status
   -> open generated timeline
-  -> click a mistake marker
-  -> inspect clip, evidence, confidence, recommendation
+  -> open an automatically selected review moment
+  -> inspect the evidence and confirm visible tactical facts
+  -> receive an auditable recommendation and drill
   -> submit a manual correction
   -> see metrics/traces for the processing workflow
 ```
 
-## Product Scope
+## Current Product Decision
 
-### MVP
+The default product must require no paid API, billing account, local model, GPU, or custom training. An automatic visual spike is never presented as a gameplay mistake.
 
-The MVP is not "perfect AI coach". The MVP is a reliable processing platform with a first useful report.
+```text
+full VOD
+  -> VALORANT capture compatibility check
+  -> coarse CPU frame scan
+  -> staged OCR for semantic HUD overlays
+  -> round, death, fight, rotation, and tempo candidates
+  -> evidence sequences and short clips
+  -> player confirms only visible context
+  -> versioned coaching rule evaluates the confirmed facts
+  -> actionable finding, better action, drill, and checkpoint
+```
 
-MVP must include:
+This is a complete guided coaching product rather than a placeholder automatic coach. It trades unattended semantic inference for evidence, auditability, zero inference cost, and useful domain-specific advice. A real VLM can later implement the existing model-review port, but it is not required by the product and deterministic stub findings are disabled in user runs.
+
+## Delivered Scope
+
+The delivered self-hosted product includes:
 
 - Go CLI for dataset validation and probing;
 - Go API for VOD registration, processing status, reports, and artifacts;
 - Go Temporal worker for VOD processing;
-- Python/FastAPI vision service for OCR/CV/VLM calls;
+- optional dependency-free Python model-review contract double, excluded from the default runtime;
 - PostgreSQL schema and migrations;
 - MinIO/S3-compatible artifact storage;
 - Redis for cache, locks, and rate limits;
@@ -53,7 +69,7 @@ MVP must include:
 - React/TypeScript review UI;
 - tests for manifest parsing, media probing, timeline building, report schema, and API contracts.
 
-### Non-goals for MVP
+### Non-goals
 
 - Do not train a custom gameplay model from scratch.
 - Do not rely on hidden team comms, enemy intent, or invisible information.
@@ -63,9 +79,9 @@ MVP must include:
 
 ## User Workflow
 
-The user-facing system has three processing modes.
+The user-facing system has two zero-cost processing scopes and one optional extension.
 
-### Fast Mode
+### Quick Review
 
 Fast mode is deterministic and cheap.
 
@@ -75,29 +91,30 @@ VOD
   -> frame sampling
   -> OCR/HUD/minimap checks
   -> approximate round timeline
-  -> heuristic report
+  -> guided review queue
 ```
 
 Use it for local iteration, smoke tests, and cheap feedback.
 
-### Standard Mode
+### Full Match Guided Review
 
-Standard mode is the default product mode.
+Full match is the default product scope.
 
 ```text
 VOD
   -> full coarse scan
   -> timeline and candidate event detection
-  -> short clip extraction
-  -> VLM review on selected windows
-  -> structured report
+  -> short clip and evidence extraction
+  -> guided context confirmation
+  -> deterministic coaching rules
+  -> structured coaching and practice report
 ```
 
-This is the expected best production tradeoff. It gives the model enough context while controlling cost, latency, and hallucinations.
+This provides whole-match navigation and repeat-pattern coverage while keeping every tactical conclusion tied to facts confirmed in the visible clip.
 
-### Deep Mode
+### Model-Assisted Review
 
-Deep mode is an experimental mode for quality comparison.
+Model-assisted review is an experimental extension, not a default product dependency.
 
 ```text
 VOD or replay capture
@@ -107,7 +124,7 @@ VOD or replay capture
   -> report with higher context budget
 ```
 
-Deep mode does not mean blindly uploading one huge raw video to the model. It means the whole match is represented through sampled frames, OCR, per-round summaries, and selected clips. It is allowed to be slower and more expensive, but it must be measurable.
+It must use a real evaluated model and selected clips. The deterministic Python contract double must never be represented to users as AI analysis.
 
 ## Full Demo/VOD vs Selected Clips
 
@@ -119,7 +136,7 @@ The candidate strategies are:
 - `full_coarse`: analyze the full match through sampled frames and OCR, no high-resolution clip deep dive.
 - `hybrid`: full coarse pass plus VLM deep review on selected windows.
 
-The default should be `hybrid` unless evaluation proves otherwise.
+The current default is `full_coarse_guided`. If inference budget becomes available, compare it with `clip_only`, `full_coarse`, and `hybrid` on the same golden set before changing the default.
 
 Why not raw full-VOD VLM as default:
 
@@ -160,7 +177,7 @@ Project decision:
 
 - Support uploaded MP4/MKV/WebM recordings first because they are stable and easy to process.
 - Add a `ReplayCaptureSource` later if the user can record or export footage from the in-game replay viewer.
-- Do not depend on private replay file parsing in MVP.
+- Do not depend on private replay file parsing in the baseline product.
 - If Riot later exposes a stable export/API, add it behind a `SourceAdapter` without changing the rest of the pipeline.
 
 Source adapter interface:
@@ -211,7 +228,7 @@ full_coarse
 hybrid
 ```
 
-Keep `hybrid` as default if it wins on quality/cost. Keep `deep` as an opt-in mode for experiments and difficult VODs.
+Keep `full_coarse_guided` as default until a model-assisted strategy wins on quality, hallucination rate, latency, and cost. Keep model-assisted modes opt-in until then.
 
 ## Architecture Decisions
 
@@ -238,14 +255,15 @@ Keep `hybrid` as default if it wins on quality/cost. Keep `deep` as an opt-in mo
 
 ### Observability
 
-Every service must expose:
+The Go HTTP product surface exposes:
 
 - `/healthz`;
 - `/readyz`;
 - `/metrics`;
 - structured JSON logs;
-- OpenTelemetry traces;
-- service/version labels.
+- OpenTelemetry traces and metrics with service/version labels.
+
+Background Go processes export correlated OTLP telemetry. Infrastructure health is owned by Compose health checks and native service consoles rather than ad hoc HTTP servers in every process.
 
 The demo should include at least one Grafana dashboard and one distributed trace for `ProcessVodWorkflow`.
 
@@ -256,7 +274,7 @@ The project should include:
 - ADR-style documentation for major decisions;
 - Docker Compose local environment;
 - migrations for PostgreSQL and ClickHouse;
-- typed DB access with `pgx` and SQLC;
+- parameterized PostgreSQL access through `pgx` repositories with integration tests;
 - idempotent jobs and artifact versioning;
 - deterministic replay of reports from saved intermediate JSON;
 - unit tests for domain logic;

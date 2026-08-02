@@ -19,6 +19,7 @@ const (
 	ocrSignalBuyPhase     = "buy_phase"
 	ocrSignalScoreboard   = "scoreboard"
 	ocrSignalCombatReport = "combat_report"
+	ocrSignalDeathReport  = "death_report"
 	ocrSignalRoundEnd     = "round_end"
 )
 
@@ -97,6 +98,8 @@ func enrichFrameObservationsWithOCR(ctx context.Context, observations []domain.F
 				observations[result.index].ScoreboardSignal = mathMax(observations[result.index].ScoreboardSignal, 0.94)
 			case ocrSignalCombatReport:
 				observations[result.index].CombatReportSignal = mathMax(observations[result.index].CombatReportSignal, 0.98)
+			case ocrSignalDeathReport:
+				observations[result.index].CombatReportSignal = mathMax(observations[result.index].CombatReportSignal, 0.99)
 			case ocrSignalRoundEnd:
 				observations[result.index].RoundEndSignal = mathMax(observations[result.index].RoundEndSignal, 0.98)
 			}
@@ -187,6 +190,9 @@ func inspectFrameText(ctx context.Context, tesseractPath string, task ocrTask) (
 		if isCombatReportText(text) {
 			signals = append(signals, ocrSignalCombatReport)
 		}
+		if isDeathReportText(text) {
+			signals = append(signals, ocrSignalDeathReport)
+		}
 	}
 	return signals, nil
 }
@@ -248,6 +254,19 @@ func isCombatReportText(text string) bool {
 		"RELATORIO DE COMBATE",
 		"RAPPORT DE COMBAT",
 		"KAMPFBERICHT",
+	)
+}
+
+func isDeathReportText(text string) bool {
+	return containsAnyText(text,
+		"KILLED BY",
+		"KILLED YOU",
+		"OLDUREN",
+		"SENI OLDURDU",
+		"ASESINADO POR",
+		"ABATIDO POR",
+		"TUE PAR",
+		"GETOTET VON",
 	)
 }
 

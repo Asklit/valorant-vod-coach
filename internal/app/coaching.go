@@ -124,7 +124,7 @@ func decisionForWindow(window domain.ReviewWindow, quality domain.CoachEvidenceQ
 	case "death_review":
 		base.Title = "Review the decisions before this death"
 		base.Observation = window.Summary
-		base.WhyReview = "The combat-report UI corroborates a death state. The evidence sequence can locate the preceding decision, but tradeability, intent, utility, and mechanics still require visible confirmation."
+		base.WhyReview = "The combat report contains an OCR-confirmed POV death marker. The evidence sequence can locate the preceding decision, but tradeability, intent, utility, and mechanics still require visible confirmation."
 		base.Requirements = requirements(
 			requirement("death_confirmed", "The combat report belongs to this POV death"),
 			requirement("tradeable", "Trade context is visible"),

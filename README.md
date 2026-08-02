@@ -1,6 +1,6 @@
 # Valorant VOD Coach
 
-Go-first Valorant VOD analysis project.
+Go-first, self-hosted Valorant VOD analysis and guided coaching product.
 
 Current scope:
 
@@ -9,18 +9,18 @@ Current scope:
 - normalize downloads to mp4 through `yt-dlp` and `ffmpeg`;
 - store raw videos outside git under `data/raw/youtube/<rank>/`;
 - run a local CPU gameplay review pipeline that writes reproducible JSON and Markdown reports;
-- expose a Python `vision-service` contract for model review over selected clips.
-- capture manual corrections from the web UI into reproducible local JSON artifacts.
+- expose an optional Python `vision-service` contract for evaluated model experiments over selected clips;
+- capture manual corrections from the web UI into reproducible artifacts;
 - use a page-based React UI with registration/login and an admin console for metrics, logs, users, and service links;
 - persist tenant-owned users, uploads, reports, jobs, and coaching feedback in PostgreSQL;
 - keep sessions, distributed locks, and authentication rate limits in Redis;
-- run full-VOD analysis as retryable, cancellable Temporal workflows through `vod-worker`.
+- run full-VOD analysis as retryable, cancellable Temporal workflows through `vod-worker`;
 - keep uploaded VODs and generated evidence in S3-compatible storage while using local files only as processing caches.
 
-Agreed product stack, implemented incrementally:
+Product stack:
 
 - Go API, CLI, and workers;
-- Python/FastAPI vision service for OCR, CV, and Qwen/VLM inference;
+- optional Python service boundary for future evaluated CV/VLM experiments;
 - React/TypeScript web UI;
 - PostgreSQL as the primary database;
 - ClickHouse for high-volume pipeline analytics;
@@ -32,7 +32,7 @@ Agreed product stack, implemented incrementally:
 
 ## Current Architecture
 
-Kafka is the agreed MVP event streaming layer.
+Kafka is the durable event-streaming and analytics fan-out layer. Temporal, not Kafka, owns long-running workflow state.
 
 ```mermaid
 flowchart LR
@@ -63,13 +63,12 @@ flowchart LR
   Relay --> Kafka
   Kafka --> Consumers
   Consumers --> CH
-  Consumers --> PG
 ```
 
 ## Prerequisites
 
 ```sh
-brew install yt-dlp ffmpeg
+brew install yt-dlp ffmpeg tesseract
 ```
 
 Alternative:
@@ -123,11 +122,12 @@ Start it:
 
 ```sh
 cp .env.example .env
-docker compose --env-file .env -f deployments/compose/docker-compose.yml up -d
+docker compose --env-file .env -f deployments/compose/docker-compose.yml up -d --build --wait
 ```
 
 Useful local consoles:
 
+- Product UI: `http://localhost:8090`
 - Grafana: `http://localhost:3000`
 - Prometheus: `http://localhost:9090`
 - Temporal UI: `http://localhost:8233`
@@ -176,17 +176,19 @@ See [durable workflow design](docs/durable-workflows.md) for lifecycle and failu
 
 When `S3_BUCKET` is set for both processes, uploaded videos and generated evidence are durable in S3/MinIO. Workers materialize cold VODs locally for ffmpeg, publish every referenced frame/clip/report before completion, and the authenticated artifact gateway handles cold reads. See [object storage design](docs/object-storage.md).
 
-## Current Analysis Model
+## Analysis and Coaching Model
 
-The local analysis is a deterministic gameplay-review pipeline:
+The default product is a self-hosted, zero-inference-cost guided coach:
 
-- sample frames from the selected VOD with ffmpeg;
-- extract visual signals from frames, including motion, brightness, sharpness, HUD-like regions, and frame quality;
-- group timestamps into review windows that are likely to contain useful gameplay decisions;
-- create timeline events, round estimates, coach findings, and report artifacts;
-- optionally send selected windows to the Python `vision-service` contract for model-backed review prompts and responses.
+- ffmpeg samples the full match at the versioned CPU analyzer rate;
+- VALORANT-specific CV validates the HUD layout and extracts motion, minimap, quality, and overlay signals;
+- staged Tesseract OCR confirms semantic screens such as buy phase, scoreboard, combat report, and round end;
+- temporal rules build round segments and select death, fight, rotation, and tempo review moments;
+- every moment includes a short clip and chronological evidence frames;
+- the player confirms tactical context that video heuristics cannot prove, such as tradeability, utility intent, crosshair readiness, rotation trigger, and team timing;
+- versioned coaching rules convert only those confirmed facts into a finding, better action, drill, and checkpoint.
 
-This means the current review is useful for building the product loop, report format, evidence browser, manual corrections, and benchmarks. It is not yet a production-grade Valorant coach. The next quality step is to benchmark the generated findings against manually labeled VOD windows and then replace weaker heuristics with OCR/CV/VLM tasks.
+Automatic candidates are never presented as mistakes. The default flow needs no paid API, billing account, local model, GPU, or custom training. The optional Python model-review boundary remains available for a future evaluated VLM implementation, but its deterministic contract double is disabled in product runs.
 
 Structured logs and traces:
 
@@ -268,7 +270,7 @@ go run ./cmd/vodctl eval run \
   --force
 ```
 
-The web UI also lists matching fixtures from `ml/evals` and can run the same evaluation through `POST /api/evaluation-runs`.
+Administrators can run the same evaluation through `POST /api/evaluation-runs`; the player UI intentionally keeps benchmark controls out of coaching reports.
 
 ## Go CLI
 
@@ -308,7 +310,7 @@ Extract a short frame sample:
 go run ./cmd/vodctl video sample --vod diamond_crazies_01 --duration 30s --fps 1
 ```
 
-Run the local MVP analysis pipeline:
+Run a quick analysis:
 
 ```sh
 go run ./cmd/vodctl analyze run --vod diamond_crazies_01
@@ -317,7 +319,7 @@ go run ./cmd/vodctl analyze run --vod diamond_crazies_01
 Fast smoke run:
 
 ```sh
-go run ./cmd/vodctl analyze run --vod diamond_crazies_01 --run-id smoke_mvp --duration 10s --fps 1 --force
+go run ./cmd/vodctl analyze run --vod diamond_crazies_01 --run-id smoke_quick --duration 10s --fps 1 --force
 ```
 
 The command writes:
@@ -331,13 +333,11 @@ The command writes:
 - `data/processed/<vod_label>/reports/<run_id>/report.json`
 - `data/processed/<vod_label>/reports/<run_id>/report.md`
 
-The current analyzer is a local visual heuristic gameplay reviewer. It validates ingestion, media quality, and sample coverage, decodes sampled JPG frames, estimates motion/HUD/minimap/center-screen signals, builds estimated round segments for navigation, emits typed gameplay events, selects gameplay review windows, extracts short mp4 review clips for those windows, builds Qwen/VLM-ready model review tasks, can call the Python vision-service for model review, builds a coach summary with focus areas and a practice plan, generates evidence links, and writes reproducible reports with recommendations, confidence, timeline events, and review-window metadata.
-
-This is already useful for local VOD review and benchmarking, but it is not the final Qwen/VLM coach. The current Python vision-service is a deterministic contract stub; the next ML stage is replacing its reviewer implementation with OCR, round detection, kill/death windows, and real Qwen/VLM reasoning over selected clips.
+Use `--duration 0` for a full match. The analyzer validates ingestion and capture compatibility, performs staged CV/OCR, creates auditable navigation candidates, extracts clips and evidence, and writes reproducible JSON/Markdown reports. Tactical recommendations are created later by guided assessments in the web UI and persisted per user/report.
 
 After building, the same commands can be run through `bin/vodctl`.
 
-## Vision Service
+## Experimental Vision Service
 
 Run the dependency-free Python stub service:
 
@@ -345,7 +345,7 @@ Run the dependency-free Python stub service:
 ./scripts/run_vision_service.sh
 ```
 
-The stub exposes `/health` and `/v1/model-review`, returns deterministic structured review results, and lets the Go API/UI exercise the full model-review contract before Qwen/VLM inference is added.
+The contract double exposes `/health` and `/v1/model-review` for adapter tests. Its placeholder results are not coaching output and the service is not part of the default Compose runtime.
 
 Optional FastAPI entrypoint:
 
@@ -371,12 +371,12 @@ VISION_SERVICE_URL=http://127.0.0.1:8091 go run ./cmd/vod-web
 
 ## Web UI
 
-The local MVP UI is a React/TypeScript/Vite app backed by a Go API server.
+The React 19/TypeScript/Vite client provides routed player and administrator workflows backed by the Go API.
 
-Start the Go API:
+Start the Go API for frontend development:
 
 ```sh
-VISION_SERVICE_URL=http://127.0.0.1:8091 go run ./cmd/vod-web
+VODCOACH_BOOTSTRAP_TOKEN=replace-me go run ./cmd/vod-web
 ```
 
 Start the React dev server in another terminal:
@@ -395,20 +395,7 @@ http://127.0.0.1:5173
 
 If `5173` is occupied, Vite will print the fallback port, for example `http://127.0.0.1:5174`.
 
-The UI can:
-
-- browse the curated VOD library;
-- filter by rank and search text;
-- show downloaded/report-ready status;
-- play downloaded local VOD files through the Go API;
-- run the local heuristic analysis pipeline against a sample window or the full VOD through async analysis jobs;
-- optionally run model review when `vod-web` has a configured and healthy `VISION_SERVICE_URL`;
-- switch between generated report runs for a selected VOD;
-- render gameplay review windows, typed gameplay events, coach priorities, practice plan, phase profile, visual signal metrics, findings, recommendations, timeline events, media stats, contact sheets, and sampled frame evidence;
-- render estimated round segments and attach review windows to those segments;
-- render Qwen/VLM-ready model review tasks and copy their prompts;
-- jump from a selected review window to the matching VOD timestamp in the local video player;
-- open generated review clips for selected gameplay windows.
+The product routes cover registration/login, tenant VOD upload and library management, quick or full-match durable analysis, synchronized video/evidence review, guided tactical assessment, validated findings, practice drills, report export, corrections, workflow cancellation, and report history. The role-protected Operations page adds readiness, live Prometheus charts, centralized Loki logs, accounts, service links, and trace identifiers.
 
 Production-style local serving:
 

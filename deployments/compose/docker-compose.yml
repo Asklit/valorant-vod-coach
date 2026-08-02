@@ -1,6 +1,132 @@
 name: valorant-vod-coach
 
+x-vodcoach-image: &vodcoach-image
+  image: valorant-vod-coach:${APP_VERSION:-local}
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+
+x-vodcoach-environment: &vodcoach-environment
+  APP_ENV: compose
+  SERVICE_VERSION: ${APP_VERSION:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: json
+  DATABASE_URL: postgres://${POSTGRES_USER:-vodcoach}:${POSTGRES_PASSWORD:-vodcoach}@postgres:5432/${POSTGRES_DB:-vodcoach}?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+  TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-valorant-vod-analysis}
+  KAFKA_BROKERS: kafka:29092
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_DB: ${CLICKHOUSE_DB:-vodcoach}
+  CLICKHOUSE_USER: ${CLICKHOUSE_USER:-vodcoach}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-vodcoach}
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-vodcoach-artifacts}
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-vodcoach}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-vodcoach-local-password}
+  S3_PREFIX: ${S3_PREFIX:-}
+  S3_USE_PATH_STYLE: "true"
+  AWS_EC2_METADATA_DISABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+
 services:
+  vod-web:
+    <<: *vodcoach-image
+    command: ["/app/bin/vod-web", "--addr=:8090", "--static-dir=/app/web/app/dist"]
+    restart: unless-stopped
+    environment:
+      <<: *vodcoach-environment
+      VODCOACH_BOOTSTRAP_TOKEN: ${VODCOACH_BOOTSTRAP_TOKEN:-replace-with-a-random-bootstrap-token}
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-http://localhost:3000}
+      PROMETHEUS_PUBLIC_URL: ${PROMETHEUS_PUBLIC_URL:-http://localhost:9090}
+      TEMPORAL_UI_PUBLIC_URL: ${TEMPORAL_UI_PUBLIC_URL:-http://localhost:8233}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9001}
+      CLICKHOUSE_PUBLIC_URL: ${CLICKHOUSE_PUBLIC_URL:-http://localhost:8123}
+      ALLOY_PUBLIC_URL: ${ALLOY_PUBLIC_URL:-http://localhost:12345}
+    ports:
+      - "8090:8090"
+    labels:
+      vodcoach.logs: enabled
+    volumes:
+      - app-raw:/app/data/raw
+      - app-processed:/app/data/processed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  vod-worker:
+    <<: *vodcoach-image
+    command: ["/app/bin/vod-worker"]
+    restart: unless-stopped
+    environment:
+      <<: *vodcoach-environment
+    labels:
+      vodcoach.logs: enabled
+    volumes:
+      - app-raw:/app/data/raw
+      - app-processed:/app/data/processed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  vod-outbox-relay:
+    <<: *vodcoach-image
+    command: ["/app/bin/vod-outbox-relay"]
+    restart: unless-stopped
+    environment:
+      <<: *vodcoach-environment
+    labels:
+      vodcoach.logs: enabled
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
+  vod-clickhouse-sink:
+    <<: *vodcoach-image
+    command: ["/app/bin/vod-clickhouse-sink"]
+    restart: unless-stopped
+    environment:
+      <<: *vodcoach-environment
+    labels:
+      vodcoach.logs: enabled
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -116,11 +242,17 @@ services:
       vodcoach.logs: enabled
     volumes:
       - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   minio-init:
     image: quay.io/minio/mc:latest
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     entrypoint: ["/bin/sh", "-ec"]
     command: |
       until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER:-vodcoach}" "$${MINIO_ROOT_PASSWORD:-vodcoach-local-password}"; do
@@ -237,6 +369,8 @@ services:
       - clickhouse
 
 volumes:
+  app-raw:
+  app-processed:
   postgres-data:
   redis-data:
   clickhouse-data:

@@ -2,11 +2,25 @@
 set -euo pipefail
 
 max_bytes="${MAX_GIT_FILE_BYTES:-52428800}"
+mode="${1:---staged}"
+
+if [[ "$mode" != "--staged" && "$mode" != "--tracked" ]]; then
+  echo "usage: $0 [--staged|--tracked]" >&2
+  exit 2
+fi
 
 blocked_path_re='(^data/raw/|^data/processed/|^data/cache/|^bin/|^\.cache/)'
 blocked_ext_re='\.(mp4|mkv|webm|mov|avi|flv|part|ytdl|tmp)$'
 
 fail=0
+
+list_paths() {
+  if [[ "$mode" == "--tracked" ]]; then
+    git ls-files
+  else
+    git diff --cached --name-only --diff-filter=ACMR
+  fi
+}
 
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
@@ -36,13 +50,15 @@ while IFS= read -r path; do
       fail=1
     fi
   fi
-done < <(git diff --cached --name-only --diff-filter=ACMR)
+done < <(list_paths)
 
 if [[ "$fail" -ne 0 ]]; then
   cat >&2 <<'MSG'
 
-Refusing to proceed because the git index contains local data, generated artifacts,
+Refusing to proceed because git contains local data, generated artifacts,
 media files, or unusually large files. Remove them from the index before commit:
+
+For staged changes, remove the path from the index with:
 
   git restore --staged <path>
 
@@ -50,4 +66,4 @@ MSG
   exit 1
 fi
 
-echo "git index ok"
+echo "git ${mode#--} paths ok"
