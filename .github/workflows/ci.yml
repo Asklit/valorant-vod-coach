@@ -30,7 +30,7 @@ jobs:
       - name: Race test shared runtimes
         run: go test -race ./internal/app/... ./internal/adapters/webapi/... ./internal/adapters/temporalworkflow/... ./internal/platform/...
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
