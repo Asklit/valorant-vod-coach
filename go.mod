@@ -1,12 +1,12 @@
 module github.com/asklit/valorant-vod-coach
 
-go 1.25.0
+go 1.25.4
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.34
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.33
-	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.3.5
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.3.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.106.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/redis/go-redis/v9 v9.21.0
@@ -18,9 +18,9 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	go.temporal.io/api v1.62.12
-	go.temporal.io/sdk v1.44.1
-	golang.org/x/sync v0.20.0
+	go.temporal.io/api v1.63.4
+	go.temporal.io/sdk v1.47.0
+	golang.org/x/sync v0.22.0
 )
 
 require (
@@ -53,6 +53,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 	github.com/nexus-rpc/sdk-go v0.6.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -69,7 +70,7 @@ require (
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.81.1 // indirect
+	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
