@@ -111,6 +111,7 @@ The downloader is intentionally not run automatically. Review `data/manifests/vo
 - [Product and architecture decisions](docs/product-and-architecture-decisions.md)
 - [Kafka event streaming](docs/kafka-event-streaming.md)
 - [Observability](docs/observability.md)
+- [Web product architecture](docs/web-product.md)
 - [Git workflow](docs/git-workflow.md)
 - [Benchmarks](docs/benchmarks.md)
 
@@ -148,7 +149,7 @@ The local web UI includes:
 
 - Dashboard, Library, Review, Reports, and Admin pages;
 - local registration/login through `POST /api/auth/register` and `POST /api/auth/login`;
-- Admin page backed by `GET /api/admin/overview`, `GET /api/admin/metrics`, `GET /api/admin/logs`, and `GET /api/admin/users`, including readiness checks, request metrics, logs, users, and service links.
+- Admin page backed by overview, metrics, logs, users, and bounded `GET /api/admin/telemetry` endpoints, including readiness checks, Prometheus charts, centralized Loki logs, users, and service links.
 - secure cookie sessions, CSRF protection for commands, tenant-scoped VOD/report/artifact access, and explicit bootstrap-token creation of the first administrator;
 - live workflow stage/progress, retry attempts, recent run history, and Temporal cancellation on the Review page.
 

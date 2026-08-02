@@ -24,6 +24,7 @@ import (
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/localanalysis"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/operations"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/temporalworkflow"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
@@ -67,25 +68,28 @@ type Config struct {
 	Objects                   app.BlobStore
 	AnalysisExecutor          app.AnalysisExecutor
 	WorkflowLauncher          app.AnalysisWorkflowLauncher
+	Operations                *operations.Client
+	ServiceLinks              map[string]string
 	Logger                    *slog.Logger
 	Tracer                    trace.Tracer
 }
 
 type Server struct {
-	config   Config
-	mux      *http.ServeMux
-	jobs     app.AnalysisJobStore
-	metrics  *serverMetrics
-	auth     app.AuthSessionStore
-	authRate app.RateLimiter
-	users    app.Authenticator
-	logs     *requestLogStore
-	logger   *slog.Logger
-	tracer   trace.Tracer
-	executor app.AnalysisExecutor
-	workflow app.AnalysisWorkflowLauncher
-	guidedMu sync.Mutex
-	uploadMu sync.Mutex
+	config     Config
+	mux        *http.ServeMux
+	jobs       app.AnalysisJobStore
+	metrics    *serverMetrics
+	auth       app.AuthSessionStore
+	authRate   app.RateLimiter
+	users      app.Authenticator
+	logs       *requestLogStore
+	logger     *slog.Logger
+	tracer     trace.Tracer
+	executor   app.AnalysisExecutor
+	workflow   app.AnalysisWorkflowLauncher
+	operations *operations.Client
+	guidedMu   sync.Mutex
+	uploadMu   sync.Mutex
 }
 
 type VODItem struct {
@@ -265,6 +269,7 @@ type AdminOverviewResponse struct {
 	Dataset     Counts                    `json:"dataset"`
 	Jobs        map[string]int            `json:"jobs"`
 	Auth        AdminAuthStatus           `json:"auth"`
+	Links       map[string]string         `json:"links,omitempty"`
 }
 
 type AdminSystemStatus struct {
@@ -439,18 +444,19 @@ func NewServer(config Config) *Server {
 	}
 
 	server := &Server{
-		config:   config,
-		mux:      http.NewServeMux(),
-		jobs:     config.JobStore,
-		metrics:  newServerMetrics(time.Now().UTC()),
-		auth:     config.SessionStore,
-		authRate: config.AuthRateLimiter,
-		users:    config.Authenticator,
-		logs:     newRequestLogStore(200),
-		logger:   config.Logger,
-		tracer:   config.Tracer,
-		executor: config.AnalysisExecutor,
-		workflow: config.WorkflowLauncher,
+		config:     config,
+		mux:        http.NewServeMux(),
+		jobs:       config.JobStore,
+		metrics:    newServerMetrics(time.Now().UTC()),
+		auth:       config.SessionStore,
+		authRate:   config.AuthRateLimiter,
+		users:      config.Authenticator,
+		logs:       newRequestLogStore(200),
+		logger:     config.Logger,
+		tracer:     config.Tracer,
+		executor:   config.AnalysisExecutor,
+		workflow:   config.WorkflowLauncher,
+		operations: config.Operations,
 	}
 	if server.logger == nil {
 		server.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -603,6 +609,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin/metrics", s.handleAdminMetrics)
 	s.mux.HandleFunc("GET /api/admin/logs", s.handleAdminLogs)
 	s.mux.HandleFunc("GET /api/admin/users", s.handleAdminUsers)
+	s.mux.HandleFunc("GET /api/admin/telemetry", s.handleAdminTelemetry)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/vods", s.handleListVODs)
 	s.mux.HandleFunc("POST /api/vods/upload", s.handleUploadVOD)
@@ -993,7 +1000,26 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		Dataset:   counts,
 		Jobs:      s.analysisJobCounts(r.Context()),
 		Auth:      AdminAuthStatus{UserCount: userCount},
+		Links:     cloneStringMap(s.config.ServiceLinks),
 	})
+}
+
+func (s *Server) handleAdminTelemetry(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	if s.operations == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("operations backends are not configured"))
+		return
+	}
+	window, err := adminTelemetryWindow(r.URL.Query().Get("window"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.operations.Snapshot(ctx, window))
 }
 
 func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
@@ -3261,6 +3287,32 @@ func boolGauge(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func adminTelemetryWindow(raw string) (time.Duration, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "1h":
+		return time.Hour, nil
+	case "6h":
+		return 6 * time.Hour, nil
+	case "24h":
+		return 24 * time.Hour, nil
+	case "7d":
+		return 7 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unsupported telemetry window %q", raw)
+	}
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) error {
