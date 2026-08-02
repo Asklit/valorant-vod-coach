@@ -751,7 +751,7 @@ func printUsage(w io.Writer) {
   vodctl video <command> [options]
 
 Commands:
-  analyze run        Run the local MVP VOD analysis pipeline
+  analyze run        Run the local VOD analysis pipeline
   db migrate         Apply PostgreSQL migrations
   dataset validate   Validate manifest structure and metadata
   dataset list       List VODs from the manifest
@@ -766,7 +766,7 @@ func printAnalyzeUsage(w io.Writer) {
   vodctl analyze run --vod label [--manifest path] [--raw-root path] [--out-root path] [--ffprobe path] [--ffmpeg path] [--run-id id] [--sample-name name] [--fps n] [--start duration] [--duration duration] [--force] [--model-review] [--vision-url url]
 
 Defaults:
-  --duration 180s samples only the beginning of the VOD for fast local MVP iteration.
+  --duration 180s samples only the beginning of the VOD for fast local iteration.
   Use --duration 0 for full-input frame extraction.
   --model-review sends generated model_review_tasks to a vision-service compatible endpoint.`)
 }

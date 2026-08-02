@@ -89,5 +89,5 @@ func printDBUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   vodctl db migrate [--database-url url] [--migrations-dir dir] [--timeout duration]
 
-The db command applies PostgreSQL migrations used by the local MVP metadata store and outbox.`)
+The db command applies PostgreSQL migrations used by the product metadata store and outbox.`)
 }

@@ -1,12 +1,12 @@
-# Vision Service
+# Experimental Vision Service
 
-Python boundary for OCR/CV/VLM work.
+Optional Python boundary for evaluated model-review experiments. The default product performs CPU CV/OCR through Go adapters and does not invoke this service.
 
-Current mode is a deterministic stub. It validates the `model_review_tasks` contract and returns structured placeholder findings. Replace `app/reviewer.py` with Qwen/VLM inference while keeping the HTTP contract stable.
+Current mode is a deterministic contract double. It validates `model_review_tasks` and returns synthetic responses for adapter tests; those responses are not product coaching findings. Add a real implementation only after it passes reviewed fixtures and an inference budget is explicitly approved.
 
 ## Run
 
-Dependency-free local MVP server:
+Dependency-free contract server:
 
 ```sh
 cd ../..
@@ -19,7 +19,7 @@ Or run the module directly:
 PYTHONPATH=ml/vision-service python3 -m app.server --host 127.0.0.1 --port 8091
 ```
 
-FastAPI entrypoint for the future production-style service:
+Optional FastAPI entrypoint for contract development:
 
 ```sh
 cd ml/vision-service
@@ -35,7 +35,7 @@ Then run the Go API with:
 VISION_SERVICE_URL=http://127.0.0.1:8091 go run ./cmd/vod-web
 ```
 
-Or run the CLI directly:
+Or explicitly test the model-review adapter through the CLI:
 
 ```sh
 go run ./cmd/vodctl analyze run --vod iron_spudbud_01 --model-review --vision-url http://127.0.0.1:8091 --force
