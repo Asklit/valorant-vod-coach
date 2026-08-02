@@ -51,7 +51,7 @@ Rules:
 ```text
 cmd/
   vodctl/                         # CLI entrypoint for local operations
-  vod-web/                        # local Go HTTP API and optional static UI server
+  vod-web/                        # authenticated Go HTTP API and static React SPA server
   vod-worker/                     # Temporal worker for durable full-VOD analysis
   vod-outbox-relay/               # PostgreSQL outbox to Kafka relay
   vod-clickhouse-sink/            # Kafka event sink into ClickHouse
@@ -66,6 +66,8 @@ internal/
     redislock/                    # Redis-backed analysis locks
     redissession/                 # Redis-backed secure browser sessions
     redisrate/                    # atomic Redis authentication rate limiter
+    vodstore/                     # tenant-aware curated/uploaded VOD resolution
+    s3store/                      # S3/MinIO object storage and artifact transfers
     kafka/                        # Kafka outbox event producer
     clickhouse/                   # ClickHouse HTTP migrations and event inserts
     report/                       # local JSON/Markdown report persistence
@@ -73,6 +75,7 @@ internal/
     visionservice/                # HTTP client for Python model-review service
     localanalysis/                # owner-scoped local pipeline dependency composition
     temporalworkflow/             # Temporal workflow, activities, launcher, dispatcher
+    operations/                   # bounded Prometheus/Loki admin aggregator
     webapi/                       # local HTTP API for React UI, auth sessions, and admin diagnostics
   platform/                       # config/logging/observability/runtime helpers
 
@@ -102,63 +105,9 @@ ml/
   evals/                          # manual quality-evaluation label fixtures
 ```
 
-## Target Layout
+## Evolution Policy
 
-The project should grow into this shape:
-
-```text
-cmd/
-  vodctl/                         # local CLI
-  vod-api/                        # HTTP API
-  vod-worker/                     # Temporal worker
-  vod-outbox-relay/               # PostgreSQL outbox to Kafka relay
-  vod-clickhouse-sink/            # Kafka consumer for ClickHouse projections
-
-internal/
-  domain/
-    vod/                          # VOD identity, source metadata, ownership rules
-    timeline/                     # rounds, events, candidate windows
-    report/                       # findings, recommendations, report schema
-    evaluation/                   # golden labels, scoring concepts
-
-  app/
-    dataset/                      # validate/import dataset use cases
-    processing/                   # process VOD use cases
-    reporting/                    # build report use cases
-    corrections/                  # manual correction use cases
-
-  adapters/
-    dataset/                      # TSV/YouTube manifest adapter
-    media/                        # ffprobe/ffmpeg adapter
-    postgres/                     # transactional persistence
-    clickhouse/                   # analytical persistence
-    kafka/                        # producers, consumers, event envelopes
-    temporal/                     # workflows and activities
-    s3store/                      # S3/MinIO durable object adapter and transfer manager
-    report/                       # local reports plus concurrent object publication
-    vision/                       # local visual analyzer and future Python vision-service client
-    http/                         # HTTP handlers once vod-api exists
-
-  platform/
-    config/
-    logging/
-    observability/
-    health/
-
-ml/
-  vision-service/                 # Python OCR/CV/VLM service boundary
-  prompts/
-  evals/
-
-web/
-  app/                            # React UI
-
-deployments/
-  compose/                        # local infrastructure
-  migrations/
-    postgres/
-    clickhouse/
-```
+The flat `internal/domain` and `internal/app` packages are intentional. Split them into domain-specific packages only when ownership, dependency cycles, or review cost demonstrate a real boundary. Do not duplicate `vod-web` with a second API binary until the API and SPA need independent scaling or release lifecycles. Keep optional model code behind `visionservice`; default media, CV, and OCR orchestration stays in Go adapters.
 
 ## When To Add A Layer
 
@@ -169,7 +118,7 @@ Add `internal/app` use cases when one operation coordinates multiple adapters. E
 - register VOD in PostgreSQL and write an outbox event;
 - probe video, write asset metadata, and publish lifecycle event;
 - sample frames, persist artifact records, and emit processing telemetry.
-- run the local MVP analysis pipeline across dataset, media, analyzer, and report adapters.
+- run the local analysis pipeline across dataset, media, analyzer, and report adapters.
 
 Add a domain package when behavior or invariants appear. Examples:
 

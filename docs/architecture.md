@@ -10,109 +10,92 @@ React/TypeScript web app
       -> PostgreSQL
       -> MinIO/S3
       -> Temporal
-      -> Kafka
       -> Redis
-      -> ClickHouse
-      -> Python vision-service
+      -> Python vision-service (optional extension)
 
-Go API / Go workers / Python vision-service
-  -> OpenTelemetry Collector
-      -> Prometheus
-      -> Loki
-      -> Tempo
-      -> Grafana
+PostgreSQL outbox -> Go relay -> Kafka -> Go sink -> ClickHouse
+
+Go API / Go background processes
+  -> OpenTelemetry Collector -> Prometheus / Tempo -> Grafana
+  -> structured container stdout -> Alloy -> Loki -> Grafana
 ```
 
 Detailed Mermaid diagrams are available in [system-diagrams.md](system-diagrams.md). The repository layout and testing policy are documented in [project-structure.md](project-structure.md) and [testing-strategy.md](testing-strategy.md).
 
-The current `vod-web` process exposes a dependency-free Prometheus text endpoint at `/metrics`. The local compose Prometheus config scrapes it through `host.docker.internal:8090`.
+The `vod-web` process exposes Prometheus text metrics at `/metrics`. Compose Prometheus scrapes it through service DNS at `vod-web:8090`; all Go processes also export OTLP metrics and traces through the Collector.
 
-## Current Local MVP Slice
+## Delivered Product Path
 
-The first implemented vertical slice is `vodctl analyze run`.
-
-```text
-vodctl analyze run
-  -> app.AnalysisRunner
-      -> dataset.LocalVODResolver
-      -> media.LocalProcessor
-          -> ffprobe
-          -> ffmpeg frame sampling
-          -> ffmpeg contact sheet generation
-      -> vision.LocalGameplayAnalyzer
-          -> visual frame signal extraction
-          -> estimated round segment generation
-          -> typed gameplay event generation
-          -> gameplay review window selection
-          -> coach summary, focus areas, phase profile, practice plan
-          -> gameplay_review.json
-      -> media.LocalProcessor
-          -> ffmpeg review clip extraction
-          -> review_clips.json
-      -> app.BuildModelReviewTasks
-          -> Qwen/VLM-ready task and prompt payloads
-      -> visionservice.Client (optional)
-          -> Python vision-service /v1/model-review
-          -> model review results and findings
-      -> report.LocalStore
-          -> report.json
-          -> report.md
-```
-
-This local command intentionally uses the same boundaries as the future service version:
-
-- dataset lookup is an adapter;
-- media probing and sampling are adapters;
-- contact sheet generation and review clip extraction are part of the media adapter and become UI evidence artifacts;
-- report schema lives in `internal/domain`;
-- orchestration lives in `internal/app`;
-- the current analyzer is a deterministic visual heuristic gameplay reviewer that decodes sampled frames, computes motion/HUD/minimap/center-screen signals, builds estimated round segments, emits typed gameplay events, selects review windows, and emits coach priorities, practice tasks, phase profile, recommendations, confidence, timeline events, and evidence references;
-- round segments use `detection_method=estimated_from_visual_timeline`; they are useful for navigation and grouping, but OCR-confirmed timer/score boundaries remain the next detection stage;
-- selected review windows are enriched with `clip_path` and `clip_duration_seconds` after the analyzer runs, so the UI can open exact mp4 clips without coupling the analyzer to ffmpeg;
-- model review tasks are generated after clips exist and include prompt version, model hint, clip path, evidence, context, questions, and expected JSON output shape;
-- model review execution is behind the `ModelReviewer` port; the current Python service is a dependency-free deterministic HTTP contract stub, and Qwen/VLM inference can replace its internals without changing the Go API/UI report contract.
-- coarse visual analysis is still behind `ObservationAnalyzer`, so OCR/timeline detection can enrich or replace the local heuristic analyzer later.
-
-The first UI slice is `web/app` plus `cmd/vod-web`.
+The browser path uses durable state and workflows:
 
 ```text
-React/Vite UI
-  -> Go vod-web API
-      -> in-memory async analysis jobs
-      -> dataset manifest and local video inventory
-      -> local video streaming by VOD label
-      -> app.AnalysisRunner
-      -> data/processed reports and frame artifacts
+React route -> vod-web
+  -> secure cookie session + CSRF + tenant authorization
+  -> PostgreSQL job intent + outbox event
+  -> Temporal workflow
+      -> vod-worker activities
+          -> S3/local source materialization
+          -> ffprobe media metadata
+          -> ffmpeg full-match sampling
+          -> VALORANT HUD compatibility CV
+          -> staged Tesseract overlay OCR
+          -> round/event timeline
+          -> evidence-window selection and deduplication
+          -> ffmpeg review clips
+          -> evidence-first coach candidates
+          -> JSON/Markdown reports
+          -> concurrent S3 artifact publication
+      -> PostgreSQL terminal state + outbox event
+  -> guided visible-context assessment
+  -> versioned coaching rule
+  -> validated recommendation and practice drill
+
+PostgreSQL outbox
+  -> vod-outbox-relay
+  -> Kafka domain streams
+  -> vod-clickhouse-sink
+  -> deduplicated ClickHouse projections
 ```
 
-In development, Vite runs on `127.0.0.1:5173` and calls `vod-web` on `127.0.0.1:8080` with local CORS enabled. For a production-style local run, `vod-web` can serve the built `web/app/dist` directory directly.
+The CLI `vodctl analyze run` reuses `app.AnalysisRunner` and the same media, analyzer, report, persistence, lock, and object-storage ports without Temporal. It is the fast debugging and benchmark surface, not a separate implementation.
+
+Important dependency boundaries:
+
+- report, event, coaching, correction, and evaluation schemas live in `internal/domain`;
+- use-case orchestration and consumed ports live in `internal/app`;
+- ffmpeg, Tesseract, PostgreSQL, Redis, S3, Kafka, ClickHouse, Temporal, HTTP, and optional model clients stay in adapters;
+- review clips and evidence are artifact references, so the coaching engine does not depend on ffmpeg or storage;
+- temporal candidates are not tactical mistakes; `EvidenceCoachEngine` emits advice only from context confirmed in a guided assessment;
+- model review remains behind `ModelReviewer`, but the deterministic Python contract double is excluded from product runs and Compose.
+
+The React client has stable Dashboard, Library, Review, Reports, and Operations routes. In development Vite proxies to `vod-web`; the released non-root image serves the built SPA and Go API from one origin.
 
 ## Language Boundaries
 
 - Go owns product logic, API, CLI, workers, media orchestration, database access, and report assembly.
-- Python owns OCR, computer vision, model experiments, and Qwen/VLM inference.
+- Python owns optional model experiments behind the `vision-service` contract. The default OCR/CV path is implemented in Go and invokes local Tesseract/ffmpeg tools.
 - TypeScript/React owns the browser UI.
 - SQL owns durable schemas and analytical queries.
 
 ## Storage Roles
 
 - PostgreSQL is the source of truth for VODs, assets, reports, findings, users, manual corrections, and workflow references.
-- ClickHouse stores high-volume immutable analytics: frame detections, OCR observations, model-call telemetry, pipeline timings, and UI events.
+- ClickHouse stores immutable lifecycle/processing events and derived analysis-run and frame-extraction projections. Reserved event contracts can later add observation or model telemetry without changing the transactional store.
 - MinIO locally and S3-compatible storage in hosted environments store videos, frames, clips, contact sheets, and report artifacts.
 - Redis stores cache, rate limits, short-lived locks, and temporary processing state.
 
 ## Async Processing
 
 - Temporal runs durable VOD processing workflows.
-- Kafka stores durable domain and pipeline events such as `vod.registered`, `vod.probed`, `frames.extracted`, `timeline.ready`, `report.ready`, and `processing.failed`.
+- Kafka stores the currently emitted `VodProbed`, `FramesExtracted`, and `ReportReady` domain events with versioned envelopes.
 - A Go outbox relay publishes PostgreSQL outbox rows into Kafka so database writes and event publication stay reliable.
 - Kafka consumers project event data into ClickHouse and later support status projections, notifications, billing, and evaluation datasets.
 - Go workers execute deterministic activities: ffprobe, ffmpeg, artifact registration, timeline/report assembly.
-- Python service executes OCR/CV/VLM activities through a stable HTTP boundary.
+- The optional Python service is a stable boundary for explicitly enabled, evaluated model experiments; it is not used by the default workflow.
 
 ## Agreed Deployment Direction
 
-Start local-first with Docker Compose. The default local stack runs PostgreSQL, ClickHouse, Redis, Kafka in KRaft mode, Temporal, MinIO, and the observability stack locally.
+Run the complete local-first product with Docker Compose. The default stack includes PostgreSQL, ClickHouse, Redis, Kafka in KRaft mode, Temporal, MinIO, and the observability stack.
 
 For a hosted prototype, keep the same service boundaries:
 
@@ -120,21 +103,20 @@ For a hosted prototype, keep the same service boundaries:
 - keep PostgreSQL as the transactional source of truth;
 - keep ClickHouse for append-only processing analytics;
 - move artifacts to S3-compatible storage when local MinIO is no longer enough;
-- run Qwen/VLM either inside the Python `vision-service` on a local GPU host or through an external GPU provider behind the same `vision-service` API;
+- keep any future evaluated VLM implementation behind the Python `vision-service`; it is not required by the zero-cost product path;
 - keep Temporal self-hosted at first unless managed Temporal cost becomes justified.
-- keep Kafka self-hosted for the MVP; move to managed Kafka only if hosted traffic and operational needs justify it.
+- keep Kafka self-hosted initially; move to managed Kafka only if hosted traffic and operational needs justify it.
 
-The important rule is that external GPU providers must remain implementation details of `vision-service`. The rest of the product should not care whether Qwen runs locally, on RunPod, Modal, or another provider.
+Any future inference runtime remains an implementation detail of `vision-service`. The rest of the product does not depend on a model vendor or execution provider.
 
-## Proposed Layout
+## Repository Layout
 
 The Go code follows a modular monolith with ports/adapters boundaries. See [project-structure.md](project-structure.md) for the full rationale.
 
 ```text
 cmd/
   vodctl/               # Go CLI
-  vod-web/              # local Go HTTP API and optional static UI server
-  vod-api/              # Go HTTP API
+  vod-web/              # authenticated Go HTTP API and static SPA server
   vod-worker/           # Go Temporal worker
   vod-outbox-relay/     # Go PostgreSQL outbox to Kafka relay
   vod-clickhouse-sink/  # Go Kafka consumer for ClickHouse projections
@@ -149,14 +131,19 @@ internal/
     postgres/           # Postgres repositories
     clickhouse/         # ClickHouse writers and analytical queries
     kafka/              # event publishing, consuming, outbox relay support
-    temporal/           # Temporal workflow definitions and activities
-    storage/            # local FS and S3-compatible object storage
+    temporalworkflow/   # Temporal workflow definitions and activities
+    vodstore/           # local curated/uploaded VOD resolution
+    s3store/            # S3-compatible object storage
+    redissession/       # server-side web sessions
+    redislock/          # distributed analysis locks
+    redisrate/          # atomic authentication rate limits
+    localanalysis/      # worker/CLI analysis execution service
     vision/             # local visual heuristic analyzer
     visionservice/      # Python vision-service HTTP client
   platform/             # config, logging, metrics, tracing, health checks
 ml/
   vision-service/       # Python OCR and VLM service boundary
-  prompts/              # prompt/eval fixtures
+  evals/                # reviewed quality fixtures
 web/
   app/                  # React/TypeScript UI
 deployments/
@@ -175,6 +162,6 @@ scripts/
 
 - Keep source videos in a manifest, not hardcoded in application code.
 - Use only full game VODs for baseline analysis.
-- Avoid livestream archives during early MVP because they add menus, pauses, queue time, chat overlays, and inconsistent cuts.
+- Avoid livestream archives in the baseline corpus because they add menus, pauses, queue time, chat overlays, and inconsistent cuts.
 - Keep raw videos immutable; write derived clips/frames to object storage or `data/processed/`.
 - Store rank confidence explicitly. `title` means the rank appears in the video title; `search_metadata` means the rank came from search context and should be checked manually from the HUD.

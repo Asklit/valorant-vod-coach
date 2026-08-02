@@ -1,10 +1,10 @@
 # System Diagrams
 
-Date: 2026-07-21
+Date: 2026-08-02
 
 These diagrams describe the agreed target architecture. They are written in Mermaid so they render directly in GitHub, many IDEs, and documentation tools without requiring an external diagramming service.
 
-Current decision: Kafka is the MVP event streaming layer.
+Current decision: Kafka is the durable event-streaming and analytics fan-out layer; Temporal owns long-running workflow state.
 
 ## Implemented Product Path
 
@@ -76,11 +76,11 @@ flowchart LR
   cli[Go CLI<br/>vodctl]
 
   subgraph go[Go Product Layer]
-    api[Go API vod-api]
+    api[Go API vod-web]
     worker[Go Temporal Worker vod-worker]
     relay[Go Outbox Relay]
     sink[Go Kafka Consumers]
-    domain[Domain Logic<br/>timeline, reports, findings]
+    domain[Domain Logic<br/>timeline, coaching rules, reports]
   end
 
   subgraph workflow[Workflow and Events]
@@ -96,14 +96,15 @@ flowchart LR
     object[(MinIO / S3 artifacts)]
   end
 
-  subgraph ml[ML Boundary]
-    vision[Python FastAPI vision-service]
-    ocr[OCR / CV]
-    vlm[Qwen / VLM Runtime]
+  subgraph analysis[Analysis]
+    local[Go CPU HUD / temporal CV]
+    tools[ffmpeg / ffprobe / Tesseract]
+    vision[Optional Python model contract]
   end
 
   subgraph obs[Observability]
     otel[OpenTelemetry Collector]
+    alloy[Grafana Alloy log collector]
     prom[(Prometheus)]
     loki[(Loki)]
     tempo[(Tempo)]
@@ -114,8 +115,7 @@ flowchart LR
   user --> cli
 
   web --> api
-  cli --> api
-  cli --> worker
+  cli --> local
 
   api --> pg
   api --> redis
@@ -124,27 +124,28 @@ flowchart LR
   api --> outbox
 
   temporal --> worker
-  worker --> domain
+  worker --> local
+  local --> tools
+  local --> domain
   worker --> pg
   worker --> outbox
   worker --> redis
   worker --> object
-  worker --> vision
+  worker -. explicitly enabled experiment .-> vision
   outbox --> relay
   relay --> kafka
   kafka --> sink
   sink --> ch
-  sink --> pg
-
-  vision --> ocr
-  vision --> vlm
 
   api --> otel
   worker --> otel
   vision --> otel
   otel --> prom
-  otel --> loki
   otel --> tempo
+  api -. container stdout .-> alloy
+  worker -. container stdout .-> alloy
+  vision -. container stdout .-> alloy
+  alloy --> loki
   prom --> grafana
   loki --> grafana
   tempo --> grafana
@@ -152,7 +153,7 @@ flowchart LR
 
 ## Standard Processing Flow
 
-This is the default product path. It processes the full match for structure and context, then spends model budget only on selected review windows.
+This is the default zero-cost product path. It processes the full match for navigation evidence, then spends player attention only on selected review windows.
 
 ```mermaid
 sequenceDiagram
@@ -166,52 +167,41 @@ sequenceDiagram
   participant Relay as Go Outbox Relay
   participant T as Temporal
   participant W as Go Worker
-  participant VS as Python vision-service
+  participant Tools as ffmpeg / Tesseract
+  participant Rules as EvidenceCoachEngine
   participant CH as ClickHouse
   participant Kafka as Kafka
 
   User->>UI: Upload or register VOD
   UI->>API: POST /vods
   API->>S3: Store raw video
-  API->>PG: Create vod, asset, workflow records
+  API->>PG: Create tenant VOD and queued job intent
   API->>Outbox: Write vod.lifecycle event
   API->>T: Start ProcessVodWorkflow
   Relay->>Outbox: Poll unpublished events
   Relay->>Kafka: Publish vod.lifecycle event
 
-  T->>W: Run probe activity
-  W->>S3: Read raw video
-  W->>PG: Save ffprobe metadata
-  W->>Outbox: Write vod.probed event
-  Relay->>Kafka: Publish vod.probed
-
-  T->>W: Run frame sampling activity
-  W->>S3: Write sampled frames and contact sheets
-  W->>Outbox: Write frames.extracted event
-  Relay->>Kafka: Publish frames.extracted
-  Kafka->>CH: ClickHouse sink stores frame extraction timings
-
-  T->>W: Run detection activity
-  W->>VS: OCR/HUD/minimap requests
-  VS-->>W: Structured observations with confidence
-  W->>Outbox: Write detection observation events
-  Relay->>Kafka: Publish observations
-  Kafka->>CH: ClickHouse sink stores OCR/detection observations
-
-  T->>W: Build timeline and candidate windows
-  W->>PG: Save rounds, events, candidate windows
-
-  T->>W: Run selected VLM reviews
-  W->>S3: Extract short clips
-  W->>VS: Analyze selected windows
-  VS-->>W: Findings and evidence
-
-  T->>W: Assemble report
-  W->>PG: Save report and findings
-  W->>S3: Store report artifacts
+  T->>W: Run retryable analysis activity
+  W->>S3: Materialize private raw video
+  W->>Tools: ffprobe and full-match 1 FPS sampling
+  Tools-->>W: Media metadata and frames
+  W->>Tools: Staged overlay OCR
+  Tools-->>W: Semantic screen confirmations
+  W->>W: HUD CV, rounds, deduplicated review moments
+  W->>Tools: Extract evidence clips and contact sheet
+  W->>S3: Publish frames, clips, and reports
+  W->>PG: Persist report snapshot and terminal job state
   W->>Outbox: Write report.ready event
   Relay->>Kafka: Publish report.ready
-  UI->>API: GET /vods/{id}/report
+  Kafka->>CH: Sink deduplicates lifecycle and processing events
+  UI->>API: GET tenant report and authorized evidence
+  API-->>UI: Timeline, clips, before/event/after frames
+  User->>UI: Confirm visible tactical context
+  UI->>API: POST guided assessment + CSRF
+  API->>Rules: Evaluate confirmed facts
+  Rules-->>API: Finding, better action, drill, checkpoint
+  API->>PG: Save tenant assessment and recommendation
+  API-->>UI: Auditable coaching result
 ```
 
 ## Deployment Profiles
@@ -229,7 +219,7 @@ flowchart TB
     worker[Go Worker]
     relay[Go Outbox Relay]
     consumers[Go Kafka Consumers]
-    vision[Python vision-service]
+    vision[Optional Python model contract]
     pg[(PostgreSQL)]
     ch[(ClickHouse)]
     redis[(Redis)]
@@ -246,7 +236,7 @@ flowchart TB
   worker --> temporal
   worker --> pg
   worker --> minio
-  worker --> vision
+  worker -. experiment .-> vision
   relay --> pg
   relay --> kafka
   kafka --> consumers
@@ -278,9 +268,9 @@ flowchart LR
     otel[OpenTelemetry]
   end
 
-  subgraph external[External Services]
+  subgraph external[External / Optional Services]
     r2[Cloudflare R2 / S3<br/>object storage]
-    gpu[RunPod / Modal / similar<br/>Qwen/VLM GPU runtime]
+    gpu[Future evaluated VLM runtime]
     grafana[Grafana Cloud<br/>optional]
     sentry[Sentry<br/>optional]
   end
@@ -293,7 +283,7 @@ flowchart LR
   temporal --> worker
   worker --> pg
   worker --> r2
-  worker --> gpu
+  worker -. optional experiment .-> gpu
   relay --> pg
   relay --> kafka
   kafka --> consumers
@@ -310,7 +300,7 @@ flowchart LR
 ## Why This Boundary
 
 - Go remains the main product language: API, CLI, workers, workflows, persistence, reports, and business rules.
-- Python is contained behind `vision-service` because OCR/CV/VLM libraries move faster there.
+- Python is contained behind the optional `vision-service` contract. Default HUD CV, temporal analysis, and Tesseract orchestration remain in Go.
 - Temporal handles long-running, retryable VOD processing. Kafka handles durable domain events, replayable event streams, and analytics fan-out.
 - PostgreSQL owns truth. ClickHouse owns large append-only observations. Redis owns short-lived operational state.
-- The Qwen/VLM runtime can move between local GPU, RunPod, Modal, or another GPU provider without changing the Go API, data model, or UI.
+- A future evaluated VLM runtime can move between providers without changing the Go API, data model, or UI.

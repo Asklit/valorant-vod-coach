@@ -1,8 +1,8 @@
 # Kafka Event Streaming
 
-Date: 2026-07-21
+Date: 2026-08-02
 
-Kafka is part of the MVP as the durable event streaming layer. It does not replace Temporal. Temporal owns long-running workflow orchestration; Kafka owns immutable domain and pipeline events.
+Kafka is the durable event-streaming layer. It does not replace Temporal: Temporal owns long-running workflow orchestration, while Kafka owns immutable domain and pipeline events.
 
 ## Responsibilities
 
@@ -34,7 +34,6 @@ flowchart LR
   relay[Go Outbox Relay]
   kafka[(Kafka<br/>KRaft mode)]
   chsink[ClickHouse Sink<br/>Go consumer]
-  status[Status Projector<br/>Go consumer]
   ch[(ClickHouse)]
   pg[(PostgreSQL)]
   ui[React UI]
@@ -47,14 +46,12 @@ flowchart LR
   relay --> kafka
   kafka --> chsink
   chsink --> ch
-  kafka --> status
-  status --> pg
-  ui --> pg
+  ui --> api
 ```
 
 The outbox pattern is important: when API or worker changes product state in PostgreSQL, it writes the corresponding event into an `outbox_events` table in the same transaction. A relay publishes those events to Kafka. This prevents the classic bug where a database write succeeds but event publication fails.
 
-For the first local version, the relay can be a simple Go process. Later it can become a dedicated service or use Debezium.
+The relay is a dedicated Go process. A future deployment may replace its polling implementation with CDC without changing event contracts.
 
 ## Initial Topics
 
@@ -115,7 +112,7 @@ if model-cost aggregation becomes the main access pattern.
 
 ## Serialization
 
-MVP:
+Current contract:
 
 - JSON payloads;
 - explicit `event_type`;
@@ -128,9 +125,9 @@ Later:
 - Schema Registry;
 - compatibility checks in CI.
 
-JSON is acceptable for the MVP because the event model will still change quickly. The important rule is to version events and test consumers.
+JSON remains appropriate while the event model changes quickly. The important rule is to version events and test consumers.
 
-## Implemented MVP Path
+## Implemented Path
 
 The first outbox-to-Kafka path is implemented.
 
@@ -162,9 +159,9 @@ Current event mapping:
 
 | Event type | Topic | Producer |
 | --- | --- | --- |
-| `VodProbed` | `vod.processing.v1` | `vodctl`, `vod-web` |
-| `FramesExtracted` | `vod.processing.v1` | `vodctl`, `vod-web` |
-| `ReportReady` | `vod.lifecycle.v1` | `vodctl`, `vod-web` |
+| `VodProbed` | `vod.processing.v1` | `vodctl`, `vod-worker` |
+| `FramesExtracted` | `vod.processing.v1` | `vodctl`, `vod-worker` |
+| `ReportReady` | `vod.lifecycle.v1` | `vodctl`, `vod-worker` |
 
 `vod-clickhouse-sink` stores these events in `kafka_events` through the ClickHouse HTTP API. Permanent envelope errors go to `vod.dead-letter.v1`; transient storage errors remain uncommitted for retry.
 

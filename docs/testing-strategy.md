@@ -1,6 +1,6 @@
 # Testing Strategy
 
-Date: 2026-07-21
+Date: 2026-08-02
 
 Go tests should usually live next to the `.go` files they test. This is not a bad practice in Go; it is the standard toolchain convention.
 
@@ -55,6 +55,10 @@ cmd/vodctl/
 
 tests/integration/
   ...                            # optional black-box tests spanning many services
+
+web/app/src/**/*.test.ts(x)     # Vitest/jsdom UI and routing contracts
+
+scripts/smoke_compose.sh        # authenticated released-product HTTP smoke
 ```
 
 ## Test Categories
@@ -114,6 +118,10 @@ Examples:
 - Kafka event envelope compatibility;
 - report JSON schema compatibility;
 - API response contracts.
+
+### Release Checks
+
+GitHub CI runs all Go tests with coverage, `go vet`, targeted race tests, the React typecheck/build and Vitest suite, `npm audit`, dependency-free Python tests, the Git index guard, and an OCI image build. The manual `Compose Smoke` workflow boots the complete stack and validates the released SPA/auth/admin HTTP path.
 
 ## Rule Of Thumb
 

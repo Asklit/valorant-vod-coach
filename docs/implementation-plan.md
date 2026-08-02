@@ -4,25 +4,31 @@
 
 Build a personal Valorant VOD analysis system that accepts full match recordings, extracts useful game context, and produces coach-style feedback with concrete timestamps.
 
-This starts as a local-first learning project and should be designed so it can later become a hosted product.
+The delivered product is local-first and self-hosted, with boundaries that can later be deployed against managed stateful services.
+
+## Delivery Status
+
+As of 2026-08-02, the self-hosted product path is implemented end to end: multi-user upload/library management, durable full-match Temporal processing, CPU CV/OCR evidence selection, guided tactical assessment, coaching/practice reports, PostgreSQL/Redis/S3 persistence, Kafka/ClickHouse analytics, correlated observability, role-protected Operations UI, OCI packaging, CI, and product smoke automation.
+
+The zero-cost default deliberately does not claim unattended AI understanding. Tactical advice is emitted only after the player confirms visible context in an automatically selected clip. Model-assisted review and replay-source adapters are optional future extensions, not unfinished requirements of the guided product.
 
 ## Core Workflow
 
-1. Collect full game VODs from the curated manifest.
-2. Probe and normalize videos into a consistent local dataset.
-3. Extract frames, thumbnails, audio metadata, and low-level visual signals.
-4. Detect match structure: map, agent, side, score, rounds, deaths, kills, buys, and key HUD states.
-5. Build a round timeline from visual/OCR events.
-6. Select important review windows around deaths, lost rounds, spikes, clutches, retakes, and obvious utility usage.
-7. Ask a vision model to analyze only selected windows, not the entire video.
-8. Merge model observations with deterministic timeline data.
-9. Generate a report with mistakes, timestamps, severity, and practice recommendations.
+1. Accept a full-match upload or resolve a curated local VOD.
+2. Probe the media and sample the requested range at 1 FPS.
+3. Validate VALORANT HUD compatibility and compute low-level visual signals.
+4. Use staged OCR to confirm buy phase, scoreboard, combat report, and round-end overlays.
+5. Build an approximate round timeline from visual/OCR anchors.
+6. Select and deduplicate death, fight, rotation, and tempo review moments across the match.
+7. Generate short clips and chronological evidence frames for each moment.
+8. Ask the player to confirm tactical facts that pixels alone cannot establish.
+9. Evaluate only confirmed facts with versioned coaching rules and generate findings, better actions, drills, and checkpoints.
 
-The default product strategy should be hybrid: full-match coarse processing for structure and context, plus high-resolution AI review on selected clips. Full-match semantic analysis is kept as an experimental `deep` mode and must be evaluated against `clip_only` and `hybrid` before becoming default. See `docs/product-and-architecture-decisions.md`.
+The default strategy is full-match coarse discovery followed by high-resolution human review of selected evidence. An optional VLM may later replace part of the confirmation step only after it passes the same versioned evaluation contract. See `docs/product-and-architecture-decisions.md`.
 
 Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rules are tracked in `docs/benchmarks.md`.
 
-## MVP Functional Scope
+## Product Functional Scope
 
 ### Dataset
 
@@ -44,20 +50,20 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 
 ### Detection
 
-- Detect whether minimap and HUD are visible.
-- Detect map name from loading screen or scoreboard when available.
-- Detect selected agent from HUD/portrait/ability icons.
-- Detect round boundaries from timer/score changes.
-- OCR round timer, score, killfeed, combat report, and scoreboard.
-- Capture player death windows and end-of-round windows.
-- Mark confidence for every detection instead of pretending uncertain data is reliable.
+- Validate whether the VALORANT HUD and minimap regions are usable.
+- Compute motion, center activity, killfeed, damage, overlay, and minimap signals.
+- Confirm buy phase, scoreboard, combat report, and round-end overlays with staged OCR.
+- Build approximate round boundaries from buy-phase visual anchors, with cadence fallback.
+- Capture and deduplicate death, fight, rotation, and tempo windows.
+- Attach confidence and provenance to detections instead of presenting uncertain data as fact.
+- Treat map, agent, rank, score, economy, and hidden tactical intent as user-supplied or unconfirmed unless a future evaluated detector proves them.
 
 ### Analysis
 
-- Produce a first report from heuristics before using a large vision model. The local MVP now does this with visual frame signals and selected gameplay review windows.
-- Build estimated round segments before OCR is available. The local MVP now groups review windows into `estimated_from_visual_timeline` segments with confidence and detection method metadata.
-- Generate Qwen/VLM-ready model review tasks with prompt version, clip/evidence references, context, questions, and expected JSON output shape.
-- Add VLM analysis only for selected review windows.
+- Produce a deterministic CPU report from visual signals and selected gameplay review windows.
+- Build estimated round segments from buy-phase anchors or `estimated_from_visual_timeline` fallback segments.
+- Generate an evidence-first guided review contract for every selected window.
+- Keep optional VLM tasks behind an explicit, disabled-by-default model-review boundary.
 - Output findings in a consistent schema:
   - timestamp;
   - round number;
@@ -77,20 +83,20 @@ Architecture diagrams are tracked in `docs/system-diagrams.md`. Benchmarking rul
 - Allow manual correction of rank, agent, map, round boundaries, and false detections.
 - Export a report as JSON/Markdown.
 
-Implemented local UI slice:
+Implemented product UI:
 
 - browse local VODs and report history;
 - play downloaded VOD files through the Go API;
 - run sample or full-VOD analysis from the browser;
-- show visual signal metrics, gameplay review windows, coach findings, timeline events, contact sheet, and sampled frame evidence;
-- show estimated round segments and their linked review windows;
-- show model review tasks and allow copying prompt payloads;
+- show gameplay review windows, timeline markers, clips, and before/event/after evidence;
+- guide the player through visible-context questions and show only validated coaching findings;
+- show coaching report history and a deduplicated practice plan;
 - jump from a review window to the matching timestamp in the local video player;
 - open generated mp4 clips for selected gameplay windows.
-- create manual corrections for false detections, map/agent/rank/round metadata, findings, and events; corrections are saved as local JSON artifacts under `data/processed/corrections/`.
+- create manual corrections for false detections, map/agent/rank/round metadata, findings, and events;
 - separate player-facing flows into Dashboard, Library, Review, and Reports pages, with developer/operations data moved into an Admin page.
-- provide local registration/login and bearer-token sessions. The first registered user becomes `admin`; later users become `user`.
-- protect product JSON API routes with bearer tokens while keeping diagnostics, video streaming, and artifact links public for the local MVP.
+- provide registration/login with server-side secure cookie sessions. The bootstrap-token holder creates the first `admin`; later users become `user`.
+- protect product API, video, artifact, and profiling routes with secure cookie sessions, CSRF commands, roles, and tenant ownership checks.
 
 ## Mistake Taxonomy
 
@@ -119,7 +125,7 @@ Use Go for durable product code and Python only where the ML ecosystem is clearl
 ```text
 cmd/
   vodctl/               # Go CLI: dataset validate, probe, process, report
-  vod-api/              # Go HTTP API for uploads, reports, assets
+  vod-web/              # authenticated Go HTTP API and React SPA server
   vod-worker/           # Go background worker for video jobs
   vod-outbox-relay/     # PostgreSQL outbox to Kafka relay
   vod-clickhouse-sink/  # Kafka consumer for analytical projections
@@ -132,9 +138,14 @@ internal/
     media/              # ffmpeg/ffprobe wrappers and media primitives
     postgres/           # Postgres repositories and migrations wiring
     clickhouse/         # Kafka consumers, ClickHouse writers, analytical queries
-    storage/            # local FS, later S3-compatible storage
+    vodstore/           # tenant-aware local VOD resolution
+    s3store/            # S3-compatible object storage
     kafka/              # event publishing, consuming, and outbox relay support
-    temporal/           # Temporal workflow definitions and activities
+    temporalworkflow/   # Temporal workflow definitions and activities
+    localanalysis/      # shared CLI/worker analysis execution
+    redissession/       # server-side web sessions
+    redislock/          # distributed analysis locks
+    redisrate/          # atomic authentication rate limits
     vision/             # local visual heuristic analyzer
     visionservice/      # Python vision-service HTTP client
   platform/             # config, logging, metrics, tracing, health checks
@@ -148,7 +159,7 @@ ml/
   evals/                # small golden-set evaluation cases
 
 web/
-  app/                  # later UI
+  app/                  # React product and Operations UI
 
 deployments/
   compose/              # local Docker Compose infrastructure
@@ -173,7 +184,7 @@ React/TypeScript UI
       -> Temporal: durable video-processing workflows
       -> Redis: cache, rate limits, short-lived locks
       -> ClickHouse: high-volume analytical events
-      -> Python vision-service: OCR, CV, Qwen/VLM inference
+      -> Python vision-service: optional evaluated model experiments
 
 Go/Python services
   -> OpenTelemetry Collector
@@ -202,7 +213,7 @@ Go/Python services
 
 - Temporal owns long-running workflows.
   - Example workflow: `ProcessVodWorkflow`.
-  - Steps: probe video, normalize, sample frames, detect HUD, run OCR, build timeline, select windows, extract clips, run VLM review, build report.
+  - Steps: materialize/probe video, sample frames, detect HUD, run OCR, build timeline, select windows, extract clips, build report, and publish artifacts.
   - Gives retries, timeouts, cancellation, resume, and workflow visibility.
 - Kafka is the durable event streaming layer.
   - Publish events like `vod.registered`, `vod.probed`, `frames.extracted`, `timeline.ready`, `report.ready`, `processing.failed`.
@@ -212,7 +223,7 @@ Go/Python services
   - API and worker write state changes and outbox rows in the same transaction.
   - A Go outbox relay publishes events from PostgreSQL to Kafka.
 - Go workers execute deterministic media and orchestration tasks.
-- Python workers/services execute CV, OCR, and VLM inference tasks.
+- The optional Python service executes only explicitly enabled model-review experiments; default CV/OCR runs in the Go worker with local tools.
 - Every job must be idempotent.
   - Re-running a job should reuse existing artifacts when inputs and versions match.
   - Store tool/model/prompt versions on every derived artifact.
@@ -272,7 +283,7 @@ The worker owns long-running jobs:
 
 In the target architecture the worker is a Temporal worker with activity implementations in Go. Kafka is used for durable domain events and analytics streaming, not as the workflow engine.
 
-### Python ML Service
+### Optional Python ML Service
 
 Keep model inference behind a simple API boundary:
 
@@ -280,7 +291,7 @@ Keep model inference behind a simple API boundary:
 - `POST /vision/analyze-window`
 - `POST /vision/classify-hud`
 
-The Go code should not depend on a specific model implementation. The Python service can run Qwen-VL-compatible models, OCR libraries, or local experiments.
+The delivered dependency-free server is a contract double and is excluded from product runs. The Go code does not depend on a model implementation; a future service may be added only with reviewed fixtures and an explicit inference budget.
 
 ## Data Model
 
@@ -319,14 +330,13 @@ Raw MP4
   -> round segmentation
   -> candidate review windows
   -> clip extraction
-  -> VLM analysis per selected clip
   -> report JSON
   -> Postgres report/finding records
   -> Kafka report.ready event
   -> UI rendering
 ```
 
-The first useful version should not analyze every frame. It should sample broadly, detect candidate regions, then spend expensive model calls only on the most important windows.
+The product samples broadly, selects candidate regions, and spends human attention only on the most important windows. It incurs no inference charge by default.
 
 ## Early Technical Choices
 
@@ -342,7 +352,7 @@ The first useful version should not analyze every frame. It should sample broadl
 - Cache/locks/rate limits: Redis.
 - Storage: local filesystem through an object-store interface first, MinIO/S3-compatible storage for local infra and hosted use.
 - Video tools: `ffmpeg` and `ffprobe` through thin Go wrappers.
-- ML boundary: Python HTTP service, called from Go. The local MVP includes a dependency-free stdlib stub; FastAPI can remain the production-style wrapper when the real model service is added.
+- ML boundary: optional Python HTTP service called from Go. The repository includes a dependency-free contract double, disabled in product runs.
 - Observability: OpenTelemetry, Prometheus, Grafana, Loki, Tempo.
 - Report format: JSON first, Markdown/HTML later.
 
@@ -383,18 +393,20 @@ Current status:
 - `vodctl dataset validate/list/status` exists.
 - `vodctl video probe --vod <label>` exists and writes `probe.ffprobe.json`.
 - `vodctl video sample --vod <label>` exists and writes sampled frames plus `frames.json`.
-- `vodctl analyze run --vod <label>` exists and runs the local MVP pipeline:
+- `vodctl analyze run --vod <label>` runs the same production analysis use case without Temporal:
   - manifest lookup;
   - local video resolution;
   - ffprobe metadata extraction;
   - low-frequency frame sampling;
-  - deterministic baseline observations;
+  - CPU HUD/CV observations and staged Tesseract OCR;
+  - approximate round segmentation and deduplicated review windows;
+  - evidence clip generation and evidence-first coaching candidates;
   - JSON and Markdown report artifacts.
 - `internal/domain` contains the first analysis/report schema.
 - `internal/app` contains the first orchestration use case and ports.
 - `internal/adapters/report` writes local report artifacts.
-- `cmd/vod-web` exposes the local HTTP API used by the React MVP UI.
-- `web/app` contains the React/TypeScript/Vite UI for browsing VODs and running baseline analysis.
+- `cmd/vod-web` exposes the authenticated HTTP API and built React SPA.
+- `web/app` contains the routed React/TypeScript/Vite player and Operations UI.
 - Postgres-backed VOD/report/artifact metadata persistence is implemented when `DATABASE_URL` is configured.
 - `vod-web` can read report history and latest report metadata from PostgreSQL through the report catalog. Local video availability is still scan-based so the UI reflects files actually present on disk.
 - Local manual corrections are implemented through `GET/POST /api/corrections` and JSON artifacts under `data/processed/corrections/`.
@@ -422,7 +434,7 @@ Current status:
 - Publish first lifecycle events from dataset/probe commands.
 - Add a ClickHouse sink consumer for pipeline timing events.
 
-### Milestone 1.7: Local MVP Analysis Pipeline
+### Milestone 1.7: Local Analysis Pipeline
 
 - Add app-layer orchestration for a single VOD analysis run.
 - Probe media metadata through the media adapter.
@@ -431,14 +443,14 @@ Current status:
 - Decode sampled frames, compute visual signals, and select gameplay review windows.
 - Build a coach summary with focus areas, phase profile, and practice plan.
 - Save `report.json` and `report.md` under `data/processed/<vod_label>/reports/<run_id>/`.
-- Keep the analyzer behind a port so the Python Qwen/VLM service can replace or augment it.
+- Keep the analyzer behind a port so evaluated extensions can augment it without changing the use case.
 
 Current status:
 
-- Implemented in `vodctl analyze run`.
-- Smoke-tested on `iron_spudbud_01` with `--duration 60s --fps 1`; the run decoded 60/60 frames and selected 2 review windows.
-- Full-VOD smoke-tested on `iron_spudbud_01` with `--duration 0 --fps 0.5`; the run decoded 991/991 frames and selected 18 review windows.
-- Current report schema v8 includes `gameplay`, `coach`, `focus_areas`, `practice_plan`, `phase_profile`, `round_segments`, `gameplay_events`, `review_windows`, `model_review_tasks`, optional `model_review_runs`, `gameplay_review.json`, review clips, timeline events, findings, recommendations, confidence, and frame evidence. Real Qwen/VLM reasoning is still the next adapter stage.
+- Implemented in `vodctl analyze run` and reused by the Temporal worker.
+- Regression-tested on short manually annotated media and benchmarked on a complete 33-minute VOD at 1 FPS; see `docs/benchmarks.md`.
+- Current report schema v8 includes gameplay understanding, phase profile, round segments, events, review windows, guided coach decisions, optional model-review records, clips, timeline events, confidence, and frame evidence.
+- Tactical recommendations are separate tenant-owned guided assessments and are never inferred from an unconfirmed temporal spike.
 
 ### Milestone 2: Frame Extraction
 
@@ -447,10 +459,10 @@ Current status:
 - Save `frames.json`.
 - Add integration tests with a tiny local fixture video.
 
-### Milestone 2.5: Local Web UI
+### Milestone 2.5: Product Web UI
 
 - Add a React/TypeScript/Vite frontend.
-- Add a Go HTTP API server for local MVP interaction.
+- Add a Go HTTP API server for product interaction.
 - Show VOD library, ranks, local download status, report readiness, and latest report.
 - Run visual gameplay analysis from the UI.
 - Run long analysis through async API jobs and poll job status.
@@ -477,15 +489,14 @@ Current status:
 
 - Generate a report without VLM.
 - Include deaths, round losses, economy mistakes if visible, and suspicious timings.
-- Add confidence levels and manual TODO markers.
+- Add confidence levels and explicit guided-review requirements.
 
-### Milestone 5: VLM Clip Review
+### Optional Extension: VLM Clip Review
 
 - Extract candidate clips around deaths and round ends.
-- Generate prompt/eval fixtures for selected windows. Current local MVP writes `model_review_tasks` into report schema.
-- Send selected windows to the Python ML service. Current local MVP has a runnable dependency-free `vision-service` contract stub at `ml/vision-service` and `scripts/run_vision_service.sh`.
-- Merge VLM observations into the report schema. Current local MVP writes `model_review_runs` and merges model findings when `model_review` is enabled.
-- Replace the deterministic stub with real Qwen/VLM inference and add golden eval fixtures.
+- Generate versioned prompt/evaluation fixtures for selected windows.
+- Use the runnable dependency-free `vision-service` contract double only for adapter tests.
+- Enable a real implementation only after golden fixtures show a quality gain and an inference budget is explicitly approved.
 
 ### Milestone 6: Web Review UI
 
@@ -524,9 +535,7 @@ Current status:
 
 ## Current Product Work
 
-The local MVP platform is complete, but product-quality coaching, multi-replica storage, diagnostics, and deployment work remain open. Current execution is tracked as feature branches rather than treating the first runnable pipeline as the finished product.
-
-Completed local MVP infrastructure:
+Delivered product capabilities:
 
 - Platinum `platinum_sanctifyed_01` search metadata was checked against the downloaded yt-dlp metadata: the uploader description says `Currently Platinum 1`.
 - Contact sheet generation for sampled frames.
@@ -547,10 +556,8 @@ Completed local MVP infrastructure:
 - Redis-backed sessions and atomic authentication rate limiting.
 - Temporal workflow, independent `vod-worker`, activity retries/heartbeats/cancellation, queued-intent reconciliation, and persisted stage progress.
 - S3-compatible uploaded-VOD storage, worker cold-cache materialization, concurrent evidence publication, and authorized artifact cold reads.
+- Kafka/ClickHouse operational dashboards plus cross-service OpenTelemetry metrics, logs, and traces.
+- Routed React product architecture, job/report history, guided coaching workspace, and live administrator Operations console.
+- Non-root multi-stage container image, production-shaped full Compose stack, GitHub CI, and repeatable product smoke automation.
 
-Next product increments:
-
-- Kafka/ClickHouse operational dashboards and worker-level OpenTelemetry metrics/traces.
-- Evidence-quality benchmarks and stronger zero-cost CPU/OCR gameplay semantics.
-- Router- and feature-based React architecture, user job/report history, and a complete administrative operations console.
-- Container images, production Compose profiles, CI integration suites, backup/restore, and browser QA.
+Optional future extensions are a real evaluated clip VLM, a Riot-supported replay source, a broader manually reviewed quality corpus, hosted TLS/secret management/backups, and Kubernetes deployment. They do not change the current guided product contract.
