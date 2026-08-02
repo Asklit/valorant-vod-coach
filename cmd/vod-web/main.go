@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redislock"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redisrate"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/redissession"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/s3store"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/temporalworkflow"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/webapi"
 	"github.com/asklit/valorant-vod-coach/internal/app"
@@ -36,6 +39,11 @@ func main() {
 	postgresMigrationsDir := flag.String("postgres-migrations-dir", "deployments/migrations/postgres", "directory containing PostgreSQL migrations")
 	migratePostgres := flag.Bool("migrate-postgres", true, "apply pending PostgreSQL migrations at startup")
 	redisURL := flag.String("redis-url", os.Getenv("REDIS_URL"), "optional Redis URL for analysis locks")
+	s3Endpoint := flag.String("s3-endpoint", os.Getenv("S3_ENDPOINT"), "optional S3-compatible endpoint")
+	s3Region := flag.String("s3-region", envString("S3_REGION", "us-east-1"), "S3 region")
+	s3Bucket := flag.String("s3-bucket", os.Getenv("S3_BUCKET"), "optional S3 bucket enabling durable VOD/artifact storage")
+	s3Prefix := flag.String("s3-prefix", os.Getenv("S3_PREFIX"), "optional S3 key prefix")
+	s3PathStyle := flag.Bool("s3-path-style", envBool("S3_USE_PATH_STYLE", os.Getenv("S3_ENDPOINT") != ""), "use path-style S3 addressing (required by local MinIO)")
 	temporalAddress := flag.String("temporal-address", os.Getenv("TEMPORAL_ADDRESS"), "optional Temporal frontend address for durable analysis workflows")
 	temporalNamespace := flag.String("temporal-namespace", envString("TEMPORAL_NAMESPACE", client.DefaultNamespace), "Temporal namespace")
 	temporalTaskQueue := flag.String("temporal-task-queue", envString("TEMPORAL_TASK_QUEUE", temporalworkflow.DefaultTaskQueue), "Temporal analysis task queue")
@@ -60,6 +68,24 @@ func main() {
 	var jobStore app.AnalysisJobStore
 	var userDataStore app.UserDataStore
 	dependencies := map[string]app.HealthChecker{}
+	var objects app.BlobStore
+	if *s3Bucket != "" {
+		store, err := s3store.New(serviceCtx, s3store.Config{
+			Endpoint:        *s3Endpoint,
+			Region:          *s3Region,
+			Bucket:          *s3Bucket,
+			AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+			SessionToken:    os.Getenv("S3_SESSION_TOKEN"),
+			Prefix:          *s3Prefix,
+			UsePathStyle:    *s3PathStyle,
+		})
+		if err != nil {
+			log.Fatalf("configure S3 object storage: %v", err)
+		}
+		objects = store
+		dependencies["object_storage"] = store
+	}
 	if *databaseURL != "" {
 		db, err := postgres.Open(serviceCtx, *databaseURL)
 		if err != nil {
@@ -149,12 +175,13 @@ func main() {
 		JobStore:            jobStore,
 		Dependencies:        dependencies,
 		Locks:               locks,
+		Objects:             objects,
 		WorkflowLauncher:    workflowLauncher,
 		Logger:              obs.Logger,
 		Tracer:              obs.Tracer,
 	})
 
-	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "temporal_enabled", *temporalAddress != "", "vision_configured", *visionURL != "")
+	obs.Logger.Info("vod-web listening", "addr", *addr, "static_dir", *staticDir, "database_enabled", *databaseURL != "", "redis_locks_enabled", *redisURL != "", "object_storage_enabled", objects != nil, "temporal_enabled", *temporalAddress != "", "vision_configured", *visionURL != "")
 	fmt.Fprintf(os.Stdout, "vod-web listening on http://localhost%s\n", *addr)
 	httpServer := &http.Server{
 		Addr:              *addr,
@@ -185,4 +212,16 @@ func envString(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

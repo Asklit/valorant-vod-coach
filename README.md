@@ -15,6 +15,7 @@ Current scope:
 - persist tenant-owned users, uploads, reports, jobs, and coaching feedback in PostgreSQL;
 - keep sessions, distributed locks, and authentication rate limits in Redis;
 - run full-VOD analysis as retryable, cancellable Temporal workflows through `vod-worker`.
+- keep uploaded VODs and generated evidence in S3-compatible storage while using local files only as processing caches.
 
 Agreed product stack, implemented incrementally:
 
@@ -167,6 +168,8 @@ go run ./cmd/vod-web --static-dir web/app/dist --addr :8090
 The API writes a versioned job intent to PostgreSQL and starts a Temporal workflow. An idempotent dispatcher retries queued intents after a transient Temporal outage or an API crash between those two operations. Temporal owns retries and cancellation; Kafka receives immutable domain events through the PostgreSQL outbox and does not execute workflows.
 
 See [durable workflow design](docs/durable-workflows.md) for lifecycle and failure semantics.
+
+When `S3_BUCKET` is set for both processes, uploaded videos and generated evidence are durable in S3/MinIO. Workers materialize cold VODs locally for ffmpeg, publish every referenced frame/clip/report before completion, and the authenticated artifact gateway handles cold reads. See [object storage design](docs/object-storage.md).
 
 ## Current Analysis Model
 

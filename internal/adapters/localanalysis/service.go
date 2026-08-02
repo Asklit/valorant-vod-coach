@@ -30,6 +30,7 @@ type Config struct {
 	UploadCatalog app.UploadCatalog
 	Catalog       app.AnalysisCatalog
 	Locks         app.LockManager
+	Objects       app.BlobStore
 }
 
 type Service struct {
@@ -52,10 +53,20 @@ func (s Service) RunAnalysis(ctx context.Context, request app.AnalysisJobRequest
 				FFprobePath: defaultString(s.Config.FFprobePath, "ffprobe"),
 			},
 			Catalog: s.Config.UploadCatalog,
+			Objects: s.Config.Objects,
 		}
 	}
 
 	processedRoot := ProcessedRootForOwner(s.Config.ProcessedRoot, request.OwnerID)
+	localReports := reportstore.LocalStore{ProcessedRoot: processedRoot}
+	var reports app.ReportStore = localReports
+	if s.Config.Objects != nil {
+		reports = reportstore.PublishingStore{
+			Local:   localReports,
+			Root:    s.Config.ProcessedRoot,
+			Objects: s.Config.Objects,
+		}
+	}
 	runner := app.AnalysisRunner{
 		Resolver: vodstore.OwnedResolver{
 			Store:      uploads,
@@ -76,7 +87,7 @@ func (s Service) RunAnalysis(ctx context.Context, request app.AnalysisJobRequest
 		Analyzer: vision.LocalGameplayAnalyzer{
 			TesseractPath: defaultString(s.Config.TesseractPath, "tesseract"),
 		},
-		Reports:  reportstore.LocalStore{ProcessedRoot: processedRoot},
+		Reports:  reports,
 		Catalog:  s.Config.Catalog,
 		Locks:    s.Config.Locks,
 		Progress: progress,

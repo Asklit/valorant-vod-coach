@@ -37,11 +37,12 @@ func (s Store) SaveUpload(ctx context.Context, record app.UploadRecord) error {
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO uploaded_vods (
-  label, owner_id, video_path, video_filename, size_bytes, media, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
+  label, owner_id, video_path, video_object_key, video_filename, size_bytes, media, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
 ON CONFLICT (label) DO UPDATE SET
   owner_id = EXCLUDED.owner_id,
   video_path = EXCLUDED.video_path,
+  video_object_key = EXCLUDED.video_object_key,
   video_filename = EXCLUDED.video_filename,
   size_bytes = EXCLUDED.size_bytes,
   media = EXCLUDED.media,
@@ -50,6 +51,7 @@ ON CONFLICT (label) DO UPDATE SET
 		record.VOD.Label,
 		record.VOD.OwnerID,
 		record.VideoPath,
+		record.VideoObjectKey,
 		record.VideoFilename,
 		record.SizeBytes,
 		string(media),
@@ -134,6 +136,7 @@ SELECT
   vods.original_filename,
   vods.uploaded_at,
   uploads.video_path,
+  uploads.video_object_key,
   uploads.video_filename,
   uploads.size_bytes,
   uploads.media,
@@ -166,6 +169,7 @@ func scanUpload(scanner rowScanner) (app.UploadRecord, error) {
 		&record.VOD.OriginalFilename,
 		&uploadedAt,
 		&record.VideoPath,
+		&record.VideoObjectKey,
 		&record.VideoFilename,
 		&record.SizeBytes,
 		&media,

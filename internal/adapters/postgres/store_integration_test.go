@@ -62,7 +62,8 @@ TRUNCATE TABLE auth_users, vods, analysis_jobs, user_documents, outbox_events CA
 			Label: "upload_integration", VideoID: "upload_integration", Rank: "diamond", Title: "Integration upload",
 			Channel: "Uploaded VOD", OwnerID: player.ID, SourceType: "upload", OriginalFilename: "match.mp4", UploadedAt: now,
 		},
-		VideoPath: "/tmp/upload_integration/video.mp4", VideoFilename: "video.mp4", SizeBytes: 1234,
+		VideoPath: "/tmp/upload_integration/video.mp4", VideoObjectKey: "uploads/" + player.ID + "/upload_integration/video.mp4",
+		VideoFilename: "video.mp4", SizeBytes: 1234,
 		Media: domain.MediaSummary{DurationSeconds: 1800, HasDuration: true, Width: 1920, Height: 1080}, UpdatedAt: now,
 	}
 	if err := store.SaveUpload(ctx, upload); err != nil {
@@ -71,7 +72,7 @@ TRUNCATE TABLE auth_users, vods, analysis_jobs, user_documents, outbox_events CA
 	if _, found, err := store.FindUpload(ctx, upload.VOD.Label, admin.ID, false); err != nil || found {
 		t.Fatalf("another user must not find upload: found=%v err=%v", found, err)
 	}
-	if foundUpload, found, err := store.FindUpload(ctx, upload.VOD.Label, player.ID, false); err != nil || !found || foundUpload.Media.Width != 1920 {
+	if foundUpload, found, err := store.FindUpload(ctx, upload.VOD.Label, player.ID, false); err != nil || !found || foundUpload.Media.Width != 1920 || foundUpload.VideoObjectKey != upload.VideoObjectKey {
 		t.Fatalf("owner must find upload: %+v found=%v err=%v", foundUpload, found, err)
 	}
 

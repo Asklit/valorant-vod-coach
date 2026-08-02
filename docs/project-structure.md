@@ -131,7 +131,8 @@ internal/
     clickhouse/                   # analytical persistence
     kafka/                        # producers, consumers, event envelopes
     temporal/                     # workflows and activities
-    storage/                      # local filesystem and S3-compatible object storage
+    s3store/                      # S3/MinIO durable object adapter and transfer manager
+    report/                       # local reports plus concurrent object publication
     vision/                       # local visual analyzer and future Python vision-service client
     http/                         # HTTP handlers once vod-api exists
 

@@ -8,12 +8,13 @@ import (
 )
 
 type UploadRecord struct {
-	VOD           domain.VOD
-	VideoPath     string
-	VideoFilename string
-	SizeBytes     int64
-	Media         domain.MediaSummary
-	UpdatedAt     time.Time
+	VOD            domain.VOD
+	VideoPath      string
+	VideoObjectKey string
+	VideoFilename  string
+	SizeBytes      int64
+	Media          domain.MediaSummary
+	UpdatedAt      time.Time
 }
 
 type UploadCatalog interface {
