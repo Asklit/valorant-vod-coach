@@ -15,7 +15,7 @@ jobs:
       SMOKE_EMAIL: compose-smoke@example.com
       SMOKE_PASSWORD: compose-smoke-password
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Start production-shaped stack
         run: docker compose -f deployments/compose/docker-compose.yml up -d --build --wait --wait-timeout 420
       - name: Run product smoke
