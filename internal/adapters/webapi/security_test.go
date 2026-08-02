@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -436,6 +437,54 @@ func TestArtifactIsAuthenticatedOwnerIsolatedAndTraversalSafe(t *testing.T) {
 	}
 }
 
+func TestArtifactGatewayMaterializesAuthorizedColdObject(t *testing.T) {
+	fixture := newFixture(t)
+	objects := &webBlobStore{objects: map[string][]byte{}}
+	fixture.config.Objects = objects
+	server := NewServer(fixture.config)
+	registerTestAdmin(t, server)
+	owner := registerTestAccount(t, server, "cold-owner@example.com")
+	other := registerTestAccount(t, server, "cold-other@example.com")
+	uploaded := uploadTestVOD(t, server, owner)
+	relative := filepath.ToSlash(filepath.Join(uploaded.VOD.Label, "frames", "cold.jpg"))
+	objects.objects["artifacts/"+relative] = []byte("cold private evidence")
+	target := "/artifacts/" + relative
+
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	authorize(request, other)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || objects.downloads != 0 {
+		t.Fatalf("unauthorized request must not touch object storage: status=%d downloads=%d", response.Code, objects.downloads)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, target, nil)
+	authorize(request, owner)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "cold private evidence" || objects.downloads != 1 {
+		t.Fatalf("cold artifact expected 200: status=%d body=%q downloads=%d", response.Code, response.Body.String(), objects.downloads)
+	}
+	request = httptest.NewRequest(http.MethodGet, target, nil)
+	authorize(request, owner)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || objects.downloads != 1 {
+		t.Fatalf("warm artifact cache should not redownload: status=%d downloads=%d", response.Code, objects.downloads)
+	}
+}
+
+func TestArtifactCachePathRejectsExistingSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := secureArtifactCachePath(root, "linked/missing.jpg"); err == nil {
+		t.Fatal("secureArtifactCachePath() accepted a symlinked parent")
+	}
+}
+
 func TestEvaluationEndpointsRequireAdmin(t *testing.T) {
 	fixture := newFixture(t)
 	server := NewServer(fixture.config)
@@ -452,3 +501,45 @@ func TestEvaluationEndpointsRequireAdmin(t *testing.T) {
 		}
 	}
 }
+
+type webBlobStore struct {
+	objects   map[string][]byte
+	downloads int
+}
+
+func (s *webBlobStore) UploadFile(_ context.Context, key string, localPath string, _ string) error {
+	raw, err := os.ReadFile(localPath)
+	if err != nil {
+		return err
+	}
+	s.objects[key] = raw
+	return nil
+}
+
+func (s *webBlobStore) DownloadFile(_ context.Context, key string, localPath string) error {
+	raw, found := s.objects[key]
+	if !found {
+		return errors.New("object not found")
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
+		return err
+	}
+	s.downloads++
+	return os.WriteFile(localPath, raw, 0o600)
+}
+
+func (s *webBlobStore) DeleteObject(_ context.Context, key string) error {
+	delete(s.objects, key)
+	return nil
+}
+
+func (s *webBlobStore) DeletePrefix(_ context.Context, prefix string) error {
+	for key := range s.objects {
+		if strings.HasPrefix(key, strings.TrimSuffix(prefix, "/")+"/") {
+			delete(s.objects, key)
+		}
+	}
+	return nil
+}
+
+var _ app.BlobStore = (*webBlobStore)(nil)

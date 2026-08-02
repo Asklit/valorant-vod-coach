@@ -78,8 +78,9 @@ type UploadedVOD struct {
 }
 
 type UploadedAsset struct {
-	Upload UploadedVOD
-	Path   string
+	Upload    UploadedVOD
+	Path      string
+	ObjectKey string
 }
 
 func (s LocalStore) Stage(ctx context.Context, reader io.Reader) (StagedUpload, error) {

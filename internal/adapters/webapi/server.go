@@ -14,6 +14,7 @@ import (
 	"net/http/pprof"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -62,6 +63,7 @@ type Config struct {
 	UploadCatalog             app.UploadCatalog
 	UserDataStore             app.UserDataStore
 	Locks                     app.LockManager
+	Objects                   app.BlobStore
 	AnalysisExecutor          app.AnalysisExecutor
 	WorkflowLauncher          app.AnalysisWorkflowLauncher
 	Logger                    *slog.Logger
@@ -152,6 +154,7 @@ type UpdateVODRequest struct {
 type DeleteVODResponse struct {
 	Label   string `json:"label"`
 	Deleted bool   `json:"deleted"`
+	Warning string `json:"warning,omitempty"`
 }
 
 type AnalyzeResponse struct {
@@ -475,6 +478,7 @@ func NewServer(config Config) *Server {
 			UploadCatalog: config.UploadCatalog,
 			Catalog:       config.Catalog,
 			Locks:         config.Locks,
+			Objects:       config.Objects,
 		}}
 	}
 	if server.tracer == nil {
@@ -1396,19 +1400,35 @@ func (s *Server) handleDeleteUploadedVOD(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, fmt.Errorf("uploaded VOD %q was not found", label))
 		return
 	}
-	if err != nil {
+	var cleanupErrors []error
+	var cleanupErr vodstore.PostDeleteCleanupError
+	if err != nil && !errors.As(err, &cleanupErr) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if cleanupErr.Cause != nil {
+		cleanupErrors = append(cleanupErrors, cleanupErr)
 	}
 	if err := removeProcessedVOD(s.analysisRoot(asset.Upload.VOD.OwnerID), asset.Upload.VOD.Label); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		cleanupErrors = append(cleanupErrors, err)
 	}
 	if err := removeProcessedVOD(s.config.ProcessedRoot, asset.Upload.VOD.Label); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		cleanupErrors = append(cleanupErrors, err)
 	}
-	writeJSON(w, http.StatusOK, DeleteVODResponse{Label: asset.Upload.VOD.Label, Deleted: true})
+	if s.config.Objects != nil {
+		prefix := path.Join(reportstore.ArtifactObjectPrefix, "users", asset.Upload.VOD.OwnerID, "analyses", asset.Upload.VOD.Label)
+		if err := s.config.Objects.DeletePrefix(r.Context(), prefix); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete generated objects: %w", err))
+		}
+	}
+	response := DeleteVODResponse{Label: asset.Upload.VOD.Label, Deleted: true}
+	status := http.StatusOK
+	if warning := errors.Join(cleanupErrors...); warning != nil {
+		status = http.StatusAccepted
+		response.Warning = warning.Error()
+		s.logger.Warn("uploaded VOD cleanup deferred", "vod_label", label, "error", warning)
+	}
+	writeJSON(w, status, response)
 }
 
 func removeProcessedVOD(root string, label string) error {
@@ -1439,7 +1459,7 @@ func (s *Server) uploadStore() vodstore.Store {
 		Root: s.config.UploadRoot, FFprobePath: s.config.FFprobePath, MaxUploadBytes: s.config.MaxUploadBytes,
 	}
 	if s.config.UploadCatalog != nil {
-		return vodstore.CatalogStore{Files: local, Catalog: s.config.UploadCatalog}
+		return vodstore.CatalogStore{Files: local, Catalog: s.config.UploadCatalog, Objects: s.config.Objects}
 	}
 	return local
 }

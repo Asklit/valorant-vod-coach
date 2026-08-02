@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
 	"github.com/asklit/valorant-vod-coach/internal/app"
 )
 
@@ -222,12 +224,32 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relative := strings.TrimPrefix(r.URL.Path, "/artifacts/")
-	target, parts, err := secureArtifactPath(s.config.ProcessedRoot, relative)
+	target, parts, err := secureArtifactCachePath(s.config.ProcessedRoot, relative)
 	if err != nil {
 		writeError(w, http.StatusNotFound, errors.New("artifact not found"))
 		return
 	}
 	if !s.canReadArtifact(r.Context(), user, parts) {
+		writeError(w, http.StatusNotFound, errors.New("artifact not found"))
+		return
+	}
+	if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+		if s.config.Objects == nil {
+			writeError(w, http.StatusNotFound, errors.New("artifact not found"))
+			return
+		}
+		key := path.Join(reportstore.ArtifactObjectPrefix, strings.Join(parts, "/"))
+		if err := s.config.Objects.DownloadFile(r.Context(), key, target); err != nil {
+			s.logger.Warn("materialize artifact", "key", key, "error", err)
+			writeError(w, http.StatusNotFound, errors.New("artifact not found"))
+			return
+		}
+	} else if err != nil {
+		writeError(w, http.StatusNotFound, errors.New("artifact not found"))
+		return
+	}
+	target, _, err = secureArtifactPath(s.config.ProcessedRoot, relative)
+	if err != nil {
 		writeError(w, http.StatusNotFound, errors.New("artifact not found"))
 		return
 	}
@@ -248,6 +270,30 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func secureArtifactPath(root string, rawRelative string) (string, []string, error) {
+	targetAbs, parts, err := secureArtifactCachePath(root, rawRelative)
+	if err != nil {
+		return "", nil, err
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", nil, err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", nil, err
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(targetAbs)
+	if err != nil {
+		return "", nil, err
+	}
+	inside, err := filepath.Rel(resolvedRoot, resolvedTarget)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(os.PathSeparator)) {
+		return "", nil, errors.New("artifact symlink escapes root")
+	}
+	return resolvedTarget, parts, nil
+}
+
+func secureArtifactCachePath(root string, rawRelative string) (string, []string, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", nil, err
@@ -264,23 +310,25 @@ func secureArtifactPath(root string, rawRelative string) (string, []string, erro
 	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(os.PathSeparator)) {
 		return "", nil, errors.New("artifact path escapes root")
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		return "", nil, err
-	}
-	resolvedTarget, err := filepath.EvalSymlinks(targetAbs)
-	if err != nil {
-		return "", nil, err
-	}
-	inside, err = filepath.Rel(resolvedRoot, resolvedTarget)
-	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(os.PathSeparator)) {
-		return "", nil, errors.New("artifact symlink escapes root")
-	}
 	parts := strings.Split(filepath.ToSlash(relative), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		return "", nil, errors.New("invalid artifact path")
 	}
-	return resolvedTarget, parts, nil
+	current := rootAbs
+	for _, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", nil, errors.New("artifact cache path contains a symlink")
+		}
+	}
+	return targetAbs, parts, nil
 }
 
 func (s *Server) canReadArtifact(ctx context.Context, user app.PublicAuthUser, parts []string) bool {

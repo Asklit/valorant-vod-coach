@@ -546,10 +546,10 @@ Completed local MVP infrastructure:
 - PostgreSQL-backed users, uploads, report snapshots, analysis jobs, corrections, and guided reviews with tenant isolation.
 - Redis-backed sessions and atomic authentication rate limiting.
 - Temporal workflow, independent `vod-worker`, activity retries/heartbeats/cancellation, queued-intent reconciliation, and persisted stage progress.
+- S3-compatible uploaded-VOD storage, worker cold-cache materialization, concurrent evidence publication, and authorized artifact cold reads.
 
 Next product increments:
 
-- S3-compatible VOD/artifact storage and safe multi-replica upload lifecycle.
 - Kafka/ClickHouse operational dashboards and worker-level OpenTelemetry metrics/traces.
 - Evidence-quality benchmarks and stronger zero-cost CPU/OCR gameplay semantics.
 - Router- and feature-based React architecture, user job/report history, and a complete administrative operations console.
