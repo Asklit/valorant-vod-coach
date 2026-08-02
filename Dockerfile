@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/vod-web
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/vod-outbox-relay ./cmd/vod-outbox-relay && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/vod-clickhouse-sink ./cmd/vod-clickhouse-sink
 
-FROM alpine:3.22 AS runtime
+FROM alpine:3.24 AS runtime
 RUN apk add --no-cache ca-certificates ffmpeg tesseract-ocr tesseract-ocr-data-eng tzdata && \
     addgroup -g 10001 -S vodcoach && \
     adduser -u 10001 -S -D -H -G vodcoach vodcoach && \
