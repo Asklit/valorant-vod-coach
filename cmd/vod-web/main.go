@@ -24,6 +24,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/workflow"
 )
 
 func main() {
@@ -133,8 +134,9 @@ func main() {
 			log.Fatal("Temporal workflows require DATABASE_URL for the durable job read model")
 		}
 		temporalClient, err := client.Dial(client.Options{
-			HostPort:  *temporalAddress,
-			Namespace: *temporalNamespace,
+			HostPort:           *temporalAddress,
+			Namespace:          *temporalNamespace,
+			ContextPropagators: []workflow.ContextPropagator{temporalworkflow.TraceContextPropagator{}},
 		})
 		if err != nil {
 			log.Fatalf("connect to Temporal: %v", err)

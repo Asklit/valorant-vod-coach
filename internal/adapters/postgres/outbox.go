@@ -20,6 +20,8 @@ type OutboxEvent struct {
 	CorrelationID string
 	CausationID   string
 	TraceID       string
+	TraceParent   string
+	TraceState    string
 	Payload       json.RawMessage
 	Envelope      json.RawMessage
 }
@@ -39,8 +41,15 @@ func ClaimPendingOutboxEvents(ctx context.Context, db *sql.DB, limit int, worker
 WITH next_events AS (
   SELECT id
   FROM outbox_events
-  WHERE status IN ('pending', 'failed')
-    AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+  WHERE (
+    (
+      status IN ('pending', 'failed')
+      AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+    ) OR (
+      status = 'publishing'
+      AND (locked_at IS NULL OR locked_at <= now() - interval '2 minutes')
+    )
+  )
   ORDER BY occurred_at, id
   LIMIT $1
   FOR UPDATE SKIP LOCKED
@@ -66,6 +75,8 @@ RETURNING
   outbox.correlation_id,
   outbox.causation_id,
   outbox.trace_id,
+  outbox.trace_parent,
+  outbox.trace_state,
   outbox.payload,
   outbox.envelope
 `, limit, workerID)
@@ -89,6 +100,8 @@ RETURNING
 			&event.CorrelationID,
 			&event.CausationID,
 			&event.TraceID,
+			&event.TraceParent,
+			&event.TraceState,
 			&event.Payload,
 			&event.Envelope,
 		); err != nil {

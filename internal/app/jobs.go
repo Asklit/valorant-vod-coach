@@ -28,6 +28,9 @@ type AnalysisJobRequest struct {
 	Force           bool    `json:"force"`
 	ModelReview     bool    `json:"model_review"`
 	IncludeAllVODs  bool    `json:"include_all_vods"`
+	TraceParent     string  `json:"trace_parent,omitempty"`
+	TraceState      string  `json:"trace_state,omitempty"`
+	Baggage         string  `json:"baggage,omitempty"`
 }
 
 type AnalysisExecutionResult struct {

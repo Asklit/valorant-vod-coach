@@ -1,0 +1,97 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [{"title": "Operations", "type": "link", "url": "/d/vodcoach-operations/operations", "targetBlank": false}],
+  "panels": [
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT count() AS analyses FROM analysis_runs WHERE $__timeFilter(occurred_at)", "refId": "A"}],
+      "title": "Completed analyses",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 12}, {"color": "red", "value": 30}]}}},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT avg(finding_count) AS findings FROM analysis_runs WHERE $__timeFilter(occurred_at)", "refId": "A"}],
+      "title": "Mean findings per VOD",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 3}, {"color": "green", "value": 8}]}}},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT avg(review_window_count) AS windows FROM analysis_runs WHERE $__timeFilter(occurred_at)", "refId": "A"}],
+      "title": "Mean review windows",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 5}, {"color": "green", "value": 15}]}}},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT avg(round_segment_count) AS rounds FROM analysis_runs WHERE $__timeFilter(occurred_at)", "refId": "A"}],
+      "title": "Mean detected rounds",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 65, "showPoints": "never", "stacking": {"mode": "normal", "group": "A"}}}},
+      "gridPos": {"h": 9, "w": 14, "x": 0, "y": 5},
+      "id": 5,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["sum"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT toStartOfHour(occurred_at) AS time, mode, count() AS analyses FROM analysis_runs WHERE $__timeFilter(occurred_at) GROUP BY time, mode ORDER BY time", "refId": "A"}],
+      "title": "Analyses over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}},
+      "gridPos": {"h": 9, "w": 10, "x": 14, "y": 5},
+      "id": 6,
+      "options": {"displayMode": "gradient", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}, "showUnfilled": true},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT analyzer, count() AS runs FROM analysis_runs WHERE $__timeFilter(occurred_at) GROUP BY analyzer ORDER BY runs DESC", "refId": "A"}],
+      "title": "Analyzer versions",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never"}}},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 14},
+      "id": 7,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT toStartOfHour(occurred_at) AS time, avg(frame_count) AS frames, avg(duration_seconds) AS sampled_seconds FROM frame_extractions WHERE $__timeFilter(occurred_at) GROUP BY time ORDER BY time", "refId": "A"}],
+      "title": "Frame extraction profile",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}}},
+      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 14},
+      "id": 8,
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+      "targets": [{"editorType": "sql", "format": 1, "rawSql": "SELECT occurred_at, vod_label, run_id, status, mode, finding_count, review_window_count, round_segment_count, trace_id FROM analysis_runs WHERE $__timeFilter(occurred_at) ORDER BY occurred_at DESC LIMIT 100", "refId": "A"}],
+      "title": "Recent analysis runs",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["vodcoach", "product", "clickhouse"],
+  "templating": {"list": []},
+  "time": {"from": "now-30d", "to": "now"},
+  "timezone": "browser",
+  "title": "Product analytics",
+  "uid": "vodcoach-product",
+  "version": 1
+}

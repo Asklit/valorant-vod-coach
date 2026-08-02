@@ -17,11 +17,16 @@ func TestLoadMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}
-	if len(migrations) != 1 || migrations[0].Version != 1 || migrations[0].Name != "001_kafka_events.sql" {
+	if len(migrations) != 4 || migrations[0].Version != 1 || migrations[0].Name != "001_kafka_events.sql" {
 		t.Fatalf("unexpected migrations: %+v", migrations)
 	}
 	if !strings.Contains(migrations[0].SQL, "CREATE TABLE IF NOT EXISTS kafka_events") {
 		t.Fatalf("migration missing kafka_events table")
+	}
+	if !strings.Contains(migrations[1].SQL, "kafka_events_deduplicated") ||
+		!strings.Contains(migrations[2].SQL, "analysis_runs") ||
+		!strings.Contains(migrations[3].SQL, "frame_extractions") {
+		t.Fatalf("analytical views are incomplete: %+v", migrations)
 	}
 }
 

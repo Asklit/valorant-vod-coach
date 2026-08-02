@@ -3,6 +3,7 @@ package temporalworkflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -11,11 +12,18 @@ import (
 
 	"github.com/asklit/valorant-vod-coach/internal/adapters/postgres"
 	"github.com/asklit/valorant-vod-coach/internal/app"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestWorkflowPostgresIntegration(t *testing.T) {
+	originalPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(originalPropagator) })
 	temporalAddress := strings.TrimSpace(os.Getenv("TEST_TEMPORAL_ADDRESS"))
 	databaseURL := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
 	if temporalAddress == "" || databaseURL == "" {
@@ -52,6 +60,10 @@ func TestWorkflowPostgresIntegration(t *testing.T) {
 		VODLabel:      "integration_vod", OwnerID: owner.ID, RunID: "integration_run",
 		FPS: "1", DurationSeconds: 180, ImageQuality: 3,
 	}
+	parentSpan := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1, 2, 3}, SpanID: trace.SpanID{4, 5, 6}, TraceFlags: trace.FlagsSampled,
+	})
+	CaptureRequestTraceContext(trace.ContextWithSpanContext(ctx, parentSpan), &request)
 	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
@@ -67,14 +79,17 @@ func TestWorkflowPostgresIntegration(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
-	temporalClient, err := client.Dial(client.Options{HostPort: temporalAddress})
+	temporalClient, err := client.Dial(client.Options{
+		HostPort:           temporalAddress,
+		ContextPropagators: []workflow.ContextPropagator{TraceContextPropagator{}},
+	})
 	if err != nil {
 		t.Fatalf("connect to Temporal: %v", err)
 	}
 	defer temporalClient.Close()
 	taskQueue := "integration-" + job.ID
 	temporalWorker := worker.New(temporalClient, taskQueue, worker.Options{})
-	Register(temporalWorker, Activities{Executor: integrationExecutor{}, Jobs: store})
+	Register(temporalWorker, Activities{Executor: integrationExecutor{ExpectedTraceID: parentSpan.TraceID()}, Jobs: store})
 	if err := temporalWorker.Start(); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
@@ -100,9 +115,12 @@ func TestWorkflowPostgresIntegration(t *testing.T) {
 	}
 }
 
-type integrationExecutor struct{}
+type integrationExecutor struct{ ExpectedTraceID trace.TraceID }
 
-func (integrationExecutor) RunAnalysis(ctx context.Context, _ app.AnalysisJobRequest, progress app.AnalysisProgressReporter) (app.AnalysisExecutionResult, error) {
+func (e integrationExecutor) RunAnalysis(ctx context.Context, _ app.AnalysisJobRequest, progress app.AnalysisProgressReporter) (app.AnalysisExecutionResult, error) {
+	if got := trace.SpanContextFromContext(ctx).TraceID(); got != e.ExpectedTraceID {
+		return app.AnalysisExecutionResult{}, fmt.Errorf("propagated trace ID = %s, want %s", got, e.ExpectedTraceID)
+	}
 	progress.ReportAnalysisProgress(ctx, app.AnalysisProgress{Stage: "analyzing", Message: "Analyzing", Percent: 55})
 	return app.AnalysisExecutionResult{
 		ReportJSONPath: "integration-report.json",
