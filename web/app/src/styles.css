@@ -2438,46 +2438,55 @@ button {
   gap: 14px;
 }
 
-.analysis-explainer {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+.dashboard-match-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
-.step-pill {
-  display: grid;
-  gap: 4px;
-  min-height: 78px;
-  padding: 11px;
+.dashboard-match-meta span {
+  min-height: 27px;
+  padding: 6px 9px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.035);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
-.step-pill span {
-  color: var(--red);
+.dashboard-progress {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.dashboard-progress > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 950;
-}
-
-.step-pill strong {
-  font-size: 13px;
-  font-weight: 950;
   text-transform: uppercase;
 }
 
-.step-pill small {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
+.dashboard-progress > div:first-child strong { color: var(--text); }
+
+.dashboard-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
 }
 
-.plain-copy {
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.5;
+.dashboard-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 240ms ease;
 }
 
 .hero-actions,
@@ -2522,6 +2531,13 @@ button {
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.dashboard-coach-action span {
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--cyan);
+  line-height: 1.4;
 }
 
 .library-toolbar {
@@ -2608,7 +2624,6 @@ button {
   background: rgba(255, 70, 85, 0.07);
 }
 
-.vod-card strong,
 .vod-card small {
   display: block;
   overflow: hidden;
@@ -2617,8 +2632,13 @@ button {
 }
 
 .vod-card strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 930;
+  line-height: 1.3;
+  white-space: normal;
 }
 
 .vod-card small,
@@ -2635,6 +2655,10 @@ button {
   color: var(--green);
 }
 
+.vod-card em {
+  white-space: nowrap;
+}
+
 .review-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
@@ -2646,7 +2670,25 @@ button {
 }
 
 .product-controls {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analysis-scope-control {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.analysis-scope-control > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.analysis-scope-control .segmented-control {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .focus-stack,
@@ -2660,10 +2702,6 @@ button {
 
 .product-history {
   grid-template-columns: 1fr;
-}
-
-.product-quality {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .product-correction-form {
@@ -3470,6 +3508,64 @@ button {
   font-size: 11px;
 }
 
+.practice-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+}
+
+.practice-plan-item {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.practice-plan-item > span {
+  color: var(--red);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.practice-plan-item small,
+.practice-plan-item h3,
+.practice-plan-item p,
+.practice-plan-item blockquote {
+  overflow-wrap: anywhere;
+}
+
+.practice-plan-item small {
+  color: var(--cyan);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.practice-plan-item h3 {
+  margin: 4px 0 8px;
+  font-size: 16px;
+  text-transform: uppercase;
+}
+
+.practice-plan-item p,
+.practice-plan-item blockquote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.practice-plan-item blockquote {
+  margin-top: 9px;
+  padding-left: 10px;
+  border-left: 2px solid var(--green);
+  color: var(--text);
+  font-weight: 750;
+}
+
 .metric-bars {
   display: grid;
   gap: 9px;
@@ -3720,9 +3816,7 @@ button {
     grid-template-columns: 220px minmax(0, 1fr);
   }
 
-  .stat-grid,
-  .analysis-explainer,
-  .product-quality {
+  .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3764,9 +3858,7 @@ button {
 
   .stat-grid,
   .compact-stats,
-  .analysis-explainer,
   .product-controls,
-  .product-quality,
 	  .vod-card-open {
 	    grid-template-columns: 1fr;
 	  }
@@ -3796,6 +3888,10 @@ button {
 	.evidence-sequence {
 		grid-template-columns: 1fr;
 	}
+
+  .practice-plan-grid {
+    grid-template-columns: 1fr;
+  }
 
 	.coach-assessment-output {
 		padding-top: 18px;
