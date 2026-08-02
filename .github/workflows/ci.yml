@@ -48,7 +48,7 @@ jobs:
         working-directory: web/app
         run: npm audit --audit-level=high
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Test dependency-free vision core
