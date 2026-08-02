@@ -76,4 +76,6 @@ LOG_FORMAT=json
 LOG_LEVEL=info
 ```
 
+The generic HTTP endpoint is a base URL. The runtime appends `/v1/traces` and `/v1/metrics`; standard signal-specific endpoint variables override the generated URLs.
+
 When Go processes run directly on the host, their JSON logs remain on stderr; Alloy discovers Docker containers only. Containerized product services carry the `vodcoach.logs=enabled` label and are collected automatically.

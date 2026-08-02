@@ -1,0 +1,31 @@
+name: Compose Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  product-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VODCOACH_BOOTSTRAP_TOKEN: ci-compose-bootstrap-token
+      SMOKE_EMAIL: compose-smoke@example.com
+      SMOKE_PASSWORD: compose-smoke-password
+    steps:
+      - uses: actions/checkout@v6
+      - name: Start production-shaped stack
+        run: docker compose -f deployments/compose/docker-compose.yml up -d --build --wait --wait-timeout 420
+      - name: Run product smoke
+        run: ./scripts/smoke_compose.sh
+      - name: Show service state
+        if: always()
+        run: docker compose -f deployments/compose/docker-compose.yml ps
+      - name: Show failure logs
+        if: failure()
+        run: docker compose -f deployments/compose/docker-compose.yml logs --no-color --tail=300
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f deployments/compose/docker-compose.yml down --volumes --remove-orphans

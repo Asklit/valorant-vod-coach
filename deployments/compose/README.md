@@ -4,6 +4,10 @@ This compose stack is the local production-shaped product environment. It is int
 
 ## Services
 
+- `vod-web`: React product UI, authenticated Go API, and workflow dispatcher.
+- `vod-worker`: Temporal media-analysis worker with ffmpeg, ffprobe, and Tesseract.
+- `vod-outbox-relay`: transactional PostgreSQL outbox publisher.
+- `vod-clickhouse-sink`: Kafka consumer, dead-letter handling, and analytical projections.
 - PostgreSQL: transactional source of truth.
 - Redis: sessions, distributed locks, rate limits, and cache.
 - Kafka in KRaft mode: durable domain and pipeline event stream.
@@ -16,11 +20,14 @@ This compose stack is the local production-shaped product environment. It is int
 
 ```sh
 cp .env.example .env
-docker compose --env-file .env -f deployments/compose/docker-compose.yml up -d
+docker compose --env-file .env -f deployments/compose/docker-compose.yml up -d --build --wait
 ```
+
+Replace `VODCOACH_BOOTSTRAP_TOKEN` in `.env` before the first registration. The token creates only the first administrator and is not a user password.
 
 Useful URLs:
 
+- Product UI: http://localhost:8090
 - Grafana: http://localhost:3000, login `admin` / `admin`
 - Prometheus: http://localhost:9090
 - Temporal UI: http://localhost:8233
@@ -31,6 +38,17 @@ Useful URLs:
 
 Grafana provisions `Operations` and `Product analytics` in the `Valorant VOD Coach` folder. ClickHouse queries use the read-only local `grafana_reader` account. Prometheus loads `prometheus-alerts.yml`; no notification receiver is configured for local development.
 
+Run the HTTP and authorization smoke after the stack becomes healthy:
+
+```sh
+set -a
+source .env
+set +a
+./scripts/smoke_compose.sh
+```
+
+The smoke checks liveness, readiness, direct SPA routes, unauthenticated rejection, administrator authentication, tenant library access, telemetry, CSRF logout, and cleans up its temporary cookie files. On a reused volume, set `SMOKE_EMAIL` and `SMOKE_PASSWORD` to an existing administrator.
+
 `vod-web` service diagnostics:
 
 - `GET /healthz`: liveness;
@@ -38,14 +56,9 @@ Grafana provisions `Operations` and `Product analytics` in the `Valorant VOD Coa
 - `GET /metrics`: Prometheus text metrics;
 - `GET /debug/pprof/`: local Go profiling index.
 
-## Database and Outbox
+## Runtime Behavior
 
-Apply the PostgreSQL schema after the stack is healthy:
-
-```sh
-go run ./cmd/vodctl db migrate \
-  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}"
-```
+PostgreSQL and ClickHouse migrations run under service-level locks during application startup. Kafka topics and the private MinIO bucket are created by one-shot init services. No manual ordering is required.
 
 When `vodctl analyze run` or `vod-web` receives a `DATABASE_URL`, successful analysis runs are persisted into:
 
@@ -58,32 +71,11 @@ With `DATABASE_URL`, `vod-web` also reads report history and latest report metad
 
 When `REDIS_URL` is configured, analysis runs acquire a Redis-backed lock per VOD before ffprobe/ffmpeg work starts. Use the default `redis://localhost:6379/0` from `.env.example` for local duplicate-run protection.
 
-Run the durable analysis worker while PostgreSQL, Redis, and Temporal are healthy:
+To run a service on the host for debugging, stop its container and use the public addresses from `.env.example`. For example:
 
 ```sh
-go run ./cmd/vod-worker \
-  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}" \
-  --redis-url "${REDIS_URL:-redis://localhost:6379/0}" \
-  --temporal-address "${TEMPORAL_ADDRESS:-localhost:7233}"
-```
-
-Start `vod-web` with the same three service addresses. The API commits queued job intents to PostgreSQL and Temporal delivers them to `vod-worker`; queued intents are reconciled after transient Temporal failures.
-
-Publish pending outbox rows to Kafka:
-
-```sh
-go run ./cmd/vod-outbox-relay \
-  --database-url "${DATABASE_URL:-postgres://vodcoach:vodcoach@localhost:5432/vodcoach?sslmode=disable}" \
-  --brokers "${KAFKA_BROKERS:-localhost:9092}"
-```
-
-Sink Kafka events into ClickHouse:
-
-```sh
-go run ./cmd/vod-clickhouse-sink \
-  --brokers "${KAFKA_BROKERS:-localhost:9092}" \
-  --clickhouse-url "${CLICKHOUSE_URL:-http://localhost:8123}" \
-  --clickhouse-db "${CLICKHOUSE_DB:-vodcoach}"
+docker compose --env-file .env -f deployments/compose/docker-compose.yml stop vod-worker
+go run ./cmd/vod-worker
 ```
 
 Invalid event envelopes are copied to `vod.dead-letter.v1`. Valid events are queried through the deduplicated `kafka_events_deduplicated`, `analysis_runs`, and `frame_extractions` ClickHouse views.
@@ -96,7 +88,13 @@ export APP_ENV=local
 export SERVICE_VERSION="$(git rev-parse --short HEAD)"
 ```
 
+The generic OTLP endpoint is expanded to `/v1/traces` and `/v1/metrics`. Signal-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` values override it when needed.
+
 See [docs/observability.md](../../docs/observability.md) for metric cardinality, trace propagation, delivery semantics, and the Docker socket security boundary.
+
+## Delivery Boundaries
+
+Compose is the reproducible single-host development and demonstration environment. A hosted deployment must use TLS termination, secret management, backups, restricted console ports, Kafka/Redis/PostgreSQL authentication, and independently managed stateful services or supported Kubernetes operators. The image itself runs as UID/GID `10001` and contains no source VODs, generated artifacts, credentials, or build toolchains.
 
 ## Stop
 

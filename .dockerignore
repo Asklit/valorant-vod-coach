@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.codex
+.env
+bin
+coverage
+data/raw
+data/processed
+web/app/dist
+web/app/node_modules
+ml/vision-service/.pytest_cache
+**/__pycache__
+**/*.pyc
+*.log
+.DS_Store

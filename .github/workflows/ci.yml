@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test Go
+        run: go test -coverprofile=coverage.out ./...
+      - name: Vet Go
+        run: go vet ./...
+      - name: Race test shared runtimes
+        run: go test -race ./internal/app/... ./internal/adapters/webapi/... ./internal/adapters/temporalworkflow/... ./internal/platform/...
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/app/package-lock.json
+      - name: Install web dependencies
+        working-directory: web/app
+        run: npm ci
+      - name: Build web
+        working-directory: web/app
+        run: npm run build
+      - name: Test web
+        working-directory: web/app
+        run: npm test
+      - name: Audit web dependencies
+        working-directory: web/app
+        run: npm audit --audit-level=high
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Test dependency-free vision core
+        working-directory: ml/vision-service
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Check generated and large files
+        run: ./scripts/check_git_index.sh --tracked
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: valorant-vod-coach:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

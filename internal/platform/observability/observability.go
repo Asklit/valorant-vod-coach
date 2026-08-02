@@ -3,8 +3,10 @@ package observability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -29,6 +31,8 @@ type Config struct {
 	LogLevel       string
 	LogFormat      string
 	OTLPEndpoint   string
+	OTLPTraceURL   string
+	OTLPMetricURL  string
 	MetricInterval time.Duration
 }
 
@@ -55,6 +59,12 @@ func Setup(ctx context.Context, config Config, output io.Writer) (Runtime, error
 	if config.OTLPEndpoint == "" {
 		config.OTLPEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
+	if config.OTLPTraceURL == "" {
+		config.OTLPTraceURL = os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	}
+	if config.OTLPMetricURL == "" {
+		config.OTLPMetricURL = os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+	}
 	if config.ServiceVersion == "" {
 		config.ServiceVersion = os.Getenv("SERVICE_VERSION")
 	}
@@ -75,8 +85,16 @@ func Setup(ctx context.Context, config Config, output io.Writer) (Runtime, error
 		propagation.Baggage{},
 	))
 
+	traceEndpoint, err := resolveSignalEndpoint(config.OTLPEndpoint, config.OTLPTraceURL, "traces")
+	if err != nil {
+		return Runtime{}, err
+	}
+	metricEndpoint, err := resolveSignalEndpoint(config.OTLPEndpoint, config.OTLPMetricURL, "metrics")
+	if err != nil {
+		return Runtime{}, err
+	}
 	shutdown := func(context.Context) error { return nil }
-	if strings.TrimSpace(config.OTLPEndpoint) != "" {
+	if traceEndpoint != "" || metricEndpoint != "" {
 		telemetryResource, err := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithTelemetrySDK(),
@@ -90,37 +108,39 @@ func Setup(ctx context.Context, config Config, output io.Writer) (Runtime, error
 		if err != nil {
 			return Runtime{}, err
 		}
-		traceExporter, err := otlptracehttp.New(ctx,
-			otlptracehttp.WithEndpointURL(config.OTLPEndpoint),
-		)
-		if err != nil {
-			return Runtime{}, err
+		var shutdownFunctions []func(context.Context) error
+		if traceEndpoint != "" {
+			traceExporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(traceEndpoint))
+			if err != nil {
+				return Runtime{}, err
+			}
+			traceProvider := sdktrace.NewTracerProvider(
+				sdktrace.WithBatcher(traceExporter),
+				sdktrace.WithResource(telemetryResource),
+			)
+			otel.SetTracerProvider(traceProvider)
+			shutdownFunctions = append(shutdownFunctions, traceProvider.Shutdown)
 		}
-		traceProvider := sdktrace.NewTracerProvider(
-			sdktrace.WithBatcher(traceExporter),
-			sdktrace.WithResource(telemetryResource),
-		)
-		metricExporter, err := otlpmetrichttp.New(ctx,
-			otlpmetrichttp.WithEndpointURL(config.OTLPEndpoint),
-		)
-		if err != nil {
-			_ = traceProvider.Shutdown(ctx)
-			return Runtime{}, err
+		if metricEndpoint != "" {
+			metricExporter, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(metricEndpoint))
+			if err != nil {
+				shutdownAll(ctx, shutdownFunctions)
+				return Runtime{}, err
+			}
+			metricReader := sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(config.MetricInterval))
+			metricProvider := sdkmetric.NewMeterProvider(
+				sdkmetric.WithReader(metricReader),
+				sdkmetric.WithResource(telemetryResource),
+			)
+			otel.SetMeterProvider(metricProvider)
+			shutdownFunctions = append(shutdownFunctions, metricProvider.Shutdown)
 		}
-		metricReader := sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(config.MetricInterval))
-		metricProvider := sdkmetric.NewMeterProvider(
-			sdkmetric.WithReader(metricReader),
-			sdkmetric.WithResource(telemetryResource),
-		)
-		otel.SetTracerProvider(traceProvider)
-		otel.SetMeterProvider(metricProvider)
-		shutdown = func(shutdownCtx context.Context) error {
-			return errors.Join(metricProvider.Shutdown(shutdownCtx), traceProvider.Shutdown(shutdownCtx))
-		}
+		shutdown = func(shutdownCtx context.Context) error { return shutdownAll(shutdownCtx, shutdownFunctions) }
 		logger.InfoContext(ctx, "opentelemetry export enabled",
 			"service", config.ServiceName,
 			"environment", config.Environment,
-			"endpoint", config.OTLPEndpoint,
+			"trace_endpoint", traceEndpoint,
+			"metric_endpoint", metricEndpoint,
 		)
 	} else {
 		logger.DebugContext(ctx, "opentelemetry export disabled", "service", config.ServiceName)
@@ -132,6 +152,37 @@ func Setup(ctx context.Context, config Config, output io.Writer) (Runtime, error
 		Meter:    otel.Meter(config.ServiceName),
 		Shutdown: shutdown,
 	}, nil
+}
+
+func resolveSignalEndpoint(base, override, signal string) (string, error) {
+	raw := strings.TrimSpace(override)
+	appendSignalPath := false
+	if raw == "" {
+		raw = strings.TrimSpace(base)
+		appendSignalPath = raw != ""
+	}
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse OTLP %s endpoint: %w", signal, err)
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", fmt.Errorf("OTLP %s endpoint must be an absolute HTTP URL", signal)
+	}
+	if appendSignalPath {
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/v1/" + signal
+	}
+	return parsed.String(), nil
+}
+
+func shutdownAll(ctx context.Context, functions []func(context.Context) error) error {
+	errs := make([]error, 0, len(functions))
+	for index := len(functions) - 1; index >= 0; index-- {
+		errs = append(errs, functions[index](ctx))
+	}
+	return errors.Join(errs...)
 }
 
 type traceLogHandler struct {
