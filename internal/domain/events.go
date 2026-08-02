@@ -28,6 +28,8 @@ type EventEnvelope struct {
 	AggregateType string          `json:"aggregate_type"`
 	AggregateID   string          `json:"aggregate_id"`
 	TraceID       string          `json:"trace_id,omitempty"`
+	TraceParent   string          `json:"trace_parent,omitempty"`
+	TraceState    string          `json:"trace_state,omitempty"`
 	CausationID   string          `json:"causation_id,omitempty"`
 	CorrelationID string          `json:"correlation_id,omitempty"`
 	Payload       json.RawMessage `json:"payload"`

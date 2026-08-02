@@ -166,7 +166,7 @@ Current event mapping:
 | `FramesExtracted` | `vod.processing.v1` | `vodctl`, `vod-web` |
 | `ReportReady` | `vod.lifecycle.v1` | `vodctl`, `vod-web` |
 
-`vod-clickhouse-sink` stores these events in `kafka_events` through the ClickHouse HTTP API.
+`vod-clickhouse-sink` stores these events in `kafka_events` through the ClickHouse HTTP API. Permanent envelope errors go to `vod.dead-letter.v1`; transient storage errors remain uncommitted for retry.
 
 ## Delivery Semantics
 
@@ -176,7 +176,7 @@ Every consumer must be idempotent:
 
 - store processed `event_id`;
 - use deterministic upserts where possible;
-- make ClickHouse inserts deduplicatable through event IDs and run IDs;
+- query ClickHouse through the `kafka_events_deduplicated`, `analysis_runs`, and `frame_extractions` views;
 - never assume an event is delivered only once.
 
 ## Temporal vs Kafka

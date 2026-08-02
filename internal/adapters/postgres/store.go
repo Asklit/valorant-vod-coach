@@ -14,6 +14,9 @@ import (
 
 	"github.com/asklit/valorant-vod-coach/internal/app"
 	"github.com/asklit/valorant-vod-coach/internal/domain"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Store struct {
@@ -349,6 +352,7 @@ func insertAnalysisEvents(ctx context.Context, tx *sql.Tx, request app.PersistAn
 		return err
 	}
 	for _, event := range events {
+		enrichEventTraceContext(ctx, &event)
 		envelope, err := json.Marshal(event)
 		if err != nil {
 			return err
@@ -356,10 +360,10 @@ func insertAnalysisEvents(ctx context.Context, tx *sql.Tx, request app.PersistAn
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO outbox_events (
   id, topic, event_type, event_version, aggregate_type, aggregate_id,
-  occurred_at, producer, correlation_id, causation_id, trace_id, payload, envelope
+  occurred_at, producer, correlation_id, causation_id, trace_id, trace_parent, trace_state, payload, envelope
 ) VALUES (
   $1, $2, $3, $4, $5, $6,
-  $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb
+  $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb
 )
 ON CONFLICT (id) DO NOTHING
 `,
@@ -374,6 +378,8 @@ ON CONFLICT (id) DO NOTHING
 			event.CorrelationID,
 			event.CausationID,
 			event.TraceID,
+			event.TraceParent,
+			event.TraceState,
 			string(event.Payload),
 			string(envelope),
 		)
@@ -382,6 +388,19 @@ ON CONFLICT (id) DO NOTHING
 		}
 	}
 	return nil
+}
+
+func enrichEventTraceContext(ctx context.Context, event *domain.EventEnvelope) {
+	if event == nil {
+		return
+	}
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	event.TraceParent = carrier.Get("traceparent")
+	event.TraceState = carrier.Get("tracestate")
+	if spanContext := trace.SpanContextFromContext(ctx); spanContext.IsValid() {
+		event.TraceID = spanContext.TraceID().String()
+	}
 }
 
 func (s Store) now() time.Time {

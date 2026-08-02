@@ -25,6 +25,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/adapters/dataset"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/localanalysis"
 	reportstore "github.com/asklit/valorant-vod-coach/internal/adapters/report"
+	"github.com/asklit/valorant-vod-coach/internal/adapters/temporalworkflow"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vision"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/visionservice"
 	"github.com/asklit/valorant-vod-coach/internal/adapters/vodstore"
@@ -1577,6 +1578,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		ImageQuality: request.ImageQuality, Force: request.Force, ModelReview: request.ModelReview,
 		IncludeAllVODs: request.IncludeAll,
 	}
+	temporalworkflow.CaptureRequestTraceContext(r.Context(), &jobRequest)
 
 	if request.Async {
 		jobID := newAnalysisJobID(request.RunID, now)

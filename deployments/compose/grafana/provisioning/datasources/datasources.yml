@@ -7,12 +7,22 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    jsonData:
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
 
   - name: Loki
     uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      derivedFields:
+        - name: TraceID
+          matcherRegex: 'trace_id["=:\\s]+([a-f0-9]{32})'
+          datasourceUid: tempo
+          url: '$${__value.raw}'
 
   - name: Tempo
     uid: tempo
@@ -22,5 +32,28 @@ datasources:
     jsonData:
       tracesToLogsV2:
         datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        filterByTraceID: true
+        filterBySpanID: false
+      tracesToMetrics:
+        datasourceUid: prometheus
       serviceMap:
         datasourceUid: prometheus
+
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      username: grafana_reader
+      defaultDatabase: vodcoach
+      dialTimeout: 10
+      queryTimeout: 30
+      validateSql: true
+      enableRowLimit: true
+    secureJsonData:
+      password: grafana-reader-local-password

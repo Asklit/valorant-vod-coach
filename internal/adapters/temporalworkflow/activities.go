@@ -13,12 +13,19 @@ import (
 )
 
 type Activities struct {
-	Executor app.AnalysisExecutor
-	Jobs     app.AnalysisJobStore
-	Clock    func() time.Time
+	Executor  app.AnalysisExecutor
+	Jobs      app.AnalysisJobStore
+	Clock     func() time.Time
+	Telemetry *ActivityTelemetry
 }
 
 func (a Activities) RunAnalysis(ctx context.Context, input WorkflowInput) (app.AnalysisExecutionResult, error) {
+	startedAt := time.Now()
+	outcome := "failed"
+	if a.Telemetry != nil {
+		ctx = a.Telemetry.startRun(ctx, input.Request)
+		defer func() { a.Telemetry.finishRun(ctx, input.Request, outcome, time.Since(startedAt)) }()
+	}
 	if a.Executor == nil || a.Jobs == nil {
 		return app.AnalysisExecutionResult{}, errors.New("analysis executor and job store are required")
 	}
@@ -27,6 +34,7 @@ func (a Activities) RunAnalysis(ctx context.Context, input WorkflowInput) (app.A
 		return app.AnalysisExecutionResult{}, err
 	}
 	if job.CancellationRequested {
+		outcome = "cancelled"
 		return app.AnalysisExecutionResult{}, temporal.NewCanceledError("analysis cancellation requested")
 	}
 
@@ -55,13 +63,18 @@ func (a Activities) RunAnalysis(ctx context.Context, input WorkflowInput) (app.A
 		activity.RecordHeartbeat(progressCtx, progress.Stage, progress.Percent)
 		current, found, err := a.Jobs.FindAnalysisJob(progressCtx, input.JobID, "", true)
 		if err != nil || !found || current.CancellationRequested {
+			if err != nil && a.Telemetry != nil {
+				a.Telemetry.progressFailure(progressCtx, err)
+			}
 			return
 		}
 		current.Stage = truncate(strings.TrimSpace(progress.Stage), 64)
 		current.ProgressPercent = clampPercent(progress.Percent)
 		current.Message = truncate(strings.TrimSpace(progress.Message), 512)
 		current.UpdatedAt = a.now()
-		_ = a.Jobs.UpdateAnalysisJob(progressCtx, current)
+		if err := a.Jobs.UpdateAnalysisJob(progressCtx, current); err != nil && a.Telemetry != nil {
+			a.Telemetry.progressFailure(progressCtx, err)
+		}
 	})
 	request := input.Request
 	if attempt > 1 {
@@ -71,6 +84,7 @@ func (a Activities) RunAnalysis(ctx context.Context, input WorkflowInput) (app.A
 	if err != nil {
 		return app.AnalysisExecutionResult{}, err
 	}
+	outcome = "completed"
 	return result, nil
 }
 
@@ -95,7 +109,11 @@ func (a Activities) Complete(ctx context.Context, input CompleteInput) error {
 	job.ReportMDPath = strings.TrimSpace(input.Result.ReportMDPath)
 	job.FinishedAt = &now
 	job.UpdatedAt = now
-	return a.Jobs.UpdateAnalysisJob(ctx, job)
+	err = a.Jobs.UpdateAnalysisJob(ctx, job)
+	if err == nil && a.Telemetry != nil {
+		a.Telemetry.jobFinalized(ctx, app.AnalysisJobCompleted)
+	}
+	return err
 }
 
 func (a Activities) Fail(ctx context.Context, input FailureInput) error {
@@ -113,7 +131,11 @@ func (a Activities) Fail(ctx context.Context, input FailureInput) error {
 	job.Error = truncate(strings.TrimSpace(input.Error), 4096)
 	job.FinishedAt = &now
 	job.UpdatedAt = now
-	return a.Jobs.UpdateAnalysisJob(ctx, job)
+	err = a.Jobs.UpdateAnalysisJob(ctx, job)
+	if err == nil && a.Telemetry != nil {
+		a.Telemetry.jobFinalized(ctx, app.AnalysisJobFailed)
+	}
+	return err
 }
 
 func (a Activities) Cancel(ctx context.Context, input CancelInput) error {
@@ -132,7 +154,11 @@ func (a Activities) Cancel(ctx context.Context, input CancelInput) error {
 	job.CancellationRequested = true
 	job.FinishedAt = &now
 	job.UpdatedAt = now
-	return a.Jobs.UpdateAnalysisJob(ctx, job)
+	err = a.Jobs.UpdateAnalysisJob(ctx, job)
+	if err == nil && a.Telemetry != nil {
+		a.Telemetry.jobFinalized(ctx, app.AnalysisJobCancelled)
+	}
+	return err
 }
 
 func (a Activities) loadJob(ctx context.Context, jobID string) (app.AnalysisJob, error) {

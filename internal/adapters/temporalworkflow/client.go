@@ -24,6 +24,7 @@ func (l Launcher) StartAnalysisWorkflow(ctx context.Context, jobID string, reque
 	if jobID == "" {
 		return errors.New("analysis job ID is required")
 	}
+	ctx = RestoreRequestTraceContext(ctx, request)
 	_, err := l.Client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       jobID,
 		TaskQueue:                defaultString(l.TaskQueue, DefaultTaskQueue),

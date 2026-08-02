@@ -10,8 +10,8 @@ func TestLoadMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load migrations: %v", err)
 	}
-	if len(migrations) != 4 {
-		t.Fatalf("expected four migrations, got %d", len(migrations))
+	if len(migrations) != 5 {
+		t.Fatalf("expected five migrations, got %d", len(migrations))
 	}
 	if migrations[1].Version != 2 || !strings.Contains(migrations[1].SQL, "CREATE TABLE IF NOT EXISTS auth_users") ||
 		!strings.Contains(migrations[1].SQL, "CREATE TABLE IF NOT EXISTS analysis_jobs") ||
@@ -26,6 +26,9 @@ func TestLoadMigrations(t *testing.T) {
 	}
 	if migrations[3].Version != 4 || !strings.Contains(migrations[3].SQL, "video_object_key") {
 		t.Fatalf("unexpected object storage migration: %+v", migrations[3])
+	}
+	if migrations[4].Version != 5 || !strings.Contains(migrations[4].SQL, "trace_parent") {
+		t.Fatalf("unexpected outbox trace migration: %+v", migrations[4])
 	}
 	for _, expected := range []string{
 		"CREATE TABLE IF NOT EXISTS vods",

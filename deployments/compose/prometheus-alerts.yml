@@ -1,0 +1,53 @@
+groups:
+  - name: vodcoach-service-health
+    rules:
+      - alert: VodCoachAPIDown
+        expr: up{job="host-go-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valorant VOD Coach API is unavailable
+
+      - alert: VodCoachCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenTelemetry Collector is unavailable
+
+      - alert: VodCoachAPIHighErrorRate
+        expr: |
+          sum(rate(vodcoach_http_requests_total{status=~"5.."}[10m]))
+          /
+          clamp_min(sum(rate(vodcoach_http_requests_total[10m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API 5xx rate is above 5 percent
+
+  - name: vodcoach-pipeline-health
+    rules:
+      - alert: VodCoachAnalysisFailed
+        expr: increase(vodcoach_analysis_jobs_finalized_total{status="failed"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: At least one analysis workflow failed
+
+      - alert: VodCoachOutboxPublishFailures
+        expr: increase(vodcoach_outbox_publish_total{outcome="failed"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbox relay cannot publish one or more events
+
+      - alert: VodCoachClickHouseSinkFailures
+        expr: increase(vodcoach_clickhouse_sink_messages_total{outcome=~"insert_failed|commit_failed|dlq_failed"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: ClickHouse sink is failing to persist or commit events

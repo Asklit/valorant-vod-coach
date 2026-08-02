@@ -18,6 +18,7 @@ import (
 	"github.com/asklit/valorant-vod-coach/internal/platform/observability"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 func main() {
@@ -93,8 +94,9 @@ func main() {
 	}
 
 	temporalClient, err := client.Dial(client.Options{
-		HostPort:  *temporalAddress,
-		Namespace: *temporalNamespace,
+		HostPort:           *temporalAddress,
+		Namespace:          *temporalNamespace,
+		ContextPropagators: []workflow.ContextPropagator{temporalworkflow.TraceContextPropagator{}},
 	})
 	if err != nil {
 		log.Fatalf("connect to Temporal: %v", err)
@@ -115,7 +117,11 @@ func main() {
 		Locks:         locks,
 		Objects:       objects,
 	}}
-	activities := temporalworkflow.Activities{Executor: executor, Jobs: store}
+	activityTelemetry, err := temporalworkflow.NewActivityTelemetry(obs.Logger, obs.Tracer, obs.Meter)
+	if err != nil {
+		log.Fatalf("configure activity telemetry: %v", err)
+	}
+	activities := temporalworkflow.Activities{Executor: executor, Jobs: store, Telemetry: activityTelemetry}
 	temporalWorker := worker.New(temporalClient, *taskQueue, worker.Options{
 		WorkerStopTimeout: 2 * time.Minute,
 	})

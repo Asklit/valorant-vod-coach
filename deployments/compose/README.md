@@ -10,7 +10,7 @@ This compose stack is the local production-shaped product environment. It is int
 - ClickHouse: analytical event and pipeline telemetry store.
 - MinIO: local S3-compatible artifact storage.
 - Temporal: durable VOD processing workflows.
-- OpenTelemetry Collector, Prometheus, Loki, Tempo, Grafana: metrics, logs, traces, dashboards.
+- OpenTelemetry Collector, Prometheus, Alloy, Loki, Tempo, Grafana: correlated metrics, container logs, traces, alerts, and dashboards.
 
 ## Start
 
@@ -27,6 +27,9 @@ Useful URLs:
 - MinIO console: http://localhost:9001
 - MinIO S3 API: http://localhost:9002
 - ClickHouse HTTP: http://localhost:8123
+- Alloy status: http://localhost:12345
+
+Grafana provisions `Operations` and `Product analytics` in the `Valorant VOD Coach` folder. ClickHouse queries use the read-only local `grafana_reader` account. Prometheus loads `prometheus-alerts.yml`; no notification receiver is configured for local development.
 
 `vod-web` service diagnostics:
 
@@ -82,6 +85,18 @@ go run ./cmd/vod-clickhouse-sink \
   --clickhouse-url "${CLICKHOUSE_URL:-http://localhost:8123}" \
   --clickhouse-db "${CLICKHOUSE_DB:-vodcoach}"
 ```
+
+Invalid event envelopes are copied to `vod.dead-letter.v1`. Valid events are queried through the deduplicated `kafka_events_deduplicated`, `analysis_runs`, and `frame_extractions` ClickHouse views.
+
+Export worker, API, relay, and sink telemetry through the Collector:
+
+```sh
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export APP_ENV=local
+export SERVICE_VERSION="$(git rev-parse --short HEAD)"
+```
+
+See [docs/observability.md](../../docs/observability.md) for metric cardinality, trace propagation, delivery semantics, and the Docker socket security boundary.
 
 ## Stop
 

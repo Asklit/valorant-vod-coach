@@ -110,6 +110,7 @@ The downloader is intentionally not run automatically. Review `data/manifests/vo
 - [Implementation plan](docs/implementation-plan.md)
 - [Product and architecture decisions](docs/product-and-architecture-decisions.md)
 - [Kafka event streaming](docs/kafka-event-streaming.md)
+- [Observability](docs/observability.md)
 - [Git workflow](docs/git-workflow.md)
 - [Benchmarks](docs/benchmarks.md)
 
@@ -132,6 +133,9 @@ Useful local consoles:
 - MinIO console: `http://localhost:9001`
 - MinIO S3 API: `http://localhost:9002`
 - ClickHouse HTTP: `http://localhost:8123`
+- Alloy status: `http://localhost:12345`
+
+Grafana provisions an Operations dashboard over Prometheus/Loki/Tempo and a Product analytics dashboard over deduplicated ClickHouse views. See the [observability contract](docs/observability.md) for metric names, trace propagation, alerts, and failure semantics.
 
 The Go API exposes diagnostics endpoints:
 

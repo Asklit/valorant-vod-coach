@@ -9,6 +9,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-vodcoach}
     ports:
       - "5432:5432"
+    labels:
+      vodcoach.logs: enabled
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -22,6 +24,8 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    labels:
+      vodcoach.logs: enabled
     volumes:
       - redis-data:/data
     healthcheck:
@@ -39,8 +43,11 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
+    labels:
+      vodcoach.logs: enabled
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse-init:/docker-entrypoint-initdb.d:ro
     ulimits:
       nofile:
         soft: 262144
@@ -55,6 +62,8 @@ services:
     image: apache/kafka:3.8.1
     ports:
       - "9092:9092"
+    labels:
+      vodcoach.logs: enabled
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -84,7 +93,7 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-ec"]
     command: |
-      for topic in vod.lifecycle.v1 vod.processing.v1 vod.observation.v1 model.run.v1 manual.correction.v1; do
+      for topic in vod.lifecycle.v1 vod.processing.v1 vod.observation.v1 model.run.v1 manual.correction.v1 vod.dead-letter.v1; do
         /opt/kafka/bin/kafka-topics.sh \
           --bootstrap-server kafka:29092 \
           --create \
@@ -103,6 +112,8 @@ services:
     ports:
       - "9002:9000"
       - "9001:9001"
+    labels:
+      vodcoach.logs: enabled
     volumes:
       - minio-data:/data
 
@@ -136,6 +147,8 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
     ports:
       - "7233:7233"
+    labels:
+      vodcoach.logs: enabled
 
   temporal-ui:
     image: temporalio/ui:2.49.1
@@ -154,6 +167,8 @@ services:
       - "4317:4317"
       - "4318:4318"
       - "8889:8889"
+    labels:
+      vodcoach.logs: enabled
     volumes:
       - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
     depends_on:
@@ -171,6 +186,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
       - prometheus-data:/prometheus
 
   loki:
@@ -191,12 +207,24 @@ services:
       - ./tempo.yml:/etc/tempo.yml:ro
       - tempo-data:/tmp/tempo
 
+  alloy:
+    image: grafana/alloy:v1.18.0
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/config.alloy"]
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./alloy.config:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
   grafana:
-    image: grafana/grafana:11.3.0
+    image: grafana/grafana:13.1.1
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-clickhouse-datasource@4.19.0
     ports:
       - "3000:3000"
     volumes:
@@ -206,6 +234,7 @@ services:
       - prometheus
       - loki
       - tempo
+      - clickhouse
 
 volumes:
   postgres-data:
