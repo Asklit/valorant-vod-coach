@@ -26,44 +26,169 @@ Product stack:
 - ClickHouse for high-volume pipeline analytics;
 - Temporal for durable video-processing workflows;
 - Kafka for durable domain events and analytics streaming;
-- Redis for cache, locks, and rate limits;
+- Redis for server-side sessions, distributed locks, and authentication rate limits;
 - MinIO/S3-compatible object storage for videos and artifacts;
 - OpenTelemetry, Prometheus, Grafana, Loki, and Tempo for diagnostics.
 
 ## Current Architecture
 
-Kafka is the durable event-streaming and analytics fan-out layer. Temporal, not Kafka, owns long-running workflow state.
+The delivered system is a modular Go application with multiple independently running processes. Temporal owns long-running execution state, Kafka stores immutable domain events, and PostgreSQL remains the transactional source of truth.
+
+### Product Request And Analysis Flow
+
+The production-shaped path persists the user's intent before starting Temporal. The browser is not required to remain connected while the full VOD is processed.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant UI as React SPA
+  participant API as vod-web
+  participant PG as PostgreSQL
+  participant Redis as Redis
+  participant S3 as MinIO / S3
+  participant Temporal as Temporal
+  participant Worker as vod-worker
+  participant Media as ffmpeg / Tesseract / Go CV
+
+  User->>UI: Register or log in
+  UI->>API: Credentials
+  API->>PG: Create or verify durable user record
+  API->>Redis: Create revocable session with TTL
+  API-->>UI: HTTP-only session cookie
+
+  User->>UI: Upload VOD
+  UI->>API: Multipart upload + CSRF token
+  API->>S3: Store private video object
+  API->>PG: Store tenant-owned VOD metadata
+
+  User->>UI: Start full-match analysis
+  UI->>API: POST analysis run
+  API->>PG: Commit queued job intent
+  API->>Temporal: Start workflow with job ID
+  Note over API,Temporal: A vod-web dispatcher retries queued starts every 15 seconds
+  API-->>UI: 202 Accepted + job ID
+
+  Worker->>Temporal: Long-poll analysis task queue
+  Temporal-->>Worker: Retryable analysis activity
+  Worker->>S3: Materialize seekable local cache
+  Worker->>Media: Probe, sample, OCR, analyze, build clips
+  Worker->>S3: Publish evidence and report artifacts
+  Worker->>PG: Transactionally save report, artifacts, and outbox events
+  Worker-->>Temporal: Activity result
+  Temporal-->>Worker: Finalization activity
+  Worker->>PG: Mark product job completed
+
+  UI->>API: Poll job and report
+  API->>PG: Read tenant-scoped state
+  API->>S3: Read authorized evidence when requested
+  API-->>UI: Timeline, findings, clips, and frames
+```
+
+### Runtime And Data Topology
 
 ```mermaid
 flowchart LR
-  API[Go API]
-  Worker[Go Temporal Worker]
-  PG[(PostgreSQL)]
-  Outbox[(PostgreSQL Outbox)]
-  Relay[Go Outbox Relay]
-  Kafka[(Kafka Event Stream)]
-  Consumers[Go Kafka Consumers]
-  CH[(ClickHouse)]
-  Temporal[(Temporal)]
-  Redis[(Redis)]
-  S3[(MinIO / S3)]
-  Vision[Python Vision Service]
+  User[User] --> SPA[React / TypeScript SPA]
 
-  API --> PG
-  API --> Outbox
-  API --> Temporal
-  API --> Redis
-  API --> S3
-  Temporal --> Worker
+  subgraph GoProcesses[Go runtime processes]
+    Web[vod-web<br/>API + SPA gateway]
+    Dispatcher[queued-job dispatcher<br/>inside vod-web]
+    Worker[vod-worker<br/>Temporal worker]
+    Relay[vod-outbox-relay]
+    Sink[vod-clickhouse-sink]
+    Core[domain + application logic]
+  end
+
+  subgraph Execution[Execution and coordination]
+    Temporal[(Temporal<br/>workflow history)]
+    Redis[(Redis<br/>sessions, rate limits, locks)]
+  end
+
+  subgraph DurableData[Durable data]
+    PG[(PostgreSQL<br/>users, jobs, reports, outbox_events)]
+    S3[(MinIO / S3<br/>VODs and artifacts)]
+  end
+
+  subgraph EventsAndAnalytics[Events and analytics]
+    Kafka[(Kafka<br/>partitioned event log)]
+    DLQ[(Kafka dead-letter topic)]
+    CH[(ClickHouse<br/>analytical projections)]
+  end
+
+  subgraph MediaAnalysis[Media analysis]
+    Tools[ffprobe / ffmpeg / Tesseract]
+    LocalCV[Go CPU HUD and temporal CV]
+    Vision[Optional Python model contract<br/>disabled by default]
+  end
+
+  SPA --> Web
+  Web --> Core
+  Web --> PG
+  Web --> Redis
+  Web --> S3
+  Web --> Temporal
+  Web --> Dispatcher
+  Dispatcher -->|reconcile queued intent| PG
+  Dispatcher -->|retry workflow start| Temporal
+  Worker <-->|poll tasks / report results| Temporal
+  Worker --> Core
   Worker --> PG
-  Worker --> Outbox
+  Worker --> Redis
   Worker --> S3
-  Worker --> Vision
-  Outbox --> Relay
-  Relay --> Kafka
-  Kafka --> Consumers
-  Consumers --> CH
+  Worker --> Tools
+  Worker --> LocalCV
+  Worker -. explicitly enabled experiment .-> Vision
+  Relay -->|claim outbox rows| PG
+  Relay -->|publish by VOD key| Kafka
+  Kafka -->|consumer group| Sink
+  Sink --> CH
+  Sink -->|invalid envelopes| DLQ
 ```
+
+The outbox is a PostgreSQL table, not a separate database. Reports, artifact metadata, and their Kafka events commit in one PostgreSQL transaction. `vod-outbox-relay` publishes those rows asynchronously with at-least-once delivery. `vod-clickhouse-sink` commits its Kafka offset only after a successful ClickHouse insert; exact duplicates are collapsed by `event_id` in analytical views.
+
+Component ownership is intentionally narrow:
+
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| PostgreSQL | Users, VOD metadata, jobs, report snapshots, feedback, outbox rows | Video bytes, workflow scheduling, analytical scans |
+| Redis | Revocable sessions, authentication counters, expiring VOD locks | Durable product records, queues, general-purpose caching |
+| Temporal | Workflow history, activity scheduling, retries, heartbeats, cancellation | Domain event fan-out, product report queries |
+| Kafka | Retained domain-event log, partitions, offsets, consumer groups | Video processing steps, user sessions, analytical SQL |
+| ClickHouse | Rebuildable event projections and product aggregates | Transactional product state |
+| MinIO / S3 | Private VOD and generated artifact bytes | Searchable report metadata |
+
+### Observability And Product Analytics
+
+Operational telemetry and product analytics follow separate paths and meet in Grafana:
+
+```mermaid
+flowchart LR
+  subgraph Sources[Runtime sources]
+    Apps[vod-web / worker / relay / sink]
+    Stdout[Docker container stdout]
+    ProductEvents[Kafka domain events]
+  end
+
+  Apps -->|OTLP metrics and traces| OTel[OpenTelemetry Collector]
+  OTel -->|Prometheus exporter| Prom[(Prometheus)]
+  OTel -->|OTLP traces| Tempo[(Tempo)]
+  Prom -. scrape vod-web /metrics .-> Apps
+  Apps -->|structured logs| Stdout
+  Stdout --> Alloy[Grafana Alloy]
+  Alloy --> Loki[(Loki)]
+  ProductEvents --> Sink[vod-clickhouse-sink]
+  Sink --> CH[(ClickHouse)]
+
+  Prom --> Grafana[Grafana]
+  Loki --> Grafana
+  Tempo --> Grafana
+  CH --> Grafana
+  Grafana --> Admin[Developer / administrator]
+```
+
+Prometheus answers numeric operational questions, Loki stores searchable logs, Tempo stores distributed traces, and ClickHouse serves SQL analytics over domain events. Grafana visualizes all four data sources; it does not replace their storage or query engines.
 
 ## Prerequisites
 
@@ -129,12 +254,16 @@ Useful local consoles:
 
 - Product UI: `http://localhost:8090`
 - Grafana: `http://localhost:3000`
+- Grafana Operations dashboard: `http://localhost:3000/d/vodcoach-operations/operations`
+- Grafana Product analytics dashboard: `http://localhost:3000/d/vodcoach-product/product-analytics`
 - Prometheus: `http://localhost:9090`
 - Temporal UI: `http://localhost:8233`
 - MinIO console: `http://localhost:9001`
 - MinIO S3 API: `http://localhost:9002`
 - ClickHouse HTTP: `http://localhost:8123`
 - Alloy status: `http://localhost:12345`
+
+The local Grafana credentials are `admin` / `admin`. They are development-only defaults and must be replaced in any shared environment.
 
 Grafana provisions an Operations dashboard over Prometheus/Loki/Tempo and a Product analytics dashboard over deduplicated ClickHouse views. See the [observability contract](docs/observability.md) for metric names, trace propagation, alerts, and failure semantics.
 
